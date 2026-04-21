@@ -10,7 +10,7 @@
 void ParametricEQ::init(int32_t sampleRate, int32_t numChannels) {
     DspModule::init(sampleRate, numChannels);
     //_filterCount = 0;
-    _pregain = Q31_MAX;
+    _pregain = (1 << 27);  // Unity gain in Q4.27
     memset(_params, 0, sizeof(_params));
     reset();
 }
@@ -24,9 +24,9 @@ void IRAM_ATTR ParametricEQ::processInternal(q31_t* __restrict samples, size_t n
     size_t totalSamples = numSamples * _numChannels;
 
     // Apply pre-gain if not unity
-    if (_pregain != Q31_MAX) {
+    if (_pregain != (1 << 27)) {
         for (size_t i = 0; i < totalSamples; i++) {
-            samples[i] = q31_mul(samples[i], _pregain);
+            samples[i] = q31_mul_q4_27(samples[i], _pregain);
         }
     }
 
@@ -71,8 +71,8 @@ void ParametricEQ::setFilterCount(uint8_t count) {
 void ParametricEQ::setPregain(int16_t pregain_db) {
     _pregainDb = pregain_db;  // Store original value for readback
     if (pregain_db == 0) {
-        _pregain = Q31_MAX;
+        _pregain = (1 << 27);
     } else {
-        _pregain = db_q88_to_q31_gain(pregain_db);
+        _pregain = db_q88_to_q4_27_gain(pregain_db);
     }
 }

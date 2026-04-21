@@ -181,6 +181,28 @@ static inline q31_t db_q88_to_q31_gain(int16_t db_q88) {
 }
 
 /**
+ * Convert dB (Q8.8 format) to Q4.27 linear gain.
+ * Supports up to +24 dB (approx 15.8x).
+ * Unity gain is 1 << 27.
+ */
+static inline int32_t db_q88_to_q4_27_gain(int16_t db_q88) {
+  float db = (float)db_q88 / 256.0f;
+  float linear = powf(10.0f, db / 20.0f);
+  // Cap at ~15.99x (+24 dB) to fit in Q4.27
+  if (linear >= 15.99f) return (int32_t)(15.99f * (1 << 27));
+  if (linear <= 0.0f) return 0;
+  return (int32_t)(linear * (1 << 27));
+}
+
+/**
+ * Multiply Q1.31 sample by Q4.27 gain with saturation.
+ * Result is Q1.31.
+ */
+static inline q31_t IRAM_ATTR q31_mul_q4_27(q31_t sample, int32_t gain_q4_27) {
+  return q63_to_q31_sat((q63_t)sample * gain_q4_27, 27);
+}
+
+/**
  * Convert dB (Q8.8 format) to dB in 0.01dB steps (int32_t).
  * Used for parameter conversion.
  */

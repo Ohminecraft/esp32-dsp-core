@@ -30,6 +30,7 @@ void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     }
 
     // Enable soft clipper by default (always-on protection)
+    _volume.enable();
     _softClipper.enable();
 }
 
