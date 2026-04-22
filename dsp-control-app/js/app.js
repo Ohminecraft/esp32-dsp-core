@@ -10,7 +10,7 @@ import {
     buildSetParam, buildSetEqBand, buildSetDynEqBand,
     buildSetDynEqThresholds, buildSavePreset, buildLoadPreset,
     buildGetSystemInfo,
-    buildGetAllState, dbToQ88, qToQ610,
+    buildGetAllState, dbToQ88, dbToQ31, qToQ610,
     leToInt16, leToInt32
 } from './protocol.js';
 import { EQGraph } from './eq-graph.js';
@@ -291,7 +291,10 @@ parser.onFrame((frame) => {
                 break;
             }
             case MODULE.SOFT_CLIP:
-                if (pIndex === 0) store.updateParam('softClipper', 'threshold', val);
+                if (pIndex === 0) {
+                    const db = 20 * Math.log10(val / 2147483647);
+                    store.updateParam('softClipper', 'threshold', Math.round(db * 100));
+                }
                 break;
         }
     }
@@ -660,9 +663,12 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.SOFT_CLIP:
-            addSlider(body, 'Mode', 0, 1, 1, '0=cubic 1=tanh',
-                () => store.softClipper.mode,
-                (v) => { store.softClipper.mode = v; sendFrame(buildSetParam(MODULE.SOFT_CLIP, 1, v)); });
+            addSlider(body, 'Threshold', -6000, 0, 10, 'dB',
+                () => store.softClipper.threshold,
+                (v) => {
+                    store.softClipper.threshold = v;
+                    sendFrame(buildSetParam(MODULE.SOFT_CLIP, 0, dbToQ31(v / 100)));
+                }, null, 0.01);
             break;
     }
 }

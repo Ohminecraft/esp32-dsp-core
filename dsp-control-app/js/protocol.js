@@ -183,6 +183,11 @@ export function leToInt16(b, offset = 0) {
 
 /** dB float to Q8.8 int16 (e.g., -3.0 → -768) */
 export function dbToQ88(db) { return Math.round(db * 256); }
+
+/** dB float to Q31 int32 */
+export function dbToQ31(db) {
+    return Math.round(Math.pow(10, db / 20) * 2147483647);
+}
 /** Q8.8 int16 to dB float */
 export function q88ToDb(q88) { return q88 / 256; }
 /** Q factor float to Q6.10 int16 (e.g., 0.707 → 724) */

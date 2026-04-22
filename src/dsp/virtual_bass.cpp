@@ -189,4 +189,7 @@ void IRAM_ATTR VirtualBass::process(q31_t *__restrict samples, size_t numSamples
       samples[idx] = output;
     }
   }
+
+  // Save smoothed gain for next frame
+  _currentGain = currentGain;
 }

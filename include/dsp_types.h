@@ -97,6 +97,12 @@ typedef int64_t  q63_t;     // Q1.63 — accumulator for MAC operations
 // Saturation Helpers
 // ============================================================================
 
+static inline q63_t sat_q63(q63_t x) {
+    if (x > 0x7FFFFFFFFFFFFFFFLL) return 0x7FFFFFFFFFFFFFFFLL;
+    if (x < (-0x8000000000000000LL)) return -0x8000000000000000LL;
+    return x;
+}
+
 static inline q31_t sat_q31(q63_t x) {
     if (x > Q31_MAX) return Q31_MAX;
     if (x < Q31_MIN) return Q31_MIN;

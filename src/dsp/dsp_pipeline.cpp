@@ -7,18 +7,18 @@
 
 void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     // Build chain in exact processing order
-    _chain[0]  = &_noiseGate;
-    _chain[1]  = &_compander;
-    _chain[2]  = &_exciter;
-    _chain[3]  = &_virtualBass;
-    _chain[4]  = &_bassClassic;
-    _chain[5]  = &_stereoWidener;
-    _chain[6]  = &_eqDsp;
-    _chain[7]  = &_dynamicEq;
-    _chain[8]  = &_eqDspPost;
-    _chain[9]  = &_drc;
-    _chain[10] = &_volume;
-    _chain[11] = &_softClipper;
+    _chain[0]  = &_noiseGate;     // UNSTABLE
+    _chain[1]  = &_compander;     // UNSTABLE
+    _chain[2]  = &_exciter;       // little bit UNSTABLE at high settings, but generally safe
+    _chain[3]  = &_virtualBass;   // UNSTABLE at high settings, but generally safe
+    _chain[4]  = &_bassClassic;   // STABLE
+    _chain[5]  = &_stereoWidener; // STABLE i think
+    _chain[6]  = &_eqDsp;         // STABILITY depends on your filter settings 
+    _chain[7]  = &_dynamicEq;     // UNSTABLE
+    _chain[8]  = &_eqDspPost;     // STABILITY depends on your filter settings
+    _chain[9]  = &_drc;           // UNSTABLE
+    _chain[10] = &_volume;        // STABLE
+    _chain[11] = &_softClipper;   // STABLE
 
     // Set module IDs for EQ instances
     _eqDsp.setModuleId(MODULE_ID_EQ_DSP);

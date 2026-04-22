@@ -22,7 +22,7 @@ void IRAM_ATTR ParametricEQ::process(q31_t* __restrict samples, size_t numSample
 
 void IRAM_ATTR ParametricEQ::processInternal(q31_t* __restrict samples, size_t numSamples) {
     size_t totalSamples = numSamples * _numChannels;
-
+    
     // Apply pre-gain if not unity
     if (_pregain != (1 << 27)) {
         for (size_t i = 0; i < totalSamples; i++) {
@@ -30,19 +30,15 @@ void IRAM_ATTR ParametricEQ::processInternal(q31_t* __restrict samples, size_t n
         }
     }
 
-    // Cascade through active biquad filters
-    // Stereo loop is unrolled to avoid per-sample ternary branch on channel index
-    for (uint8_t f = 0; f < MAX_EQ_BANDS; f++) {
-        if (!_params[f].enabled) continue;
+    for (size_t s = 0; s < numSamples; s++) {
+        size_t idx = s * _numChannels;
 
-        BiquadState& s0 = _filters[f].getState(0);
-        BiquadState& s1 = _filters[f].getState(1);
-
-        for (size_t i = 0; i < numSamples; i++) {
-            size_t idx = i * _numChannels;
-            samples[idx]     = _filters[f].processSample(samples[idx],     s0);
-            if (_numChannels > 1) {
-                samples[idx + 1] = _filters[f].processSample(samples[idx + 1], s1);
+        for (uint8_t b = 0; b < MAX_EQ_BANDS; b++) {
+            if (_params[b].enabled) {
+                samples[idx] = _filters[b].processSample(samples[idx], _filters[b].getState(0));
+                 if (_numChannels > 1) {
+                    samples[idx + 1] = _filters[b].processSample(samples[idx + 1], _filters[b].getState(1));
+                }
             }
         }
     }

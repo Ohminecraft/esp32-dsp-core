@@ -234,7 +234,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
   pipeline.getDrc().setReleaseTime(0, pd.drc_releaseMs);
 
   // Soft Clipper
-  pipeline.getSoftClipper()._threshold = pd.sc_thresholdDb;
+  pipeline.getSoftClipper().setThreshold(pd.sc_thresholdDb);
 
   LOG_INFO(TAG, "Loaded preset from slot %d", slot);
   return true;

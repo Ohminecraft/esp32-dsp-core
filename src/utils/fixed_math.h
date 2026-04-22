@@ -51,7 +51,10 @@ __attribute__((always_inline)) static inline q63_t IRAM_ATTR q31_mac(q63_t acc,
  */
 __attribute__((always_inline)) static inline q31_t IRAM_ATTR
 q63_to_q31_sat(q63_t acc, int shift) {
-  q63_t result = acc >> shift;
+  // Add rounding factor before shifting to prevent DC offset accumulation
+  // Arithmetic shift right (>>) rounds negative numbers towards -infinity.
+  // By adding 0.5 (1 << (shift - 1)), we round to nearest integer.
+  q63_t result = (acc + (1LL << (shift - 1))) >> shift;
   if (result > Q31_MAX)
     return Q31_MAX;
   if (result < Q31_MIN)

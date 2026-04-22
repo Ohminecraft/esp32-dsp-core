@@ -32,6 +32,7 @@ public:
 
 private:
     q31_t   _threshold;
+    int32_t _scale_q427;
     int32_t _mode;
 };
 

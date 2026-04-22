@@ -85,7 +85,7 @@ class Store extends EventEmitter {
         this.volume = { gainDb: 0, mute: false };
 
         // Soft Clipper
-        this.softClipper = { threshold: 0x60000000, mode: 0 };
+        this.softClipper = { threshold: -250, mode: 0 };
 
         // System
         this.system = {

@@ -15,7 +15,7 @@
 // Audio Configuration
 // ============================================================================
 
-#define DSP_SAMPLE_RATE         48000   // Hz
+#define DSP_SAMPLE_RATE         96000   // Hz
 #define DSP_NUM_CHANNELS        2       // Stereo
 #define DSP_FRAME_SIZE          256     // Samples per frame per channel
 #define DSP_FRAME_SAMPLES       (DSP_FRAME_SIZE * DSP_NUM_CHANNELS) // Total samples per frame (256)
