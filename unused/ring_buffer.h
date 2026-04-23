@@ -40,13 +40,13 @@ public:
      * Write samples — call from producer side only.
      * @return Number of samples actually written (≤ count).
      */
-    size_t write(const q31_t* data, size_t count);
+    size_t write(const float* data, size_t count);
 
     /**
      * Read samples — call from consumer side only.
      * @return Number of samples actually read (≤ count).
      */
-    size_t read(q31_t* data, size_t count);
+    size_t read(float* data, size_t count);
 
     /** Samples available for reading (safe to call from either side). */
     size_t available() const;
@@ -65,7 +65,7 @@ public:
 private:
     static constexpr size_t MAX_CAPACITY = RING_BUFFER_SIZE * DSP_NUM_CHANNELS;
 
-    q31_t  _buffer[MAX_CAPACITY];
+    float  _buffer[MAX_CAPACITY];
 
     // Separate cache lines to avoid false sharing on dual-core ESP32.
     // Xtensa LX7 cache line = 32 bytes; pad each atomic to its own line.

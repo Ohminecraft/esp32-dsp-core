@@ -34,7 +34,7 @@ void RingBuffer::init(size_t capacity) {
     memset(_buffer, 0, sizeof(_buffer));
 }
 
-size_t RingBuffer::write(const q31_t* data, size_t count) {
+size_t RingBuffer::write(const float* data, size_t count) {
     // Acquire tail so we correctly see how much space the consumer has freed
     const size_t tail  = _tail.load(std::memory_order_acquire);
     const size_t head  = _head.load(std::memory_order_relaxed); // only we write _head
@@ -45,16 +45,16 @@ size_t RingBuffer::write(const q31_t* data, size_t count) {
 
     size_t pos = head & _mask;
     size_t firstChunk = std::min(count, _capacity - pos);
-    memcpy(&_buffer[pos], data, firstChunk * sizeof(q31_t));
+    memcpy(&_buffer[pos], data, firstChunk * sizeof(float));
     if (firstChunk < count) {
-        memcpy(&_buffer[0], data + firstChunk, (count - firstChunk) * sizeof(q31_t));
+        memcpy(&_buffer[0], data + firstChunk, (count - firstChunk) * sizeof(float));
     }
     // Release: make written data + new _head visible to consumer atomically
     _head.store(head + count, std::memory_order_release);
     return count;
 }
 
-size_t RingBuffer::read(q31_t* data, size_t count) {
+size_t RingBuffer::read(float* data, size_t count) {
     // Acquire head so we correctly see data the producer has published
     const size_t head  = _head.load(std::memory_order_acquire);
     const size_t tail  = _tail.load(std::memory_order_relaxed); // only we write _tail
@@ -63,11 +63,11 @@ size_t RingBuffer::read(q31_t* data, size_t count) {
     if (count > avail) count = avail;
     if (count == 0)    return 0;
 
-    size_t pos = head & _mask;
+    size_t pos = tail & _mask;
     size_t firstChunk = std::min(count, _capacity - pos);
-    memcpy(&_buffer[pos], data, firstChunk * sizeof(q31_t));
+    memcpy(data, &_buffer[pos], firstChunk * sizeof(float));
     if (firstChunk < count) {
-        memcpy(&_buffer[0], data + firstChunk, (count - firstChunk) * sizeof(q31_t));
+        memcpy(data + firstChunk, &_buffer[0], (count - firstChunk) * sizeof(float));
     }
 
     // Release: make new _tail (freed slots) visible to producer

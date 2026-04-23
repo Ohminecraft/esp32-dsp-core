@@ -37,13 +37,13 @@ public:
 
     /**
      * Process a frame of audio in-place.
-     * @param samples Stereo interleaved Q31 buffer: L0,R0,L1,R1,...
+     * @param samples Stereo interleaved float buffer: L0,R0,L1,R1,...
      * @param numSamples Number of sample PAIRS (frames), NOT total samples.
      *                   Total buffer length = numSamples * numChannels.
      *
      * MUST NOT block. MUST NOT allocate memory. MUST complete within frame budget.
      */
-    virtual void process(q31_t* __restrict samples, size_t numSamples) = 0;
+    virtual void process(float* __restrict samples, size_t numSamples) = 0;
 
     /**
      * Enable the module for processing.

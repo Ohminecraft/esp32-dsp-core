@@ -1,129 +1,64 @@
 /**
  * @file biquad.h
- * @brief Biquad filter engine — fundamental building block for EQ, crossover, etc.
- *
- * Implementation: Direct Form II Transposed
- * Coefficient format: Q2.30 (int32_t) for high precision
- * Processing: Q31 samples with Q63 accumulator (no overflow)
- *
- * Matches MVSilicon EQFilterParams structure and filter types.
- * Supports runtime coefficient updates without clearing delay lines (glitch-free).
+ * @brief Biquad filter class (Float32) — optimized for esp-dsp
  */
 
 #ifndef BIQUAD_H
 #define BIQUAD_H
 
-#include <stdint.h>
-#include <string.h>
-#include <math.h>
 #include "dsp_types.h"
-#include "config.h"
-#include "../utils/fixed_math.h"
-
-// ============================================================================
-// Biquad Coefficient Structure (Q2.30)
-// ============================================================================
-
-struct BiquadCoeffs {
-    int32_t b0;     // Q2.30
-    int32_t b1;     // Q2.30
-    int32_t b2;     // Q2.30
-    int32_t a1;     // Q2.30 (negated: stored as -a1)
-    int32_t a2;     // Q2.30 (negated: stored as -a2)
-};
-
-// ============================================================================
-// Biquad Filter State (per channel)
-// ============================================================================
-
-struct BiquadState {
-    int64_t d0;     // Delay element 0 (Q5.59)
-    int64_t d1;     // Delay element 1 (Q5.59)
-};
-
-// ============================================================================
-// Single Biquad Section
-// ============================================================================
+#include <string.h>
 
 class Biquad {
 public:
-    Biquad() { reset(); }
+    Biquad() {
+        memset(_coeffs, 0, sizeof(_coeffs));
+        memset(_state, 0, sizeof(_state));
+    }
 
     /**
-     * Design filter coefficients from audio parameters.
-     * Uses float internally (called once per parameter change, NOT per-sample).
-     *
-     * @param type   Filter type (EQ_FILTER_TYPE_PEAKING, etc.)
-     * @param f0     Center/cutoff frequency in Hz
-     * @param Q      Quality factor (float, e.g., 0.707 for Butterworth)
-     * @param gain_dB Gain in dB (used for peaking/shelf types)
-     * @param fs     Sample rate in Hz
+     * Design coefficients from standard filter parameters.
      */
     void design(EQFilterType type, float f0, float Q, float gain_dB, float fs);
 
     /**
-     * Design from MVSilicon-format parameters (Q6.10, Q8.8).
+     * Design coefficients from MVSilicon parameter structure.
      */
     void designFromParams(const EQFilterParams& params, int32_t sampleRate);
 
     /**
-     * Process a block of stereo interleaved Q31 samples in-place.
-     * @param samples Stereo interleaved: L0,R0,L1,R1,...
-     * @param numSamples Number of sample PAIRS (frames)
+     * Process a block of stereo interleaved samples.
+     * @param samples Pointer to L,R,L,R... buffer (MUST be 16-byte aligned)
+     * @param numFrames Number of frames (L/R pairs)
      */
-    //void process(q31_t* __restrict samples, size_t numSamples);
+    inline void process(float* samples, size_t numFrames) {
+        for (size_t i = 0; i < numFrames; i++) {
+            int idx = i * 2;
+            samples[idx]     = processSample(samples[idx], 0);
+            samples[idx + 1] = processSample(samples[idx + 1], 1);
+        }
+    }
 
     /**
-     * Process a block of mono Q31 samples in-place.
+     * Process a single sample for a specific channel.
      */
-    //void processMono(q31_t* __restrict samples, size_t numSamples);
+    __attribute__((always_inline)) inline float processSample(float in, int channel) {
+        float out = _coeffs[0] * in + _state[channel * 2 + 0];
+        _state[channel * 2 + 0] = _coeffs[1] * in - _coeffs[3] * out + _state[channel * 2 + 1];
+        _state[channel * 2 + 1] = _coeffs[2] * in - _coeffs[4] * out;
+        return out;
+    }
 
-    /**
-     * Clear delay lines (call on module disable or init).
-     */
     void reset();
 
-    /**
-     * Internal: process single sample for one channel.
-     * Exposed for high-performance per-sample processing in other modules.
-     */
-    inline q31_t processSample(q31_t input, BiquadState& state);
-
-    BiquadState& getState(int ch) { return _state[ch]; }
-    const BiquadCoeffs& getCoeffs() const { return _coeffs; }
+    const float* getCoeffs() const { return _coeffs; }
+    const float* getState() const { return _state; }
 
 private:
-    BiquadCoeffs _coeffs;
-    BiquadState  _state[2];     // Per-channel state (stereo max)
+    // Coefficients: b0, b1, b2, a1, a2
+    float _coeffs[5];
+    // State: w1L, w2L, w1R, w2R
+    float _state[4];
 };
-
-// ============================================================================
-// Inline: Process single sample (Direct Form II Transposed)
-// ============================================================================
-
-inline q31_t Biquad::processSample(q31_t input, BiquadState& state) {
-    // Direct Form II Transposed:
-    // y[n] = b0*x[n] + d0
-    // d0 = b1*x[n] + a1*y[n] + d1   (a1,a2 already negated in coeffs)
-    // d1 = b2*x[n] + a2*y[n]
-
-    q63_t acc;
-
-    // Output: y = b0*x + d0
-    acc = (q63_t)_coeffs.b0 * input;        // Q5.59
-    acc += state.d0;                        // Q5.59
-    q31_t output = q63_to_q31_sat(acc, 28); // Saturate output to Q1.31 only
-
-    // Update delay d0 (no saturation needed due to 64-bit +/- 16.0 headroom)
-    state.d0 = (q63_t)_coeffs.b1 * input;   // Q5.59
-    state.d0 += (q63_t)_coeffs.a1 * output; // Q5.59
-    state.d0 += state.d1;                   // Q5.59
-
-    // Update delay d1
-    state.d1 = (q63_t)_coeffs.b2 * input;   // Q5.59
-    state.d1 += (q63_t)_coeffs.a2 * output; // Q5.59
-
-    return output;
-}
 
 #endif // BIQUAD_H

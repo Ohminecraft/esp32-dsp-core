@@ -34,7 +34,7 @@ void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     _softClipper.enable();
 }
 
-void IRAM_ATTR DspPipeline::processFrame(q31_t* __restrict samples, size_t numSamples) {
+void IRAM_ATTR DspPipeline::processFrame(float* __restrict samples, size_t numSamples) {
     // Iterate through pipeline — disabled modules are zero-cost (just a bool check)
     for (size_t i = 0; i < CHAIN_LENGTH; i++) {
         if (_chain[i]->isEnabled()) {

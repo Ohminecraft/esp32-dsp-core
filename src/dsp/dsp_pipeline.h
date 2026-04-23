@@ -33,7 +33,7 @@ public:
      * @param samples Stereo interleaved buffer: L0,R0,L1,R1,...
      * @param numSamples Number of sample PAIRS (frames)
      */
-    void processFrame(q31_t* __restrict samples, size_t numSamples);
+    void processFrame(float* __restrict samples, size_t numSamples);
 
     // ---- Module Accessors ----
     NoiseGate&       getNoiseGate()      { return _noiseGate; }

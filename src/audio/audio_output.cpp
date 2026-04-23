@@ -10,6 +10,7 @@
  */
 
 #include "audio_output.h"
+#include <limits.h>
 
 // ---------------------------------------------------------------------------
 // Init / Deinit
@@ -65,15 +66,22 @@ void AudioOutput::initI2SOutput() {
 // Write
 // ---------------------------------------------------------------------------
 
-size_t AudioOutput::writeFrame(const q31_t* __restrict buffer, size_t numSamples) {
+size_t AudioOutput::writeFrame(const float* __restrict buffer, size_t numSamples) {
     return writeI2S(buffer, numSamples);
 }
 
-size_t IRAM_ATTR AudioOutput::writeI2S(const q31_t* __restrict buffer, size_t numSamples) {
-    size_t bytesWanted = numSamples * _numChannels * sizeof(int32_t);
+size_t IRAM_ATTR AudioOutput::writeI2S(const float* __restrict buffer, size_t numSamples) {
+    const size_t totalSamples = numSamples * _numChannels;
+    if (totalSamples > DSP_FRAME_SAMPLES) return 0;
+
     size_t bytesWritten = 0;
 
-    esp_err_t err = i2s_channel_write(_txHandle, buffer, bytesWanted,
+    int32_t buf_to_write[DSP_FRAME_SAMPLES]; // Max frame size in samples (interleaved)
+    for (size_t i = 0; i < totalSamples; i++) {
+        buf_to_write[i] = floatToI32Sat(buffer[i]);
+    }
+
+    esp_err_t err = i2s_channel_write(_txHandle, buf_to_write, totalSamples * sizeof(int32_t),
                                       &bytesWritten, portMAX_DELAY);
     if (err != ESP_OK) return 0;
 

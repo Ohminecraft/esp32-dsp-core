@@ -1,11 +1,6 @@
 /**
  * @file volume.h
  * @brief Master volume control with smooth gain ramping
- *
- * Features:
- *   - dB-based gain control (Q8.8 format)
- *   - Per-sample gain ramping to prevent clicks on volume changes
- *   - Mute with fade-to-zero
  */
 
 #ifndef VOLUME_H
@@ -18,11 +13,11 @@ class VolumeControl : public DspModule {
     friend class PresetManager;
     friend class ParamController;
 public:
-    VolumeControl() : _gainLinear(Q31_MAX), _targetGain(Q31_MAX),
-                      _currentGain(Q31_MAX), _muted(false), _gainDb(0) {}
+    VolumeControl() : _gainLinear(1.0f), _targetGain(1.0f),
+                      _currentGain(1.0f), _muted(false), _gainDb(0) {}
 
     void init(int32_t sampleRate, int32_t numChannels) override;
-    void process(q31_t* __restrict samples, size_t numSamples) override;
+    void process(float* __restrict samples, size_t numSamples) override;
     void reset() override;
 
     const char* getName() const override { return "Volume"; }
@@ -46,9 +41,9 @@ public:
     bool isMuted() const { return _muted; }
 
 private:
-    q31_t   _gainLinear;    // Target linear gain (Q31)
-    q31_t   _targetGain;    // Target gain (considering mute)
-    q31_t   _currentGain;   // Current ramped gain (smoothed)
+    float   _gainLinear;    // Target linear gain
+    float   _targetGain;    // Target gain (considering mute)
+    float   _currentGain;   // Current ramped gain (smoothed)
     bool    _muted;
     int16_t _gainDb;        // Stored dB value
 

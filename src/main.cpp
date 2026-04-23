@@ -1,15 +1,15 @@
 /**
  * @file main.cpp
- * @brief ESP32 DSP Core — Main entry point
+ * @brief ESP32 DSP Core - Main entry point
  *
  * System architecture:
- *   Core 1 (Priority 23): Audio Task — I2S read → DSP pipeline → I2S write
- *   Core 0 (Priority 5):  Control Task — UART command parsing → parameter updates
+ *   Core 1 (Priority 23): Audio Task - I2S read -> DSP pipeline -> I2S write
+ *   Core 0 (Priority 5):  Control Task - UART command parsing -> parameter updates
  *   Serial (USB):         Debug output
  *
  * Pipeline order (MVSilicon v0.3.2):
- *   INPUT → NoiseGate → Compander → Exciter → VirtualBass → BassClassic →
- *   StereoWidener → EQ1 → DynamicEQ → EQ2 → DRC → Volume → SoftClipper → OUTPUT
+ *   INPUT -> NoiseGate -> Compander -> Exciter -> VirtualBass -> BassClassic ->
+ *   StereoWidener -> EQ1 -> DynamicEQ -> EQ2 -> DRC -> Volume -> SoftClipper -> OUTPUT
  */
 
 #include <Arduino.h>
@@ -26,7 +26,7 @@
 #include "utils/debug_log.h"
 
 // ============================================================================
-// Global Objects (static allocation — no heap)
+// Global Objects (static allocation - no heap)
 // ============================================================================
 
 static DspPipeline    g_pipeline;
@@ -37,7 +37,7 @@ static ParamController g_paramCtrl;
 static PresetManager  g_presetMgr;
 
 // Audio processing buffer (statically allocated)
-static q31_t g_audioBuf[DSP_FRAME_SAMPLES];
+static float g_audioBuf[DSP_FRAME_SAMPLES];
 
 // Task handles
 static TaskHandle_t g_audioTaskHandle  = NULL;
@@ -46,6 +46,12 @@ static TaskHandle_t g_controlTaskHandle = NULL;
 // Performance monitoring
 static volatile uint32_t g_lastFrameUs = 0;
 static volatile uint32_t g_maxFrameUs = 0;
+
+#if defined(CORE_DEBUG_LEVEL) && (CORE_DEBUG_LEVEL >= 3)
+static constexpr uint32_t PERF_LOG_INTERVAL_MS = 10000;
+#else
+static constexpr uint32_t PERF_LOG_INTERVAL_MS = 0;
+#endif
 
 // ============================================================================
 // Audio Task (Core 1, high priority)
@@ -79,7 +85,7 @@ void IRAM_ATTR audioTask(void* param) {
 void controlTask(void* param) {
     LOG_INFO("CTRL", "Control task started on core %d", xPortGetCoreID());
     LOG_INFO("INIT", "System Ready, CPU: %lu MHz, Free Heap: %lu bytes", (unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFreeHeap());
-    uint32_t lastStatusMs = 0;
+    uint32_t lastStatusMs = millis();
 
     while (true) {
         // Poll UART for incoming commands
@@ -87,19 +93,20 @@ void controlTask(void* param) {
             g_paramCtrl.handleCommand(g_uart.getCommand());
         }
 
-        // Periodic status report (every 10 seconds)
-        uint32_t nowMs = millis();
-        if (nowMs - lastStatusMs >= 10000) {
-            lastStatusMs = nowMs;
+        // Periodic status report. Disabled at normal debug level to reduce
+        // UART bursts that may disturb real-time audio.
+        if (PERF_LOG_INTERVAL_MS > 0) {
+            uint32_t nowMs = millis();
+            if (nowMs - lastStatusMs >= PERF_LOG_INTERVAL_MS) {
+                lastStatusMs = nowMs;
 
-            // Calculate frame budget usage
-            // Budget: 256 samples / 96000 Hz * 1e6 = 2666.67 µs per frame
-            float budgetUs = (float)DSP_FRAME_SIZE / DSP_SAMPLE_RATE * 1e6f;
-            float usage = (float)g_lastFrameUs / budgetUs * 100.0f;
+                // Budget: 256 samples / 96000 Hz * 1e6 = 2666.67 us per frame
+                float budgetUs = (float)DSP_FRAME_SIZE / DSP_SAMPLE_RATE * 1e6f;
+                float usage = (float)g_lastFrameUs / budgetUs * 100.0f;
 
-            LOG_INFO("PERF", "Frame: %lu us (%.1f%%), Max: %lu us, Heap: %lu", g_lastFrameUs, usage, g_maxFrameUs, ESP.getFreeHeap());
-
-            g_maxFrameUs = 0;  // Reset peak
+                LOG_INFO("PERF", "Frame: %lu us (%.1f%%), Max: %lu us, Heap: %lu", g_lastFrameUs, usage, g_maxFrameUs, ESP.getFreeHeap());
+                g_maxFrameUs = 0;  // Reset peak
+            }
         }
 
         vTaskDelay(1);  // Yield to other tasks
@@ -173,9 +180,9 @@ void setup() {
 }
 
 // ============================================================================
-// Arduino Loop (unused — work is done in FreeRTOS tasks)
+// Arduino Loop (unused - work is done in FreeRTOS tasks)
 // ============================================================================
 
 void loop() {
-    vTaskDelay(portMAX_DELAY);  // Suspend loop task — all work is in custom tasks
+    vTaskDelay(portMAX_DELAY);  // Suspend loop task - all work is in custom tasks
 }

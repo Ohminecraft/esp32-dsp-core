@@ -62,17 +62,26 @@ void AudioInput::initI2SInput() {
 
 // ---------------------------------------------------------------------------
 
-size_t AudioInput::readFrame(q31_t* __restrict buffer, size_t numSamples) {
+size_t AudioInput::readFrame(float* __restrict buffer, size_t numSamples) {
     return readI2S(buffer, numSamples);
 }
 
-size_t IRAM_ATTR AudioInput::readI2S(q31_t* __restrict buffer, size_t numSamples) {
-    size_t bytesWanted = numSamples * _numChannels * sizeof(int32_t);
+size_t IRAM_ATTR AudioInput::readI2S(float* __restrict buffer, size_t numSamples) {
+    const size_t totalSamples = numSamples * _numChannels;
+    if (totalSamples > DSP_FRAME_SAMPLES) return 0;
+
     size_t bytesRead   = 0;
 
-    esp_err_t err = i2s_channel_read(_rxHandle, buffer, bytesWanted,
+    int32_t buf_to_read[DSP_FRAME_SAMPLES]; // Max frame size in samples (interleaved)
+    esp_err_t err = i2s_channel_read(_rxHandle, buf_to_read, totalSamples * sizeof(int32_t),
                                      &bytesRead, portMAX_DELAY);
     if (err != ESP_OK) return 0;
+
+    const size_t samplesRead = bytesRead / sizeof(int32_t);
+    for (size_t i = 0; i < samplesRead; i++) {
+        // Convert signed 32-bit PCM to float in [-1, 1)
+        buffer[i] = (float)buf_to_read[i] / 2147483648.0f;
+    }
 
     // PCM1808 xuất 24-bit left-justified trong frame 32-bit.
     // If the data is received right-aligned in the 32-bit word, we must shift left by 8

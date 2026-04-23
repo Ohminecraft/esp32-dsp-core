@@ -27,7 +27,7 @@ public:
      * @param numSamples Number of sample pairs to write
      * @return Number of sample pairs actually written
      */
-    size_t writeFrame(const q31_t* __restrict buffer, size_t numSamples);
+    size_t writeFrame(const float* __restrict buffer, size_t numSamples);
 
 private:
     int32_t      _sampleRate  = DSP_SAMPLE_RATE;
@@ -37,7 +37,7 @@ private:
 
     void initI2SOutput();
 
-    size_t writeI2S   (const q31_t* __restrict buffer, size_t numSamples);
+    size_t writeI2S   (const float* __restrict buffer, size_t numSamples);
 };
 
 #endif // AUDIO_OUTPUT_H

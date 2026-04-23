@@ -1,6 +1,6 @@
 /**
  * @file biquad.cpp
- * @brief Biquad filter implementation — coefficient design and block processing
+ * @brief Biquad filter implementation — optimized for esp-dsp
  */
 
 #include "biquad.h"
@@ -9,21 +9,6 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
 #endif
-
-// ============================================================================
-// Float to Q2.30 conversion (used only during coefficient design)
-// ============================================================================
-
-static inline int32_t float_to_q428(float x) {
-    // Q4.28: range approximately [-8.0, +8.0)
-    if (x >= 8.0f) return 0x7FFFFFFF;
-    if (x <= -8.0f) return 0x80000000;
-    return (int32_t)(x * (float)(1 << 28));
-}
-
-// ============================================================================
-// Coefficient Design (float internally, output Q2.30)
-// ============================================================================
 
 void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float fs) {
     float A = powf(10.0f, gain_dB / 40.0f);  // sqrt(10^(dB/20))
@@ -35,7 +20,7 @@ void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float f
     float b0f = 1.0f, b1f = 0.0f, b2f = 0.0f;
     float a0f = 1.0f, a1f = 0.0f, a2f = 0.0f;
 
-    if (Q <= 0.001f) Q = 0.001f;  // Prevent divide by zero
+    if (Q <= 0.001f) Q = 0.001f;
 
     switch (type) {
         case EQ_FILTER_TYPE_PEAKING:
@@ -115,8 +100,6 @@ void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float f
             break;
 
         case EQ_FILTER_TYPE_LOW_PASS_ORDER1:
-            // 1st order: y[n] = b0*x[n] + b1*x[n-1] - a1*y[n-1]
-            // H(z) = (1 - cos(w0)) / (1 + alpha) * (1 + z^-1) / (1 - a1*z^-1)
             {
                 float K = tanf(M_PI * f0 / fs);
                 b0f = K / (K + 1.0f);
@@ -141,26 +124,17 @@ void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float f
             break;
 
         default:
-            // Passthrough (unity)
             b0f = 1.0f; b1f = 0.0f; b2f = 0.0f;
             a0f = 1.0f; a1f = 0.0f; a2f = 0.0f;
             break;
     }
 
-    // Normalize by a0
     float inv_a0 = 1.0f / a0f;
-    b0f *= inv_a0;
-    b1f *= inv_a0;
-    b2f *= inv_a0;
-    a1f *= inv_a0;
-    a2f *= inv_a0;
-
-    // Convert to Q4.28, store a1/a2 as negated (for MAC accumulation)
-    _coeffs.b0 = float_to_q428(b0f);
-    _coeffs.b1 = float_to_q428(b1f);
-    _coeffs.b2 = float_to_q428(b2f);
-    _coeffs.a1 = float_to_q428(-a1f);  // Negated for Direct Form II
-    _coeffs.a2 = float_to_q428(-a2f);  // Negated for Direct Form II
+    _coeffs[0] = b0f * inv_a0;
+    _coeffs[1] = b1f * inv_a0;
+    _coeffs[2] = b2f * inv_a0;
+    _coeffs[3] = a1f * inv_a0;
+    _coeffs[4] = a2f * inv_a0;
 }
 
 void Biquad::designFromParams(const EQFilterParams& params, int32_t sampleRate) {
@@ -171,26 +145,6 @@ void Biquad::designFromParams(const EQFilterParams& params, int32_t sampleRate) 
 
     design(type, f0, Q, gain_dB, (float)sampleRate);
 }
-
-// ============================================================================
-// Block Processing
-// ============================================================================
-
-/*
-void IRAM_ATTR Biquad::process(q31_t* __restrict samples, size_t numSamples) {
-    for (size_t i = 0; i < numSamples; i++) {
-        size_t idx = i * 2;  // Stereo interleaved
-        samples[idx]     = processSample(samples[idx],     _state[0]);  // Left
-        samples[idx + 1] = processSample(samples[idx + 1], _state[1]);  // Right
-    }
-}
-
-void IRAM_ATTR Biquad::processMono(q31_t* __restrict samples, size_t numSamples) {
-    for (size_t i = 0; i < numSamples; i++) {
-        samples[i] = processSample(samples[i], _state[0]);
-    }
-}
-*/
 
 void Biquad::reset() {
     memset(_state, 0, sizeof(_state));

@@ -433,11 +433,12 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
   sendPkt(MODULE_ID_NOISE_GATE, 4, _pipeline->getNoiseGate()._holdMs);
 
   // CP
-  sendPkt(MODULE_ID_COMPANDER, 0, _pipeline->getCompander()._thresholdDb);
-  sendPkt(MODULE_ID_COMPANDER, 1, _pipeline->getCompander()._ratioBelow);
-  sendPkt(MODULE_ID_COMPANDER, 2, _pipeline->getCompander()._ratioAbove);
+  sendPkt(MODULE_ID_COMPANDER, 0, _pipeline->getCompander()._thresholdDbInt);
+  sendPkt(MODULE_ID_COMPANDER, 1, _pipeline->getCompander()._ratioBelowQ88);
+  sendPkt(MODULE_ID_COMPANDER, 2, _pipeline->getCompander()._ratioAboveQ88);
   sendPkt(MODULE_ID_COMPANDER, 3, _pipeline->getCompander()._attackMs);
   sendPkt(MODULE_ID_COMPANDER, 4, _pipeline->getCompander()._releaseMs);
+  sendPkt(MODULE_ID_COMPANDER, 5, _pipeline->getCompander()._pregainQ412);
 
   // EX
   sendPkt(MODULE_ID_EXCITER, 0, _pipeline->getExciter()._fCut);
@@ -457,13 +458,14 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
   sendPkt(MODULE_ID_STEREO_WIDEN, 0, _pipeline->getStereoWidener()._intensity);
 
   // DRC
-  sendPkt(MODULE_ID_DRC, 0, _pipeline->getDrc()._bands[0].thresholdDb);
-  sendPkt(MODULE_ID_DRC, 1, _pipeline->getDrc()._bands[0].ratio);
+  sendPkt(MODULE_ID_DRC, 0, _pipeline->getDrc()._bands[0].thresholdDbInt);
+  sendPkt(MODULE_ID_DRC, 1, _pipeline->getDrc()._bands[0].ratioQ88);
   sendPkt(MODULE_ID_DRC, 2, _pipeline->getDrc()._bands[0].attackMs);
   sendPkt(MODULE_ID_DRC, 3, _pipeline->getDrc()._bands[0].releaseMs);
+  sendPkt(MODULE_ID_DRC, 4, _pipeline->getDrc()._bands[0].pregainQ412);
 
   // SC
-  sendPkt(MODULE_ID_SOFT_CLIP, 0, _pipeline->getSoftClipper()._threshold);
+  sendPkt(MODULE_ID_SOFT_CLIP, 0, _pipeline->getSoftClipper()._thresholdDb);
 
   // EQ bands
   auto sendEq = [&](uint8_t cmdEq, uint8_t mid, ParametricEQ &eq) {
