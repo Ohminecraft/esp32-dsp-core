@@ -46,6 +46,23 @@
             <span>ESP32 DSP Control</span>
         </div>
         <div class="serial-controls">
+            <!-- CPU Usage Bar -->
+            <div id="cpu-container" class="cpu-container" style="display:none">
+                <span class="cpu-label">CPU:</span>
+                <div class="cpu-bar-bg">
+                    <div id="cpu-bar-fill" class="cpu-bar-fill"></div>
+                </div>
+                <span id="cpu-value" class="cpu-value">0.0%</span>
+            </div>
+
+            <div id="heap-container" class="cpu-container" style="display:none; margin-right: 15px;">
+                <span class="cpu-label">Heap Left:</span>
+                <div class="cpu-bar-bg">
+                    <div id="heap-bar-fill" class="cpu-bar-fill" style="background: var(--accent-purple);"></div>
+                </div>
+                <span id="heap-value" class="cpu-value">0%</span>
+            </div>
+
             <div id="connection-status" class="disconnected">
                 <span class="status-dot"></span>
                 <span id="connection-label">Disconnected</span>

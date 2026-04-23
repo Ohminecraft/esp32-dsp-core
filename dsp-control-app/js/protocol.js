@@ -28,6 +28,7 @@ export const CMD = {
     SET_OUTPUT_SOURCE: 0x31,
     SET_SYSTEM_INFO: 0x32, // Note: keeping numeric IDs consistent with ESP32
     GET_ALL_STATE: 0x33,
+    REPORT_CPU_USAGE: 0x40,
     ACK_RESPONSE: 0xFE,
     ERROR: 0xFF
 };

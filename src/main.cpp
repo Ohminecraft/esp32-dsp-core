@@ -93,21 +93,32 @@ void controlTask(void* param) {
             g_paramCtrl.handleCommand(g_uart.getCommand());
         }
 
-        // Periodic status report. Disabled at normal debug level to reduce
-        // UART bursts that may disturb real-time audio.
-        if (PERF_LOG_INTERVAL_MS > 0) {
-            uint32_t nowMs = millis();
-            if (nowMs - lastStatusMs >= PERF_LOG_INTERVAL_MS) {
-                lastStatusMs = nowMs;
+        // Periodic status report and UART CPU reporting
+        uint32_t nowMs = millis();
+        if (nowMs - lastStatusMs >= 2000) { // Every 2 seconds
+            lastStatusMs = nowMs;
 
-                // Budget: 256 samples / 96000 Hz * 1e6 = 2666.67 us per frame
-                float budgetUs = (float)DSP_FRAME_SIZE / DSP_SAMPLE_RATE * 1e6f;
-                float usage = (float)g_lastFrameUs / budgetUs * 100.0f;
+            // Budget: 256 samples / 96000 Hz * 1e6 = 2666.67 us per frame
+            float budgetUs = (float)DSP_FRAME_SIZE / DSP_SAMPLE_RATE * 1e6f;
+            float usage = (float)g_lastFrameUs / budgetUs * 100.0f;
+            if (usage > 100.0f) usage = 100.0f;
 
-                LOG_INFO("PERF", "Frame: %lu us (%.1f%%), Max: %lu us, Heap: %lu", g_lastFrameUs, usage, g_maxFrameUs, ESP.getFreeHeap());
-                g_maxFrameUs = 0;  // Reset peak
-            }
+            // Calculate values for App
+            uint16_t cpu10 = (uint16_t)(usage * 10.0f); // 20.9% -> 209
+            uint8_t heapPct = (uint8_t)((float)ESP.getFreeHeap() / ESP.getHeapSize() * 100.0f);
+
+            uint8_t data[3] = {
+                (uint8_t)(cpu10 & 0xFF),
+                (uint8_t)((cpu10 >> 8) & 0xFF),
+                heapPct
+            };
+            g_uart.sendFrame(CMD_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, 3);
+
+            LOG_INFO("PERF", "Frame: %lu us (%.1f%%), Max: %lu us, Heap: %u/%u (%u%%)", 
+                g_lastFrameUs, usage, g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), heapPct);
+            g_maxFrameUs = 0;  // Reset peak
         }
+
 
         vTaskDelay(1);  // Yield to other tasks
     }

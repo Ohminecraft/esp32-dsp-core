@@ -136,6 +136,49 @@ body {
     flex-shrink: 1;
 }
 
+/* CPU Usage Bar */
+.cpu-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: 15px;
+    background: var(--bg-body);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+.cpu-label {
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.cpu-bar-bg {
+    width: 80px;
+    height: 6px;
+    background: #e2e8f0;
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+}
+
+.cpu-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent-green);
+    transition: width 0.5s ease-in-out, background 0.3s;
+}
+
+.cpu-value {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-primary);
+    min-width: 30px;
+}
+
 /* Connection badge */
 #connection-status {
     display: flex;

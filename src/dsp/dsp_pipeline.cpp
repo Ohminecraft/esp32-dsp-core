@@ -28,10 +28,9 @@ void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     for (size_t i = 0; i < CHAIN_LENGTH; i++) {
         _chain[i]->init(sampleRate, numChannels);
     }
-
-    // Enable soft clipper by default (always-on protection)
+    
     _volume.enable();
-    _softClipper.enable();
+    //_softClipper.enable();
 }
 
 void IRAM_ATTR DspPipeline::processFrame(float* __restrict samples, size_t numSamples) {

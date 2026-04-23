@@ -83,13 +83,5 @@ size_t IRAM_ATTR AudioInput::readI2S(float* __restrict buffer, size_t numSamples
         buffer[i] = (float)buf_to_read[i] / 2147483648.0f;
     }
 
-    // PCM1808 xuất 24-bit left-justified trong frame 32-bit.
-    // If the data is received right-aligned in the 32-bit word, we must shift left by 8
-    // to place the sign bit at bit 31 (Q1.31 format).
-    //size_t n = bytesRead / sizeof(q31_t);
-    //for (size_t i = 0; i < n; i++) {
-    //    buffer[i] <<= 8;
-    //}
-
     return bytesRead / (sizeof(int32_t) * _numChannels);
 }

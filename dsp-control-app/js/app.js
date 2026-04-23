@@ -329,6 +329,11 @@ parser.onFrame((frame) => {
         store.updateParam('dynamicEq', 'attackMs', leToInt32(frame.data, 12));
         store.updateParam('dynamicEq', 'releaseMs', leToInt32(frame.data, 16));
     }
+    else if (frame.cmd === CMD.REPORT_CPU_USAGE && frame.data.length >= 3) {
+        const cpu10 = frame.data[0] | (frame.data[1] << 8);
+        const heapPct = frame.data[2];
+        updateCpuUI(cpu10 / 10.0, heapPct);
+    }
 });
 
 // ─── Accordion Builder ───────────────────────────────────────────────
@@ -1090,6 +1095,41 @@ function mountGraphToAccordion(acc) {
     eqGraph = new EQGraph(canvas);
 }
 
+function updateCpuUI(usage, heapPct) {
+    const cpuContainer = document.getElementById('cpu-container');
+    const cpuBar = document.getElementById('cpu-bar-fill');
+    const cpuText = document.getElementById('cpu-value');
+    const heapContainer = document.getElementById('heap-container');
+    const heapBar = document.getElementById('heap-bar-fill');
+    const heapText = document.getElementById('heap-value');
+
+    if (!cpuContainer || !cpuBar || !cpuText) return;
+
+    // Show containers if they were hidden
+    if (cpuContainer.style.display === 'none' && store.system.connected) {
+        cpuContainer.style.display = 'flex';
+        if (heapContainer) heapContainer.style.display = 'flex';
+    }
+
+    cpuText.textContent = `${usage.toFixed(1)}%`;
+    cpuBar.style.width = `${usage}%`;
+
+    // Dynamic color for CPU
+    if (usage > 90) cpuBar.style.background = 'var(--accent-red)';
+    else if (usage > 75) cpuBar.style.background = 'var(--accent-orange)';
+    else cpuBar.style.background = 'var(--accent-green)';
+
+    // Update Heap
+    if (heapContainer && heapBar && heapText) {
+        heapText.textContent = `${heapPct}%`;
+        heapBar.style.width = `${heapPct}%`;
+        // Reverse color logic for heap (low heap = red)
+        if (heapPct < 15) heapBar.style.background = 'var(--accent-red)';
+        else if (heapPct < 30) heapBar.style.background = 'var(--accent-orange)';
+        else heapBar.style.background = 'var(--accent-purple)';
+    }
+}
+
 function unmountGraph() {
     if (eqGraph) {
         eqGraph.destroy();
@@ -1103,15 +1143,21 @@ function updateStatusUI() {
     const badge = document.getElementById('connection-status');
     const label = document.getElementById('connection-label');
     const btnDis = document.getElementById('btn-disconnect');
+    const cpuContainer = document.getElementById('cpu-container');
+    const heapContainer = document.getElementById('heap-container');
     if (store.system.connected) {
         badge.className = 'connected'; badge.id = 'connection-status';
         label.textContent = `Connected — ${store.system.portPath}`;
         btnDis.style.display = '';
+        if (cpuContainer) cpuContainer.style.display = 'flex';
+        if (heapContainer) heapContainer.style.display = 'flex';
         ['port-select', 'btn-refresh', 'btn-connect'].forEach(id => document.getElementById(id).style.display = 'none');
     } else {
         badge.className = 'disconnected'; badge.id = 'connection-status';
         label.textContent = 'Disconnected';
         btnDis.style.display = 'none';
+        if (cpuContainer) cpuContainer.style.display = 'none';
+        if (heapContainer) heapContainer.style.display = 'none';
         if (manualMode) ['port-select', 'btn-refresh', 'btn-connect'].forEach(id => document.getElementById(id).style.display = '');
     }
 }

@@ -31,7 +31,7 @@ public:
      * @param samples Pointer to L,R,L,R... buffer (MUST be 16-byte aligned)
      * @param numFrames Number of frames (L/R pairs)
      */
-    inline void process(float* samples, size_t numFrames) {
+    inline void IRAM_ATTR process(float* __restrict samples, size_t numFrames) {
         for (size_t i = 0; i < numFrames; i++) {
             int idx = i * 2;
             samples[idx]     = processSample(samples[idx], 0);
@@ -42,7 +42,7 @@ public:
     /**
      * Process a single sample for a specific channel.
      */
-    __attribute__((always_inline)) inline float processSample(float in, int channel) {
+    __attribute__((always_inline)) inline float IRAM_ATTR processSample(float in, int channel) {
         float out = _coeffs[0] * in + _state[channel * 2 + 0];
         _state[channel * 2 + 0] = _coeffs[1] * in - _coeffs[3] * out + _state[channel * 2 + 1];
         _state[channel * 2 + 1] = _coeffs[2] * in - _coeffs[4] * out;
