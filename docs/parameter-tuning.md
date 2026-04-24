@@ -207,7 +207,7 @@ Tham chiếu hoàn chỉnh cho tất cả tham số trên 12 module DSP.
 
 ---
 
-### [3] Exicter
+### [3] Exciter
 
 **Mục đích**: Thêm nội dung điều hòa tần số cao (sáng, không khí, lấp lánh)
 
@@ -268,7 +268,7 @@ Tham chiếu hoàn chỉnh cho tất cả tham số trên 12 module DSP.
 
 EQ Động THẤP & EQ Động CAO: xem [8]
 
-**Mẹo**
+**Mẹo**:
 Ngưỡng Thấp = Ngưỡng Bình Thường: không có khoảng "không xử lý" ở phía dưới → chuyển trực tiếp THẤP↔CAO
 Ngưỡng Cao = Ngưỡng Bình Thường: không có khoảng "không xử lý" ở phía trên → chuyển trực tiếp THẤP↔CAO
 
