@@ -59,9 +59,8 @@ The ESP32 DSP Core control application (Electron-based) provides a user-friendly
 #### 1. **Connect to ESP32**
 
 ```
-1. Click "Auto-Detect" button
-   → GUI scans available COM ports
-   → Selects port with ESP32 DSP board
+1. When started app will go to auto detect state
+   → Send packet all port with ESP32 DSP board vi USB-TTL until find right device
 
 OR
 
@@ -69,11 +68,6 @@ OR
 2. Click "Connect" button
 3. Wait for "✓ Connected" message
 ```
-
-**Status Indicators**:
-- ✓ Green = Connected
-- ✗ Red = Disconnected
-- ⟳ Yellow = Connecting...
 
 #### 2. **Enable/Disable Modules**
 
@@ -258,9 +252,8 @@ For clean audio:
 #### 1. **Kết Nối với ESP32**
 
 ```
-1. Nhấp nút "Tự Động Phát Hiện"
-   → GUI quét cổng COM
-   → Chọn cổng có bo mạch ESP32
+1. Khi mở app lần đầu đầu sẽ auto scan tất cả port
+   App sẽ gửi sync packet cho từng port qua USB-TTL đến khi tìm được đúng thiết bị
 
 HOẶC
 
