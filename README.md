@@ -4,7 +4,7 @@
 
 A professional real-time audio digital signal processing (DSP) framework running on ESP32 microcontroller with an Electron-based GUI control application. Inspired by the MVSilicon BP10xx audio processor architecture.
 
-**Status**: ✅ Stable and Production-Ready | **Sample Rate**: 96 kHz | **Modules**: 12 | **Latency**: 2.67ms
+**Status**: ✅ Stable (Some Modules still UNSTABLE) and Production-Ready | **Sample Rate**: 96 kHz | **Modules**: 12 | **Latency**: 2.67ms
 
 ---
 
@@ -536,7 +536,7 @@ This project is licensed under the **MIT License** - see LICENSE file for detail
 
 Một framework xử lý tín hiệu âm thanh (DSP) chuyên nghiệp thực thi real-time chạy trên vi điều khiển ESP32 kèm theo ứng dụng GUI điều khiển dựa trên Electron. Lấy cảm hứng từ kiến trúc bộ xử lý âm thanh MVSilicon BP10xx.
 
-**Trạng thái**: ✅ Ổn định & Sẵn sàng sản xuất | **Tần số mẫu**: 96 kHz | **Modules**: 12 | **Độ trễ**: 2.67ms
+**Trạng thái**: ✅ Ổn định (Vẫn có vài Module KHÔNG được ổn định) & Sẵn sàng sản xuất | **Tần số mẫu**: 96 kHz | **Modules**: 12 | **Độ trễ**: 2.67ms
 
 ---
 
