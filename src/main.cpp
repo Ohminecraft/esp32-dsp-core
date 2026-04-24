@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file main.cpp
  * @brief ESP32 DSP Core - Main entry point
  *
@@ -113,7 +113,7 @@ void controlTask(void* param) {
                 heapPct
             };
             g_uart.sendFrame(CMD_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, 3);
-
+            
             LOG_INFO("PERF", "Frame: %lu us (%.1f%%), Max: %lu us, Heap: %u/%u (%u%%)", 
                 g_lastFrameUs, usage, g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), heapPct);
             g_maxFrameUs = 0;  // Reset peak

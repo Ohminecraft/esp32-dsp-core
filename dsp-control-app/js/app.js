@@ -228,10 +228,16 @@ parser.onFrame((frame) => {
     if (frame.cmd === CMD.ACK_RESPONSE && frame.data[0] === 0) {
         if (isFetchingState) {
             isFetchingState = false;
+            
+            // Rebuild the entire parameter UI
             buildAccordionModules();
             buildBottomBar();
+            
+            // Force Graph to redraw everything
+            store.emit('eq:changed');
             store.emit('state:loaded');
             store.emit('eq:structure-changed');
+            
             showStatus('State synchronized successfully!', 'ok');
         }
     }
@@ -305,7 +311,7 @@ parser.onFrame((frame) => {
         const gain = leToInt16(d, 7);
         const qVal = leToInt16(d, 9);
         const changes = { enabled: d[3] === 1, type: d[4], freq: d[5] | (d[6] << 8), gain: gain / 256, q: qVal / 1024 };
-        const eqState = frame.moduleId === MODULE.EQ_DSP ? store.eq1 : store.eq2;
+        const eqState = frame.moduleId === MODULE.EQ_DSP_1 ? store.eq1 : store.eq2;
         eqState.pregain = pregain / 256;
         Object.assign(eqState.bands[b], changes);
         store.emit('eq:changed');
@@ -332,7 +338,7 @@ parser.onFrame((frame) => {
     else if (frame.cmd === CMD.REPORT_CPU_USAGE && frame.data.length >= 3) {
         const cpu10 = frame.data[0] | (frame.data[1] << 8);
         const heapPct = frame.data[2];
-        updateCpuUI(cpu10 / 10.0, heapPct);
+        updateCpuUI(cpu10 / 10.0, 100 - heapPct);
     }
 });
 
@@ -346,18 +352,22 @@ const ACCORDION_MODULES = [
     { id: MODULE.VIRTUAL_BASS, name: 'Virtual Bass', icon: '🔊' },
     { id: MODULE.BASS_CLASSIC, name: 'Bass Classic', icon: '🎵' },
     { id: MODULE.STEREO_WIDEN, name: 'Stereo Widener', icon: '🎧' },
-    { id: MODULE.EQ_DSP, name: 'EQ1 (DSP)', icon: '📈' },
     { id: 'DYNEQ_THRESH', name: 'Dynamic EQ — Thresholds', icon: '⚡', parentId: MODULE.DYNAMIC_EQ },
     { id: 'DYNEQ_LOW', name: 'Dynamic EQ — Low', icon: '🔉', parentId: MODULE.DYNAMIC_EQ },
     { id: 'DYNEQ_HIGH', name: 'Dynamic EQ — High', icon: '🔊', parentId: MODULE.DYNAMIC_EQ },
-    { id: MODULE.EQ_DSP_POST, name: 'EQ2 (Post)', icon: '📉' },
-    { id: MODULE.DRC, name: 'DRC', icon: '🛡️' },
+    { id: MODULE.EQ_DSP_1, name: 'Parmetric EQ 1', icon: '📈' },
+    { id: MODULE.EQ_DSP_2, name: 'Parmetric EQ 2', icon: '📉' },
+    { id: MODULE.DRC, name: 'Dynamic Range Compression', icon: '🛡️' },
     { id: MODULE.VOLUME, name: 'Volume', icon: '🔈' },
     { id: MODULE.SOFT_CLIP, name: 'Soft Clipper', icon: '🔧' },
 ];
 
 function buildAccordionModules() {
     const container = document.getElementById('modules-list');
+    
+    // Remember which accordion was open
+    const openModuleId = document.querySelector('.accordion.open')?.dataset.moduleId;
+    
     container.innerHTML = '';
 
     ACCORDION_MODULES.forEach(mod => {
@@ -402,7 +412,7 @@ function buildAccordionModules() {
         header.appendChild(title);
         header.appendChild(chevron);
 
-        const EQ_MODULE_IDS = [String(MODULE.EQ_DSP), String(MODULE.EQ_DSP_POST), 'DYNEQ_LOW', 'DYNEQ_HIGH'];
+        const EQ_MODULE_IDS = [String(MODULE.EQ_DSP_1), String(MODULE.EQ_DSP_2), 'DYNEQ_LOW', 'DYNEQ_HIGH'];
         const isEqModule = EQ_MODULE_IDS.includes(String(mod.id));
 
         header.addEventListener('click', (e) => {
@@ -427,8 +437,8 @@ function buildAccordionModules() {
                     acc.classList.add('open');
 
                     // Set active EQ
-                    if (mod.id === MODULE.EQ_DSP) store.setActiveEq('eq1');
-                    else if (mod.id === MODULE.EQ_DSP_POST) store.setActiveEq('eq2');
+                    if (mod.id === MODULE.EQ_DSP_1) store.setActiveEq('eq1');
+                    else if (mod.id === MODULE.EQ_DSP_2) store.setActiveEq('eq2');
                     else if (mod.id === 'DYNEQ_LOW') store.setActiveEq('dynLow');
                     else if (mod.id === 'DYNEQ_HIGH') store.setActiveEq('dynHigh');
 
@@ -449,6 +459,15 @@ function buildAccordionModules() {
         acc.appendChild(header);
         acc.appendChild(body);
         container.appendChild(acc);
+
+        // Restore open state
+        if (mod.id === openModuleId || (mod.id === Number(openModuleId))) {
+            acc.classList.add('open');
+            // If it was an EQ module, we need to remount the graph
+            if (isEqModule) {
+                setTimeout(() => mountGraphToAccordion(acc), 0);
+            }
+        }
     });
 }
 
@@ -534,12 +553,12 @@ function buildModuleBody(body, mod) {
                 (v) => { store.stereoWidener.intensity = v; sendFrame(buildSetParam(MODULE.STEREO_WIDEN, 0, v)); });
             break;
 
-        case MODULE.EQ_DSP:
-            buildEqBandPanel(body, MODULE.EQ_DSP, 'eq1');
+        case MODULE.EQ_DSP_1:
+            buildEqBandPanel(body, MODULE.EQ_DSP_1, 'eq1');
             break;
 
-        case MODULE.EQ_DSP_POST:
-            buildEqBandPanel(body, MODULE.EQ_DSP_POST, 'eq2');
+        case MODULE.EQ_DSP_2:
+            buildEqBandPanel(body, MODULE.EQ_DSP_2, 'eq2');
             break;
 
         case 'DYNEQ_THRESH': {
@@ -548,19 +567,19 @@ function buildModuleBody(body, mod) {
             // Build sliders and wire cross-constraints:
             //   highThresh >= normalThresh >= lowThresh
             const { slider: slLow, valInput: vsLow } =
-                addSlider(body, 'Low Thresh', -9000, 0, 100, 'dB',
+                addSlider(body, 'Low Thresh', -6000, 0, 100, 'dB',
                     () => store.dynamicEq.lowThresh,
                     (v) => { store.dynamicEq.lowThresh = v; sendFrame(buildSetDynEqThresholds(v, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs)); },
                     null, 0.01);
 
             const { slider: slNorm, valInput: vsNorm } =
-                addSlider(body, 'Normal Thresh', -9000, 0, 100, 'dB',
+                addSlider(body, 'Normal Thresh', -6000, 0, 100, 'dB',
                     () => store.dynamicEq.normalThresh,
                     (v) => { store.dynamicEq.normalThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, v, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs)); },
                     null, 0.01);
 
             const { slider: slHigh, valInput: vsHigh } =
-                addSlider(body, 'High Thresh', -9000, 0, 100, 'dB',
+                addSlider(body, 'High Thresh', -6000, 0, 100, 'dB',
                     () => store.dynamicEq.highThresh,
                     (v) => { store.dynamicEq.highThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, v, store.dynamicEq.attackMs, store.dynamicEq.releaseMs)); },
                     null, 0.01);
@@ -882,8 +901,8 @@ function rebuildAccordionBody(moduleId) {
 
 function syncEqBand(moduleId, index) {
     let eq;
-    if (moduleId === MODULE.EQ_DSP) eq = store.eq1;
-    else if (moduleId === MODULE.EQ_DSP_POST) eq = store.eq2;
+    if (moduleId === MODULE.EQ_DSP_1) eq = store.eq1;
+    else if (moduleId === MODULE.EQ_DSP_2) eq = store.eq2;
     // For Dynamic EQ, use a different function (syncDynEqBand)
     if (!eq) return;
 
@@ -894,9 +913,9 @@ function syncEqBand(moduleId, index) {
 }
 
 function syncEqToHardware(moduleId) {
-    if (moduleId === MODULE.EQ_DSP) {
+    if (moduleId === MODULE.EQ_DSP_1) {
         store.eq1.bands.forEach((_, i) => syncEqBand(moduleId, i));
-    } else if (moduleId === MODULE.EQ_DSP_POST) {
+    } else if (moduleId === MODULE.EQ_DSP_2) {
         store.eq2.bands.forEach((_, i) => syncEqBand(moduleId, i));
     } else if (moduleId === MODULE.DYNAMIC_EQ) {
         // Sync both sets for Dynamic EQ
@@ -1067,8 +1086,8 @@ function mountGraphToAccordion(acc) {
     // Pregain slider below graph
     const moduleId = acc.dataset.moduleId;
     let eqState;
-    if (moduleId === String(MODULE.EQ_DSP)) eqState = store.eq1;
-    else if (moduleId === String(MODULE.EQ_DSP_POST)) eqState = store.eq2;
+    if (moduleId === String(MODULE.EQ_DSP_1)) eqState = store.eq1;
+    else if (moduleId === String(MODULE.EQ_DSP_2)) eqState = store.eq2;
     else if (moduleId === 'DYNEQ_LOW') eqState = store.dynamicEq.eqLow;
     else if (moduleId === 'DYNEQ_HIGH') eqState = store.dynamicEq.eqHigh;
 
@@ -1082,7 +1101,7 @@ function mountGraphToAccordion(acc) {
                 let bandIdx = eqState.bands.findIndex(b => b.enabled);
                 if (bandIdx === -1) bandIdx = 0;
                 
-                if (moduleId === String(MODULE.EQ_DSP) || moduleId === String(MODULE.EQ_DSP_POST)) {
+                if (moduleId === String(MODULE.EQ_DSP_1) || moduleId === String(MODULE.EQ_DSP_2)) {
                     syncEqBand(parseInt(moduleId), bandIdx);
                 } else {
                     syncDynEqBand(moduleId === 'DYNEQ_HIGH', bandIdx);
@@ -1124,8 +1143,8 @@ function updateCpuUI(usage, heapPct) {
         heapText.textContent = `${heapPct}%`;
         heapBar.style.width = `${heapPct}%`;
         // Reverse color logic for heap (low heap = red)
-        if (heapPct < 15) heapBar.style.background = 'var(--accent-red)';
-        else if (heapPct < 30) heapBar.style.background = 'var(--accent-orange)';
+        if (heapPct > 85) heapBar.style.background = 'var(--accent-red)';
+        else if (heapPct > 70) heapBar.style.background = 'var(--accent-orange)';
         else heapBar.style.background = 'var(--accent-purple)';
     }
 }
@@ -1189,9 +1208,10 @@ function buildBottomBar() {
         const btn = document.getElementById(`preset-${i}`);
         if (!btn) continue;
         btn.addEventListener('click', () => {
+            isFetchingState = true;
             store.setActivePreset(i);
             sendFrame(buildLoadPreset(i));
-            showStatus(`Loaded preset ${i + 1}`, 'ok');
+            showStatus(`Synchronizing Preset ${i + 1}...`, 'info');
         });
         btn.addEventListener('contextmenu', (e) => {
             e.preventDefault();
@@ -1286,8 +1306,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Scope DOM updates to the active accordion only
-        const accId = store.activeEq === 'eq1' ? MODULE.EQ_DSP :
-            store.activeEq === 'eq2' ? MODULE.EQ_DSP_POST :
+        const accId = store.activeEq === 'eq1' ? MODULE.EQ_DSP_1 :
+            store.activeEq === 'eq2' ? MODULE.EQ_DSP_2 :
                 store.activeEq === 'dynLow' ? 'DYNEQ_LOW' : 'DYNEQ_HIGH';
         const activeAcc = document.querySelector(`.accordion[data-module-id="${accId}"].open`);
         if (!activeAcc) return;
@@ -1313,7 +1333,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const rebuildStructural = () => {
         unmountGraph();
 
-        const rebuildIds = [MODULE.EQ_DSP, MODULE.EQ_DSP_POST, 'DYNEQ_LOW', 'DYNEQ_HIGH'];
+        const rebuildIds = [MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH'];
         let activeAcc = null;
 
         rebuildIds.forEach(id => {

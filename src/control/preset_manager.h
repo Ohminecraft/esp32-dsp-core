@@ -35,6 +35,7 @@ private:
     Preferences _prefs;
 
     String getSlotKey(uint8_t slot);
+    void saveDefault(uint8_t slot);
 };
 
 #endif // PRESET_MANAGER_H

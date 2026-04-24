@@ -61,9 +61,13 @@ void ParamController::handleCommand(const UartCommand &cmd) {
     break;
 
   case CMD_LOAD_PRESET:
-    if (cmd.dataLen > 0)
+    if (cmd.dataLen > 0) {
       _presetMgr->loadPreset(cmd.data[0], *_pipeline);
-    _uart->sendAck(MODULE_ID_SYSTEM, 0);
+      // Automatically send all state back to app so UI updates
+      handleGetAllState(cmd);
+    } else {
+      _uart->sendAck(MODULE_ID_SYSTEM, 0);
+    }
     break;
 
   case CMD_GET_ALL_STATE:
@@ -250,9 +254,9 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
     case 0:
       sc.setThreshold(value);
       break;
-    case 1:
-      sc.setMode(value);
-      break;
+    //case 1:
+    //  sc.setMode(value);
+    //  break;
     default:
       _uart->sendError(0x04);
       return;
@@ -316,11 +320,11 @@ void ParamController::handleSetEqBand(const UartCommand &cmd) {
   params.Q = extractInt16(&cmd.data[9]);
 
   ParametricEQ *eq = nullptr;
-  if (cmd.moduleId == MODULE_ID_EQ_DSP) {
-    eq = &_pipeline->getEqDsp();
+  if (cmd.moduleId == MODULE_ID_EQ_DSP_1) {
+    eq = &_pipeline->getEqDsp_1();
     eq->setPregain(pregain_db);
-  } else if (cmd.moduleId == MODULE_ID_EQ_DSP_POST) {
-    eq = &_pipeline->getEqDspPost();
+  } else if (cmd.moduleId == MODULE_ID_EQ_DSP_2) {
+    eq = &_pipeline->getEqDsp_2();
     eq->setPregain(pregain_db); // q8.8 format;
   }
 
@@ -485,8 +489,8 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
       _uart->sendFrame(cmdEq, mid, pkt, 11);
     }
   };
-  sendEq(CMD_SET_EQ_BAND, MODULE_ID_EQ_DSP, _pipeline->getEqDsp());
-  sendEq(CMD_SET_EQ_BAND, MODULE_ID_EQ_DSP_POST, _pipeline->getEqDspPost());
+  sendEq(CMD_SET_EQ_BAND, MODULE_ID_EQ_DSP_1, _pipeline->getEqDsp_1());
+  sendEq(CMD_SET_EQ_BAND, MODULE_ID_EQ_DSP_2, _pipeline->getEqDsp_2());
 
   // DynEQ
   uint8_t deqPkt[20];

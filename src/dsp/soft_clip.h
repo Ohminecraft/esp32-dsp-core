@@ -22,12 +22,12 @@ public:
 
     // ---- Parameter API ----
     void setThreshold(int32_t db_001); // 0.01dB steps
-    void setMode(int32_t mode);
+    //void setMode(int32_t mode);
 
 private:
     float _threshold;   // Linear threshold
     int32_t _thresholdDb; // Stored dB value for readback
-    int32_t _mode;
+    //int32_t _mode;
 };
 
 #endif // SOFT_CLIP_H

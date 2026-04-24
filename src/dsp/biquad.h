@@ -43,8 +43,8 @@ public:
      * Process a single sample for a specific channel.
      */
     __attribute__((always_inline)) inline float IRAM_ATTR processSample(float in, int channel) {
-        float out = _coeffs[0] * in + _state[channel * 2 + 0];
-        _state[channel * 2 + 0] = _coeffs[1] * in - _coeffs[3] * out + _state[channel * 2 + 1];
+        float out = _coeffs[0] * in + _state[channel * 2];
+        _state[channel * 2]     = _coeffs[1] * in - _coeffs[3] * out + _state[channel * 2 + 1];
         _state[channel * 2 + 1] = _coeffs[2] * in - _coeffs[4] * out;
         return out;
     }

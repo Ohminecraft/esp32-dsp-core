@@ -45,9 +45,9 @@
 #define MODULE_ID_VIRTUAL_BASS  0x04
 #define MODULE_ID_BASS_CLASSIC  0x05
 #define MODULE_ID_STEREO_WIDEN  0x06
-#define MODULE_ID_EQ_DSP        0x07    // EQ1 — main parametric EQ
-#define MODULE_ID_DYNAMIC_EQ    0x08    // Dynamic EQ — dual EQ system
-#define MODULE_ID_EQ_DSP_POST   0x09    // EQ2 — post EQ / sound signature
+#define MODULE_ID_DYNAMIC_EQ    0x07    // Dynamic EQ — dual EQ system
+#define MODULE_ID_EQ_DSP_1      0x08    // EQ1 — main parametric EQ
+#define MODULE_ID_EQ_DSP_2      0x09    // EQ2 — post EQ / sound signature
 #define MODULE_ID_DRC           0x0A    // DRC — dynamic range compression
 #define MODULE_ID_VOLUME        0x0B    // Master volume
 #define MODULE_ID_SOFT_CLIP     0x0C    // Soft clipper

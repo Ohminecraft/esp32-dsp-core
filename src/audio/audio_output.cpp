@@ -56,7 +56,7 @@ void AudioOutput::initI2SOutput() {
 
     m_tx_std_cfg.clk_cfg.sample_rate_hz = (uint32_t)_sampleRate;
     m_tx_std_cfg.clk_cfg.clk_src        = I2S_CLK_SRC_DEFAULT;
-    m_tx_std_cfg.clk_cfg.mclk_multiple  = I2S_MCLK_MULTIPLE_256;
+    m_tx_std_cfg.clk_cfg.mclk_multiple  = I2S_MCLK_MULTIPLE_512; // 512x MCLK to ensure accurate sample rates with 24-bit data
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(_txHandle, &m_tx_std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(_txHandle));

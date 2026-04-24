@@ -97,7 +97,7 @@ class Store extends EventEmitter {
         };
 
         // Selected module (for right panel)
-        this.selectedModule = MODULE.EQ_DSP;
+        this.selectedModule = MODULE.EQ_DSP_1;
 
         // Active EQ target for graph: 'eq1', 'eq2', 'dynLow', 'dynHigh'
         this.activeEq = 'eq1';
@@ -127,11 +127,11 @@ class Store extends EventEmitter {
 
     getActiveEqModuleId() {
         switch (this.activeEq) {
-            case 'eq1': return MODULE.EQ_DSP;
-            case 'eq2': return MODULE.EQ_DSP_POST;
+            case 'eq1': return MODULE.EQ_DSP_1;
+            case 'eq2': return MODULE.EQ_DSP_2;
             case 'dynLow': return MODULE.DYNAMIC_EQ;
             case 'dynHigh': return MODULE.DYNAMIC_EQ;
-            default: return MODULE.EQ_DSP;
+            default: return MODULE.EQ_DSP_1;
         }
     }
 
@@ -182,16 +182,6 @@ class Store extends EventEmitter {
     /** Number of enabled bands in the active EQ */
     getEnabledBandCount() {
         return this.getActiveEqState().bands.filter(b => b.enabled).length;
-    }
-
-    resetEqBands() {
-        const eq = this.getActiveEqState();
-        eq.bands.forEach(b => {
-            b.enabled = false;
-            b.type = 0; b.freq = 1000; b.gain = 0; b.q = 0.707;
-        });
-        this.emit('eq:changed');
-        this.emit('eq:structure-changed');
     }
 
     // ─── Generic Parameter Update ────────────────────────────────

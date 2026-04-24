@@ -56,6 +56,16 @@ static inline float calc_envelope_coeff(int32_t sample_rate, int32_t time_ms) {
 }
 
 /**
+ * Calculate attack/release coefficient for frame-based updates.
+ * alpha = 1 - exp(-frame_size / (sample_rate * time_ms / 1000))
+ */
+static inline float calc_envelope_coeff_frame(int32_t sample_rate, int32_t frame_size, int32_t time_ms) {
+    if (time_ms <= 0) return 1.0f;
+    float tau = (float)sample_rate * (float)time_ms / 1000.0f;
+    return 1.0f - expf(-(float)frame_size / tau);
+}
+
+/**
  * One-pole envelope follower step.
  * y[n] = y[n-1] + alpha * (x[n] - y[n-1])
  */

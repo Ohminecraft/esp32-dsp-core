@@ -42,9 +42,9 @@ public:
     VirtualBass&     getVirtualBass()    { return _virtualBass; }
     BassClassic&     getBassClassic()    { return _bassClassic; }
     StereoWidener&   getStereoWidener()  { return _stereoWidener; }
-    ParametricEQ&    getEqDsp()          { return _eqDsp; }
     DynamicEQ&       getDynamicEq()      { return _dynamicEq; }
-    ParametricEQ&    getEqDspPost()      { return _eqDspPost; }
+    ParametricEQ&    getEqDsp_1()        { return _eqDsp_1; }
+    ParametricEQ&    getEqDsp_2()        { return _eqDsp_2; }
     DRC&             getDrc()            { return _drc; }
     VolumeControl&   getVolume()         { return _volume; }
     SoftClipper&     getSoftClipper()    { return _softClipper; }
@@ -71,9 +71,9 @@ private:
     VirtualBass    _virtualBass;   // [04] Virtual Bass
     BassClassic    _bassClassic;   // [05] Bass Classic
     StereoWidener  _stereoWidener; // [06] 3D / Stereo Widener
-    ParametricEQ   _eqDsp;         // [07] EQ1 (main parametric EQ)
-    DynamicEQ      _dynamicEq;     // [08] Dynamic EQ (dual-EQ system)
-    ParametricEQ   _eqDspPost;     // [09] EQ2 (post EQ / sound signature)
+    DynamicEQ      _dynamicEq;     // [07] Dynamic EQ (dual-EQ system)
+    ParametricEQ   _eqDsp_1;       // [08] EQ1 (main parametric EQ)
+    ParametricEQ   _eqDsp_2;       // [09] EQ2 (post EQ / sound signature)
     DRC            _drc;           // [10] DRC (dynamic range compression)
     VolumeControl  _volume;        // [11] Master Volume
     SoftClipper    _softClipper;   // [12] Soft Clipper

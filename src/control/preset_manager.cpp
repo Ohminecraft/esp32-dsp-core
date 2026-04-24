@@ -53,13 +53,67 @@ struct PresetData {
   bool valid;
 };
 
-void PresetManager::init() {}
+void PresetManager::init() {
+  for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
+    if (!hasPreset(i)) {
+      saveDefault(i);
+    }
+  }
+}
+
+void PresetManager::saveDefault(uint8_t slot) {
+  LOG_INFO(TAG, "Initializing default data for Preset Slot %d", slot);
+  
+  static PresetData pd;
+  memset(&pd, 0, sizeof(PresetData));
+  pd.valid = true;
+  pd.vol_db = 0; 
+  // Default: Only Volume enabled (indices 10 and 11)
+  pd.en_mask = (1 << 10); 
+  
+  pd.ng_lowerThreshDb = -9000;
+  pd.ng_upperThreshDb = -8000;
+  pd.ng_attackMs = 5;
+  pd.ng_releaseMs = 100;
+  pd.ng_holdMs = 50;
+
+  pd.cp_thresholdDb = -2000;
+  pd.cp_ratioBelow = 100; // 1.0
+  pd.cp_ratioAbove = 100; // 2.0
+  pd.cp_attackMs = 10;
+  pd.cp_releaseMs = 200;
+
+  pd.ex_cutoffFreq = 3000;
+  pd.vb_cutoffFreq = 60;
+  pd.bc_cutoffFreq = 100;
+
+  pd.deq_lowThresh = -4000;
+  pd.deq_normThresh = -2000;
+  pd.deq_highThresh = -600;
+  pd.deq_attackMs = 10;
+  pd.deq_releaseMs = 100;
+
+  for(int b=0; b<MAX_EQ_BANDS; b++) {
+    pd.eq1_bands[b].enabled = false;
+    pd.eq1_bands[b].f0 = 1000;
+    pd.eq1_bands[b].Q = 724; // 0.707 * 1024
+    pd.eq2_bands[b] = pd.eq1_bands[b];
+    pd.deq_low_bands[b] = pd.eq1_bands[b];
+    pd.deq_high_bands[b] = pd.eq1_bands[b];
+  }
+
+  String key = getSlotKey(slot);
+  _prefs.begin(key.c_str(), false);
+  _prefs.putBytes("blob", &pd, sizeof(PresetData));
+  _prefs.end();
+}
 
 bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
   if (slot >= MAX_PRESET_SLOTS)
     return false;
 
-  PresetData pd = {0};
+  static PresetData pd;
+  memset(&pd, 0, sizeof(PresetData));
   pd.valid = true;
 
   uint16_t enableMask = 0;
@@ -109,13 +163,13 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
   pd.sc_thresholdDb = pipeline.getSoftClipper()._threshold;
 
   // EQs
-  pd.eq1_pregain_q88 = pipeline.getEqDsp().getPregain();
+  pd.eq1_pregain_q88 = pipeline.getEqDsp_1().getPregain();
   for (int i = 0; i < MAX_EQ_BANDS; i++)
-    pd.eq1_bands[i] = pipeline.getEqDsp()._params[i];
+    pd.eq1_bands[i] = pipeline.getEqDsp_1()._params[i];
 
-  pd.eq2_pregain_q88 = pipeline.getEqDspPost().getPregain();
+  pd.eq2_pregain_q88 = pipeline.getEqDsp_2().getPregain();
   for (int i = 0; i < MAX_EQ_BANDS; i++)
-    pd.eq2_bands[i] = pipeline.getEqDspPost()._params[i];
+    pd.eq2_bands[i] = pipeline.getEqDsp_2()._params[i];
 
   // DynEQ
   pd.deq_lowThresh = pipeline.getDynamicEq()._lowThreshDb;
@@ -148,18 +202,22 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
   String key = getSlotKey(slot);
   _prefs.begin(key.c_str(), true);
 
-  PresetData pd;
+  static PresetData pd;
+  memset(&pd, 0, sizeof(PresetData));
   size_t len = _prefs.getBytesLength("blob");
   if (len != sizeof(PresetData)) {
     _prefs.end();
-    LOG_WARN(TAG, "Preset slot %d is empty or incompatible", slot);
-    return false;
+    LOG_WARN(TAG, "Preset slot %d is empty or incompatible. Loading defaults...", slot);
+    // DO NOT RECURSE! Just load defaults if possible or return false.
+    return false; 
   }
   _prefs.getBytes("blob", &pd, sizeof(PresetData));
   _prefs.end();
 
-  if (!pd.valid)
+  if (!pd.valid) {
+    LOG_WARN(TAG, "Preset slot %d invalid flag. Loading defaults...", slot);
     return false;
+  }
 
   DspModule **chain = pipeline.getChain();
   for (size_t i = 0; i < pipeline.getChainLength(); i++) {
@@ -203,13 +261,13 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
 
   // Bypass setters to avoid missing method errors and force an exact state
   // restoration. EQs via API
-  pipeline.getEqDsp().setPregain(pd.eq1_pregain_q88);
+  pipeline.getEqDsp_1().setPregain(pd.eq1_pregain_q88);
   for (int i = 0; i < MAX_EQ_BANDS; i++)
-    pipeline.getEqDsp().setBand(i, pd.eq1_bands[i]);
+    pipeline.getEqDsp_1().setBand(i, pd.eq1_bands[i]);
 
-  pipeline.getEqDspPost().setPregain(pd.eq2_pregain_q88);
+  pipeline.getEqDsp_2().setPregain(pd.eq2_pregain_q88);
   for (int i = 0; i < MAX_EQ_BANDS; i++)
-    pipeline.getEqDspPost().setBand(i, pd.eq2_bands[i]);
+    pipeline.getEqDsp_2().setBand(i, pd.eq2_bands[i]);
 
   // DynEQ
   pipeline.getDynamicEq().setLowEnergyThreshold(pd.deq_lowThresh);

@@ -49,12 +49,10 @@ void AudioInput::initI2SInput() {
     m_rx_std_cfg.gpio_cfg.invert_flags.bclk_inv = false;
     m_rx_std_cfg.gpio_cfg.invert_flags.ws_inv   = false;
 
-    // Clock — MCLK = 256 * fs (PCM1808 slave mode yêu cầu SCK liên tục)
+    // Clock — MCLK = 512 * fs (PCM1808 slave mode yêu cầu SCK liên tục)
     m_rx_std_cfg.clk_cfg.sample_rate_hz = (uint32_t)_sampleRate;
     m_rx_std_cfg.clk_cfg.clk_src        = I2S_CLK_SRC_DEFAULT;
-    m_rx_std_cfg.clk_cfg.mclk_multiple  = I2S_MCLK_MULTIPLE_256;
-
-    
+    m_rx_std_cfg.clk_cfg.mclk_multiple  = I2S_MCLK_MULTIPLE_512; // 512x MCLK to ensure accurate sample rates with 24-bit data
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(_rxHandle, &m_rx_std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(_rxHandle));

@@ -37,7 +37,7 @@ public:
     void processInternal(float* __restrict samples, size_t numSamples);
 
 private:
-    uint8_t        _moduleId = MODULE_ID_EQ_DSP;
+    uint8_t        _moduleId = MODULE_ID_EQ_DSP_1; // Default ID, can be changed for EQ2
     float          _pregain;        // Linear gain
     int16_t        _pregainDb = 0;  // Original dB value in Q8.8
 

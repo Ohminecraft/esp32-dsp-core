@@ -11,8 +11,9 @@
 #endif
 
 void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float fs) {
-    float A = powf(10.0f, gain_dB / 40.0f);  // sqrt(10^(dB/20))
-    float w0 = 2.0f * M_PI * f0 / fs;
+    float A = sqrtf(powf(10.0f, fast_div(gain_dB, 20.0f)));  // sqrt(10^(dB/20))
+    float inv_A = fast_recipsf2(A);
+    float w0 = fast_div(2.0f * M_PI * f0, fs);
     float cos_w0 = cosf(w0);
     float sin_w0 = sinf(w0);
     float alpha;
@@ -24,13 +25,13 @@ void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float f
 
     switch (type) {
         case EQ_FILTER_TYPE_PEAKING:
-            alpha = sin_w0 / (2.0f * Q);
+            alpha = fast_div(sin_w0, 2.0f * Q);
             b0f =  1.0f + alpha * A;
             b1f = -2.0f * cos_w0;
             b2f =  1.0f - alpha * A;
-            a0f =  1.0f + alpha / A;
+            a0f =  1.0f + alpha * inv_A;
             a1f = -2.0f * cos_w0;
-            a2f =  1.0f - alpha / A;
+            a2f =  1.0f - alpha * inv_A;
             break;
 
         case EQ_FILTER_TYPE_LOW_SHELF: {
@@ -129,7 +130,7 @@ void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float f
             break;
     }
 
-    float inv_a0 = 1.0f / a0f;
+    float inv_a0 = fast_recipsf2(a0f);
     _coeffs[0] = b0f * inv_a0;
     _coeffs[1] = b1f * inv_a0;
     _coeffs[2] = b2f * inv_a0;
