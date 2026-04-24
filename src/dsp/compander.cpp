@@ -10,7 +10,7 @@ void Compander::init(int32_t sampleRate, int32_t numChannels) {
     DspModule::init(sampleRate, numChannels);
     _thresholdDbInt = -2000;
     _ratioBelowQ88 = 256;  // 1.0
-    _ratioAboveQ88 = 512;  // 2.0
+    _ratioAboveQ88 = 256;  // 1.0
     _attackMs = 10;
     _releaseMs = 100;
     _pregainQ412 = 4096;   // 1.0

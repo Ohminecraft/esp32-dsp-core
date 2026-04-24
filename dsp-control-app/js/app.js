@@ -474,11 +474,11 @@ function buildAccordionModules() {
 function buildModuleBody(body, mod) {
     switch (mod.id) {
         case MODULE.NOISE_GATE:
-            addSlider(body, 'Lower Thresh', -9000, 0, 100, 'dB',
+            addSlider(body, 'Lower Thresh', -6000, 0, 100, 'dB',
                 () => store.noiseGate.lowerThresh,
                 (v) => { store.noiseGate.lowerThresh = v; sendFrame(buildSetParam(MODULE.NOISE_GATE, 0, v)); },
                 null, 0.01);
-            addSlider(body, 'Upper Thresh', -9000, 0, 100, 'dB',
+            addSlider(body, 'Upper Thresh', -6000, 0, 100, 'dB',
                 () => store.noiseGate.upperThresh,
                 (v) => { store.noiseGate.upperThresh = v; sendFrame(buildSetParam(MODULE.NOISE_GATE, 1, v)); },
                 null, 0.01);
@@ -494,7 +494,7 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.COMPANDER:
-            addSlider(body, 'Threshold', -9000, 0, 100, 'dB',
+            addSlider(body, 'Threshold', -6000, 0, 100, 'dB',
                 () => store.compander.threshold,
                 (v) => { store.compander.threshold = v; sendFrame(buildSetParam(MODULE.COMPANDER, 0, v)); },
                 null, 0.01);
@@ -506,10 +506,10 @@ function buildModuleBody(body, mod) {
                 () => store.compander.ratioAbove,
                 (v) => { store.compander.ratioAbove = v; sendFrame(buildSetParam(MODULE.COMPANDER, 2, v)); },
                 null, 0.01);
-            addSlider(body, 'Attack', 1, 200, 1, 'ms',
+            addSlider(body, 'Attack', 1, 2000, 1, 'ms',
                 () => store.compander.attackMs,
                 (v) => { store.compander.attackMs = v; sendFrame(buildSetParam(MODULE.COMPANDER, 3, v)); });
-            addSlider(body, 'Release', 10, 1000, 1, 'ms',
+            addSlider(body, 'Release', 10, 2000, 1, 'ms',
                 () => store.compander.releaseMs,
                 (v) => { store.compander.releaseMs = v; sendFrame(buildSetParam(MODULE.COMPANDER, 4, v)); });
             break;
@@ -633,7 +633,7 @@ function buildModuleBody(body, mod) {
                 }
             });
 
-            addSlider(body, 'Attack', 1, 500, 1, 'ms',
+            addSlider(body, 'Attack', 1, 2000, 1, 'ms',
                 () => store.dynamicEq.attackMs,
                 (v) => { store.dynamicEq.attackMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, v, store.dynamicEq.releaseMs)); });
             addSlider(body, 'Release', 10, 2000, 1, 'ms',
@@ -663,7 +663,7 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.DRC:
-            addSlider(body, 'Threshold', -9000, 0, 100, 'dB',
+            addSlider(body, 'Threshold', -6000, 0, 100, 'dB',
                 () => store.drc.bands[3].threshold,
                 (v) => { store.drc.bands[3].threshold = v; sendFrame(buildSetParam(MODULE.DRC, 0x30, v)); },
                 null, 0.01);
@@ -671,16 +671,16 @@ function buildModuleBody(body, mod) {
                 () => store.drc.bands[3].ratio,
                 (v) => { store.drc.bands[3].ratio = v; sendFrame(buildSetParam(MODULE.DRC, 0x31, v)); },
                 null, 0.01);
-            addSlider(body, 'Attack', 1, 200, 1, 'ms',
+            addSlider(body, 'Attack', 1, 2000, 1, 'ms',
                 () => store.drc.bands[3].attackMs,
                 (v) => { store.drc.bands[3].attackMs = v; sendFrame(buildSetParam(MODULE.DRC, 0x32, v)); });
-            addSlider(body, 'Release', 10, 1000, 1, 'ms',
+            addSlider(body, 'Release', 10, 2000, 1, 'ms',
                 () => store.drc.bands[3].releaseMs,
                 (v) => { store.drc.bands[3].releaseMs = v; sendFrame(buildSetParam(MODULE.DRC, 0x33, v)); });
             break;
 
         case MODULE.VOLUME:
-            addSlider(body, 'Gain', -9600, 1800, 25, 'dB',
+            addSlider(body, 'Gain', -6000, 1800, 25, 'dB',
                 () => store.volume.gainDb,
                 (v) => { store.volume.gainDb = v; sendFrame(buildSetParam(MODULE.VOLUME, 0, v)); },
                 null, 0.01);
