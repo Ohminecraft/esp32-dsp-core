@@ -103,4 +103,63 @@ typedef enum {
 #define FEATURE_STEREO_WIDENER  1
 #define FEATURE_SOFT_CLIPPER    1
 
+// ============================================================================
+// Debug Logging Configuration
+// ============================================================================
+//
+// Debug level controlled via platformio.ini: -DCORE_DEBUG_LEVEL=0..5
+// Levels:
+//   0 = NONE   (no debug output, smallest binary)
+//   1 = ERROR  (errors only)
+//   2 = WARN   (warnings + errors)
+//   3 = INFO   (general info logs)
+//   4 = DEBUG  (detailed debug info — recommended for development)
+//   5 = VERBOSE (very detailed — for DSP module debugging)
+//
+// Usage in code:
+//   CORE_LOGI("tag", "Info message: %d\n", value);
+//   CORE_LOGD("tag", "Debug message: %f\n", float_val);
+//   CORE_LOGW("tag", "Warning: %s\n", str);
+//   CORE_LOGE("tag", "Error: %d\n", errno);
+
+#ifndef CORE_DEBUG_LEVEL
+#define CORE_DEBUG_LEVEL 0  // Default: no debug if not defined
+#endif
+
+// Logging macros using ESP-IDF log functions
+#include <esp_log.h>
+
+#define DSP_LOG_TAG "ESP32_DSP"
+
+#if CORE_DEBUG_LEVEL >= 4
+    #define DEBUG_LOG(fmt, ...) ESP_LOGD(DSP_LOG_TAG, fmt, ##__VA_ARGS__)
+    #define DEBUG_LOG_ARRAY(arr, len) { \
+        ESP_LOGD(DSP_LOG_TAG, "Array[%d]: ", len); \
+        for (int i = 0; i < len; i++) { \
+            ESP_LOGD(DSP_LOG_TAG, "%f ", arr[i]); \
+        } \
+    }
+#else
+    #define DEBUG_LOG(fmt, ...) do { } while(0)
+    #define DEBUG_LOG_ARRAY(arr, len) do { } while(0)
+#endif
+
+#if CORE_DEBUG_LEVEL >= 3
+    #define INFO_LOG(fmt, ...) ESP_LOGI(DSP_LOG_TAG, fmt, ##__VA_ARGS__)
+#else
+    #define INFO_LOG(fmt, ...) do { } while(0)
+#endif
+
+#if CORE_DEBUG_LEVEL >= 2
+    #define WARN_LOG(fmt, ...) ESP_LOGW(DSP_LOG_TAG, fmt, ##__VA_ARGS__)
+#else
+    #define WARN_LOG(fmt, ...) do { } while(0)
+#endif
+
+#if CORE_DEBUG_LEVEL >= 1
+    #define ERROR_LOG(fmt, ...) ESP_LOGE(DSP_LOG_TAG, fmt, ##__VA_ARGS__)
+#else
+    #define ERROR_LOG(fmt, ...) do { } while(0)
+#endif
+
 #endif // CONFIG_H
