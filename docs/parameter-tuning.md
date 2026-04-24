@@ -185,48 +185,37 @@ Tham chiếu hoàn chỉnh cho tất cả tham số trên 12 module DSP.
 
 | Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
 |---------|---------|----------|--------|--------|
-| Ngưỡng | -80 đến 0 | -40 | dB | Cổng mở ở mức này |
-| Thời Gian Attack | 0.5 đến 100 | 10 | ms | Tốc độ cổng mở |
-| Thời Gian Release | 10 đến 1000 | 100 | ms | Tốc độ cổng đóng |
-
-**Mẹo Chỉnh Tham Số**:
-```
-Phòng yên tĩnh:      Ngưỡng = -50dB, Attack = 5ms, Release = 200ms
-Biểu diễn trực tiếp: Ngưỡng = -35dB, Attack = 1ms, Release = 50ms
-Studio vocals:       Ngưỡng = -45dB, Attack = 10ms, Release = 100ms
-```
+| Ngưỡng | -60 đến 0 | -40 | dB | Cổng mở ở mức này |
+| Thời Gian Attack | 0.5 đến 100 | 10 | ms | Cổng mở nhanh như thế nào |
+| Thời Gian Release | 10 đến 1000 | 100 | ms | Cổng đóng nhanh như thế nào |
+| Thời Gian Hold | 0 đến 500 | 50 | ms | Cổng giữ nguyên bao lâu |
 
 ---
 
 ### [2] Compander
 
-**Mục đích**: Nén/mở rộng động với tỷ lệ riêng biệt
+**Mục đích**: Nén/mở rộng động với tỷ lệ riêng biệt trên/dưới ngưỡng
 
-| Tham Số | Phạm Vi | Mặc Định | Đơn Vị |
-|---------|---------|----------|--------|
-| Ngưỡng | -60 đến 0 | -20 | dB |
-| Tỷ Lệ Trên | 1 đến 20 | 4 | :1 |
-| Tỷ Lệ Dưới | 0.5 đến 1.5 | 0.7 | :1 |
-| Thời Gian Attack | 1 đến 100 | 10 | ms |
-| Thời Gian Release | 10 đến 500 | 100 | ms |
+| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Ngưỡng | -60 đến 0 | -20 | dB | Điểm chia cho nén/mở rộng |
+| Tỷ Lệ Trên | 1 đến 10 | 1 | :1 | Tỷ lệ nén trên ngưỡng |
+| Tỷ Lệ Dưới | 0.5 đến 10 | 1 | :1 | Tỷ lệ mở rộng dưới ngưỡng |
+| Thời Gian Attack | 1 đến 2000 | 10 | ms | Tốc độ attack nén |
+| Thời Gian Release | 10 đến 2000 | 100 | ms | Tốc độ release nén |
+| Makeup Gain (WIP) | -12 đến 12 | 0 | dB | Bù lại mất mát từ nén |
 
 ---
 
-### [3] Kích Thích
+### [3] Exicter
 
 **Mục đích**: Thêm nội dung điều hòa tần số cao (sáng, không khí, lấp lánh)
 
-| Tham Số | Phạm Vi | Mặc Định | Đơn Vị |
-|---------|---------|----------|--------|
-| Đạt Được | -12 đến 12 | 3 | dB |
-| Độ Bão Hòa | 0 đến 100 | 30 | % |
-| Tần Số HPF | 500 đến 15000 | 5000 | Hz |
-
-**Ứng Dụng**:
-```
-Vocal sáng: Đạt = 5dB, Bão Hòa = 40%, HPF = 3kHz
-Drum lấp lánh: Đạt = 3dB, Bão Hòa = 50%, HPF = 8kHz
-```
+| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Tần Số Cutoff | 300 đến 10000 | 3000 | Hz | Cutoff HighShelf cho xử lý |
+| Dry | 0 đến 100 | 0 | % | Mức giữa |
+| Wet | 0 đến 100 | 0 | % | Mức cao |
 
 ---
 
@@ -234,45 +223,115 @@ Drum lấp lánh: Đạt = 3dB, Bão Hòa = 50%, HPF = 8kHz
 
 **Mục đích**: Sinh bass dưới từ điều hòa (mở rộng bass tâm lý)
 
-| Tham Số | Phạm Vi | Mặc Định | Đơn Vị |
-|---------|---------|----------|--------|
-| Đạt Được | 0 đến 12 | 5 | dB |
-| Tần Số | 40 đến 200 | 80 | Hz |
-| Cường Độ | 0 đến 100 | 50 | % |
+| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Tần Số | 30 đến 300 | 60 | Hz | Tần số trung tâm bass được sinh ra |
+| Cường Độ | 0 đến 100 | 0 | % | Cường độ sinh điều hòa |
+| Tăng Cường | on/off | off | bool | Tăng cường cường độ sub-bass |
 
 ---
 
 ### [5] Bass Cổ Điển
 
-**Mục đích**: Tăng bass cộng hưởng truyền thống
+**Mục đích**: Tăng bass cộng hưởng truyền thống (low-shelf EQ)
 
-| Tham Số | Phạm Vi | Mặc Định | Đơn Vị |
-|---------|---------|----------|--------|
-| Đạt Được | -12 đến 12 | 5 | dB |
-| Tần Số | 20 đến 200 | 60 | Hz |
-| Q | 0.5 đến 2.0 | 0.7 | - |
-
-**Ứng Dụng**:
-```
-Deep thump: Tần Số = 40Hz, Đạt = 8dB
-Tight punch: Tần Số = 80Hz, Đạt = 6dB
-Ấm áp: Tần Số = 100Hz, Đạt = 3dB
-```
+| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Tần Số | 30 đến 300 | 100 | Hz | Tần số trung tâm bass |
+| Cường Độ | 0 đến 100 | 0 | % | Bass được tăng cường theo Cường Độ |
 
 ---
 
-### [6-12] EQ và Các Module Khác
+### [6] Mở Rộng Stereo (WIP Hiện Tại)
 
-Tương tự tiếng Anh ở trên, với dịch các tham số thành tiếng Việt.
+**Mục đích**: Nâng cao độ rộng stereo bằng xử lý Mid/Side (M/S)
 
-**EQ1 (EQ Chính)**: 10 dải thông số
-- Tần Số: 20 - 20000 Hz
-- Đạt Được: -12 đến 12 dB
-- Q: 0.1 đến 10.0
+| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Đạt Được | -6 đến 12 | 3 | dB | Mức đầu ra tổng thể |
+| Độ Rộng | 0.5 đến 2.0 | 1.2 | x | 1.0 = mono, 2.0 = rất rộng |
+| Tần Số HPF | 100 đến 5000 | 200 | Hz | High-pass trên kênh side |
 
-**DRC (Bộ Nén)**: Nén động đa dải (1-4 dải)
-**Âm Lượng**: Điều khiển âm lượng chính
-**Kẹp Mềm**: Kẹp mềm bảo vệ loa
+---
+
+### [7] EQ Động
+
+**Mục đích**: Chuyển đổi giữa hai đường cong EQ dựa trên mức tín hiệu (yên tĩnh = tông khác với to)
+
+| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Ngưỡng Thấp | -60 đến 0 | -40 | dB | Ngưỡng mức để chuyển sang EQ THẤP |
+| Ngưỡng Bình Thường | -60 đến 0 | -20 | dB | Ngưỡng mức để quay lại bình thường (không dùng EQ) |
+| Ngưỡng Cao | -60 đến 0 | -6 | dB | Ngưỡng mức để chuyển sang EQ CAO |
+| Thời Gian Attack | 1 đến 2000 | 10 | ms | Tốc độ chuyển đổi đường cong EQ |
+| Thời Gian Release | 10 đến 2000 | 100 | ms | Tốc độ quay lại bình thường |
+
+EQ Động THẤP & EQ Động CAO: xem [8]
+
+**Mẹo**
+Ngưỡng Thấp = Ngưỡng Bình Thường: không có khoảng "không xử lý" ở phía dưới → chuyển trực tiếp THẤP↔CAO
+Ngưỡng Cao = Ngưỡng Bình Thường: không có khoảng "không xử lý" ở phía trên → chuyển trực tiếp THẤP↔CAO
+
+---
+
+### [8] EQ1 (EQ Chính Tham Số)
+
+**Mục đích**: Equalizer tham số 10 dải chính
+
+| Mỗi Dải | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Tần Số | 20 đến 20000 | [thay đổi] | Hz | Tần số trung tâm dải |
+| Đạt Được | -12 đến 12 | 0 | dB | Lượng tăng/cắt |
+| Q | 0.1 đến 10.0 | 1.0 | - | Dải thông (0.1=rộng, 10=hẹp) |
+
+**Số Dải Tối Đa**: 10 cùng một lúc
+
+---
+
+### [9] EQ2 (EQ Hậu Xử Lý / Định Hình Tông)
+
+**Mục đích**: EQ 10 dải thứ cấp cho định hình chữ ký âm thanh
+
+Cùng tham số như EQ1. Thường dùng cho:
+- Tinh chỉnh sau EQ1
+- Định hình tông per source (radio, podcast, v.v.)
+- Bù lại âm học phòng
+
+---
+
+### [10] DRC (Bộ Nén Tầm Động) (WIP Hiện Tại)
+
+**Mục đích**: Nén tầm động đa dải/hạn chế (bảo vệ chống cắt ngắn)
+
+| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Số Dải | 1 đến 4 | 1 | - | Số dải tần số |
+| Dải [1-4] Tần Số | 100 đến 10000 | [thay đổi] | Hz | Tần số chia dải |
+| Dải [1-4] Ngưỡng | -60 đến 0 | -20 | dB | Nén bắt đầu trên ngưỡng này |
+| Dải [1-4] Tỷ Lệ | 1 đến 20 | 4 | :1 | Tỷ lệ nén |
+| Dải [1-4] Attack | 1 đến 100 | 5 | ms | Tốc độ attack |
+| Dải [1-4] Release | 10 đến 1000 | 50 | ms | Tốc độ release |
+| Makeup Gain | -12 đến 12 | 0 | dB | Bù lại mất mát từ nén |
+
+---
+
+### [11] Âm Lượng
+
+**Mục đích**: Điều khiển âm lượng chính với ramping gain mịn (tránh click/pop)
+
+| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Đạt Được | -60 đến 18 | 0 | dB | Mức âm lượng đầu ra |
+
+---
+
+### [12] Kẹp Mềm
+
+**Mục đích**: Bộ hạn chế kẹp mềm (tránh hư loa, thêm ấm điều hòa)
+
+| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+|---------|---------|----------|--------|--------|
+| Ngưỡng | -60 đến 0 | 0 | dB | Kẹp bắt đầu trên ngưỡng này |
 
 ---
 
@@ -281,23 +340,23 @@ Tương tự tiếng Anh ở trên, với dịch các tham số thành tiếng V
 #### Mẫu 1: "Tăng Sắc Nét"
 ```
 Cổng Nhiễu: -45dB
-Kích Thích: +5dB, 4kHz HPF
+Kích Thích: Tần Số Cutoff = 3kHz
 EQ1: +3dB @ 2kHz
 Âm Lượng: -6dB
 ```
 
 #### Mẫu 2: "Tăng Bass"
 ```
-Bass Ảo: +6dB, 80Hz
-Bass Cổ Điển: +5dB, 60Hz
-Mở Rộng Stereo: 1.2x
+Bass Ảo: Cường Độ = 60Hz
+Bass Cổ Điển: Tần Số = 100Hz, Cường Độ = 50%
+Mở Rộng Stereo: Độ Rộng = 1.2x
 Âm Lượng: -3dB
 ```
 
 #### Mẫu 3: "Phát Sóng Ấm Áp"
 ```
-Compander: -15dB, 3:1 ratio
-Bass Cổ Điển: +3dB, 50Hz
+Compander: Ngưỡng = -15dB, Tỷ Lệ Trên = 3:1
+Bass Cổ Điển: Tần Số = 50Hz, Cường Độ = 50%
 EQ1: +2dB @ 500Hz
-Kẹp Mềm: 0dB threshold
+Kẹp Mềm: Ngưỡng = 0dB
 ```
