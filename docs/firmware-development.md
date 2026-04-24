@@ -265,7 +265,7 @@ Always use header guards:
 #### Includes
 Order includes logically:
 ```cpp
-#include <cmath>           // Standard library
+#include <math.h>           // Standard library
 #include <cstring>
 
 #include "config.h"        // Project headers
@@ -285,19 +285,15 @@ Test individual modules:
 
 ```cpp
 // In test_module.cpp
-void test_exciter() {
-    Exciter exciter;
+void test_module() {
+    YourModule mod;
+    float buffer[512];
+    memset(buffer, 0.5f, sizeof(buffer));
     
-    // Create test buffer (1 frame)
-    float buffer[256 * 2];  // Stereo: 512 samples
-    memset(buffer, 0.5f, sizeof(buffer));  // 0.5V test signal
+    mod.setParameter(0, 5.0f);
+    mod.process(buffer, 512);
     
-    // Process
-    exciter.setParameter(0, 5.0f);  // 5dB gain
-    exciter.process(buffer, 512);
-    
-    // Verify
-    assert(buffer[0] > 0.5f);  // Should be amplified
+    assert(buffer[0] > 0.5f);
 }
 ```
 
@@ -472,25 +468,30 @@ void YourModule::process(...) {
 src/
 ├── main.cpp              # Điểm vào
 ├── audio/
-│   ├── audio_input.cpp
-│   └── audio_output.cpp
+│   ├── audio_input.cpp   # Đầu vào âm thanh
+│   └── audio_output.cpp  # Đầu ra âm thanh
 ├── dsp/
-│   ├── dsp_pipeline.cpp
+│   ├── dsp_pipeline.cpp  # Pipeline của module, chạy theo chain
 │   └── [các module]
 ├── control/
-│   ├── uart_protocol.cpp
+│   ├── uart_protocol.cpp  # Giao tiếp với APP
 │   └── [các bộ điều khiển]
 └── utils/
-    ├── debug_log.h
-    └── fixed_math.h
+    ├── debug_log.h        # Debug Code
+    └── fixed_math.h       # Hàm Toán Fixed
 ```
 
 #### Include
 
 ```cpp
-#include <cmath>           // Thư viện chuẩn
-#include "config.h"        // Header dự án
-#include "debug_log.h"     // Debug
+#include <math.h>           // Thư Viện có sẵn
+#include <cstring>
+
+#include "config.h"        // Header của Project
+#include "dsp_module.h"
+#include "biquad.h"
+
+#include "debug_log.h"     // Header của Debug/tiện ích
 ```
 
 ---
