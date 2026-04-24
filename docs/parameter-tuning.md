@@ -18,17 +18,10 @@ Complete reference for all parameters across 12 DSP modules.
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Threshold | -80 to 0 | -40 | dB | Gate opens above this level |
+| Threshold | -60 to 0 | -40 | dB | Gate opens above this level |
 | Attack Time | 0.5 to 100 | 10 | ms | How fast gate opens |
 | Release Time | 10 to 1000 | 100 | ms | How fast gate closes |
 | Hold Time | 0 to 500 | 50 | ms | Gate stays open this long |
-
-**Tuning Tips**:
-```
-Quiet room:       Threshold = -50dB, Attack = 5ms, Release = 200ms
-Live performance: Threshold = -35dB, Attack = 1ms, Release = 50ms
-Studio vocal:     Threshold = -45dB, Attack = 10ms, Release = 100ms
-```
 
 ---
 
@@ -39,18 +32,11 @@ Studio vocal:     Threshold = -45dB, Attack = 10ms, Release = 100ms
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
 | Threshold | -60 to 0 | -20 | dB | Split point for compression/expansion |
-| Ratio Above | 1 to 20 | 4 | :1 | Compression ratio above threshold |
-| Ratio Below | 0.5 to 1.5 | 0.7 | :1 | Expansion ratio below threshold |
-| Attack Time | 1 to 100 | 10 | ms | Compression attack speed |
-| Release Time | 10 to 500 | 100 | ms | Compression release speed |
-| Makeup Gain | -12 to 12 | 0 | dB | Compensate for compression |
-
-**Tuning Tips**:
-```
-Gentle compression:  Threshold = -15dB, Ratio = 2:1, Attack = 20ms
-Aggressive control:  Threshold = -10dB, Ratio = 8:1, Attack = 2ms
-Upward expansion:    Ratio Below = 1.5, pushes quiet parts lower
-```
+| Ratio Above | 1 to 10 | 1 | :1 | Compression ratio above threshold |
+| Ratio Below | 0.5 to 10 | 1 | :1 | Expansion ratio below threshold |
+| Attack Time | 1 to 2000 | 10 | ms | Compression attack speed |
+| Release Time | 10 to 2000 | 100 | ms | Compression release speed |
+| Makeup Gain (WIP) | -12 to 12 | 0 | dB | Compensate for compression |
 
 ---
 
@@ -60,17 +46,9 @@ Upward expansion:    Ratio Below = 1.5, pushes quiet parts lower
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Gain | -12 to 12 | 3 | dB | Output level of exciter |
-| Saturation | 0 to 100 | 30 | % | Harmonic distortion amount |
-| HPF Frequency | 500 to 15000 | 5000 | Hz | High-pass filter cutoff |
-| Mix | 0 to 100 | 50 | % | Blend: 0=off, 100=full |
-
-**Tuning Tips**:
-```
-Vocal brightening:  Gain = 5dB, Saturation = 40%, HPF = 3kHz
-Drum sparkle:       Gain = 3dB, Saturation = 50%, HPF = 8kHz
-Restore detail:     Gain = 2dB, Saturation = 20%, HPF = 2kHz
-```
+| Cutoff Frequency | 300 to 10000 | 3000 | hz | Cutoff HighShelf for Processing |
+| Dry | 0 to 100 | 0 | % | Mid Level |
+| Wet | 0 to 100 | 0 | % | High Level |
 
 ---
 
@@ -80,17 +58,9 @@ Restore detail:     Gain = 2dB, Saturation = 20%, HPF = 2kHz
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Gain | 0 to 12 | 5 | dB | Sub-bass output level |
-| Frequency | 40 to 200 | 80 | Hz | Generated bass center frequency |
-| Intensity | 0 to 100 | 50 | % | Harmonic generation strength |
-| Mix | 0 to 100 | 70 | % | Blend generated vs original bass |
-
-**Tuning Tips**:
-```
-Small speakers:  Frequency = 80Hz, Intensity = 70%, Gain = 6dB
-Club system:     Frequency = 60Hz, Intensity = 50%, Gain = 3dB
-Headphones:      Frequency = 100Hz, Intensity = 40%, Gain = 4dB
-```
+| Frequency | 30 to 300 | 60 | Hz | Generated bass center frequency |
+| Intensity | 0 to 100 | 0 | % | Harmonic generation strength |
+| Enhanced | on/off | off | bool | Enhanced Sub-bass strength |
 
 ---
 
@@ -100,20 +70,12 @@ Headphones:      Frequency = 100Hz, Intensity = 40%, Gain = 4dB
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Gain | -12 to 12 | 5 | dB | Low-shelf boost amount |
-| Frequency | 20 to 200 | 60 | Hz | Bass center frequency |
-| Q | 0.5 to 2.0 | 0.7 | - | Shelf steepness (higher = narrower) |
-
-**Tuning Tips**:
-```
-Deep thump:      Frequency = 40Hz, Gain = 8dB, Q = 0.7
-Tight punch:     Frequency = 80Hz, Gain = 6dB, Q = 1.2
-Warm presence:   Frequency = 100Hz, Gain = 3dB, Q = 0.5
-```
+| Frequency | 30 to 300 | 100 | Hz | Bass center frequency |
+| Intensity | 0 to 100 | 0 | % | Bass Boosted by Intensity |
 
 ---
 
-### [6] Stereo Widener
+### [6] Stereo Widener (WIP For Now)
 
 **Purpose**: Enhance stereo width using Mid/Side (M/S) processing
 
@@ -123,13 +85,6 @@ Warm presence:   Frequency = 100Hz, Gain = 3dB, Q = 0.5
 | Width | 0.5 to 2.0 | 1.2 | x | 1.0 = mono, 2.0 = very wide |
 | HPF Frequency | 100 to 5000 | 200 | Hz | High-pass on side channel |
 
-**Tuning Tips**:
-```
-Subtle enhancement:  Width = 1.1, Gain = 1dB
-Wide stereo:         Width = 1.5, Gain = 0dB
-Mono reference:      Width = 0.5, Gain = -3dB (for checking mono)
-```
-
 ---
 
 ### [7] Dynamic EQ
@@ -138,17 +93,17 @@ Mono reference:      Width = 0.5, Gain = -3dB (for checking mono)
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Crossover Level | -40 to 0 | -20 | dB | Level threshold to switch EQs |
-| Low EQ Curve | - | See [8] | - | EQ applied to quiet signals |
-| High EQ Curve | - | See [9] | - | EQ applied to loud signals |
-| Attack Time | 5 to 500 | 50 | ms | EQ curve switch speed |
+| Low Threshold Level | -60 to 0 | -40 | dB | Level threshold to switch EQ LOW |
+| Normal Threshold Level | -60 to 0 | -20 | dB | Level threshold to back normal (No EQs using) |
+| High Threshold Level | -60 to 0 | -6 | dB | Level threshold to switch EQ HIGH |
+| Attack Time | 1 to 2000 | 10 | ms | EQ curve switch speed |
+| Release Time | 10 to 2000 | 100 | ms | EQ curve back to normal |
 
-**Tuning Tips**:
-```
-Broadcast sound: Low = bright, High = warm (preserves detail at loud levels)
-Music production: Low = flat, High = shaped (different mix at reference level)
-Live event:      Low = presence boost, High = full featured
-```
+Dynamic EQ LOW & Dynamic EQ HIGH: see [8]
+
+**Tips**
+Low Threshold = Normal Threshold: no "no-processing" gap at bottom → direct LOW↔HIGH
+High Threshold = Normal Threshold: no "no-processing" gap at top → direct LOW↔HIGH  
 
 ---
 
@@ -164,21 +119,6 @@ Live event:      Low = presence boost, High = full featured
 
 **Max Bands**: 10 simultaneously
 
-**Tuning Tips**:
-```
-Standard 3-band:
-  Band 1: 100Hz, Q=0.7    → Bass tone
-  Band 2: 1kHz, Q=1.0     → Midrange presence
-  Band 3: 8kHz, Q=0.7     → Treble air
-
-5-band shaping:
-  Band 1: 60Hz (+5dB)     → Sub-bass
-  Band 2: 250Hz (-3dB)    → Mud removal
-  Band 3: 1kHz (+2dB)     → Vocal presence
-  Band 4: 3kHz (-2dB)     → Harshness cut
-  Band 5: 10kHz (+3dB)    → Air and detail
-```
-
 ---
 
 ### [9] EQ2 (Post EQ / Tone Shaping)
@@ -192,7 +132,7 @@ Same parameters as EQ1. Typically used for:
 
 ---
 
-### [10] DRC (Dynamic Range Compressor)
+### [10] DRC (Dynamic Range Compressor) (WIP For now)
 
 **Purpose**: Multi-band dynamic range compression/limiting (protects against clipping)
 
@@ -206,18 +146,6 @@ Same parameters as EQ1. Typically used for:
 | Band [1-4] Release | 10 to 1000 | 50 | ms | Release speed |
 | Makeup Gain | -12 to 12 | 0 | dB | Compensate for compression |
 
-**Tuning Tips**:
-```
-Gentle safety net (1 band):
-  Threshold = -10dB, Ratio = 2:1, Attack = 20ms, Release = 100ms
-
-Multi-band control (4 bands):
-  Band 1: 150Hz,  Ratio = 4:1   → Subbass control
-  Band 2: 800Hz,  Ratio = 3:1   → Midrange control
-  Band 3: 3kHz,   Ratio = 2:1   → Presence control
-  Band 4: 10kHz,  Ratio = 1.5:1 → Treble control
-```
-
 ---
 
 ### [11] Volume
@@ -226,15 +154,7 @@ Multi-band control (4 bands):
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Gain | -80 to 12 | 0 | dB | Output volume level |
-| Ramp Time | 0 to 500 | 10 | ms | Smooth transition time |
-
-**Tuning Tips**:
-```
-Normal listening:    Gain = -6dB (leaves headroom)
-Loudness reference:  Gain = -18dB (LUFS measurement ref)
-Safety headroom:     Gain = -12dB (3dB before clipping)
-```
+| Gain | -60 to 18 | 0 | dB | Output volume level |
 
 ---
 
@@ -244,45 +164,10 @@ Safety headroom:     Gain = -12dB (3dB before clipping)
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Threshold | -12 to 0 | 0 | dB | Clipping starts above this |
-| Knee | 0 to 12 | 3 | dB | Soft knee width (smooth transition) |
-| Saturation | 0 to 100 | 30 | % | Amount of harmonic distortion |
+| Threshold | -60 to 0 | 0 | dB | Clipping starts above this |
 
-**Tuning Tips**:
-```
-Transparent protection:  Threshold = 0dB, Knee = 6dB, Saturation = 5%
-Warm vintage tone:       Threshold = -3dB, Knee = 2dB, Saturation = 40%
-Aggressive limiting:     Threshold = -6dB, Knee = 1dB, Saturation = 60%
-```
 
 ---
-
-### Quick Parameter Templates
-
-#### Template 1: "Clarity Boost"
-```
-NoiseGate: -45dB threshold
-Exciter: +5dB gain, 40% saturation, 4kHz HPF
-EQ1: +3dB @ 2kHz (Q=1.2)
-Volume: -6dB
-```
-
-#### Template 2: "Bass Enhancement"
-```
-VirtualBass: +6dB, 80Hz center
-BassClassic: +5dB, 60Hz center
-StereoWidener: 1.2x width
-Volume: -3dB (compensate)
-```
-
-#### Template 3: "Broadcast Warm"
-```
-Compander: -15dB threshold, 3:1 ratio
-BassMassic: +3dB, 50Hz center
-EQ1: Small boost at 500Hz (presence)
-SoftClipper: 0dB threshold with 3dB knee
-Volume: -12dB reference
-```
 
 ---
 

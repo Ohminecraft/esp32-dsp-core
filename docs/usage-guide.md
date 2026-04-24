@@ -19,38 +19,7 @@ The ESP32 DSP Core control application (Electron-based) provides a user-friendly
 
 ### Main Window Layout
 
-```
-┌─ ESP32 DSP Core Control ──────────────────────────────┐
-│                                                        │
-│  📡 Connection Status  ✓ Connected (COM3 @ 115200)   │
-│  [Auto-Detect] [Connect] [Disconnect]                │
-│                                                        │
-│  ┌─ Module Controls ──────────────────────────────┐  │
-│  │  ☑ NoiseGate    ─ Threshold: [▯▯▯▯▯] -30dB   │  │
-│  │  ☑ Compander    ─ Ratio↑: [▯▯▯▯▯] 4:1        │  │
-│  │  ☑ Exciter      ─ Gain: [▯▯▯▯▯] +3dB         │  │
-│  │  ☑ VirtualBass  ─ Intensity: [▯▯▯▯▯] 50%     │  │
-│  │  ☑ BassClassic  ─ Gain: [▯▯▯▯▯] +5dB         │  │
-│  │  ☑ StereoWidener─ Width: [▯▯▯▯▯] 1.2x        │  │
-│  │  ☑ DynamicEQ    ─ Mode: [Low EQ ▼]           │  │
-│  │  ☑ EQ1          ─ [EQ Designer...]            │  │
-│  │  ☑ EQ2          ─ [EQ Designer...]            │  │
-│  │  ☑ DRC          ─ Bands: [4 ▼]                │  │
-│  │  ☑ Volume       ─ Gain: [▯▯▯▯▯] 0dB          │  │
-│  │  ☑ SoftClipper  ─ Threshold: [▯▯▯▯▯] 0dB    │  │
-│  └────────────────────────────────────────────────┘  │
-│                                                        │
-│  ┌─ System Status ────────────────────────────────┐  │
-│  │  CPU Usage: 45%  |  Heap Left: 52KB            │  │
-│  │  Sample Rate: 96kHz | Format: 32-bit float    │  │
-│  └────────────────────────────────────────────────┘  │
-│                                                        │
-│  ┌─ Presets ─────────────────────────────────────┐  │
-│  │  [Slot 0] [Slot 1] [Slot 2]... [Slot 7]       │  │
-│  │  [Save to Slot] [Load from Slot]              │  │
-│  └────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
-```
+<img width="2443" height="1574" alt="{51F4B98E-F3B9-43BF-8073-599A7667CA8D}" src="https://github.com/user-attachments/assets/b9b29d46-0472-4ce6-9631-57951dc82543" />
 
 ---
 
@@ -59,25 +28,22 @@ The ESP32 DSP Core control application (Electron-based) provides a user-friendly
 #### 1. **Connect to ESP32**
 
 ```
-1. Click "Auto-Detect" button
-   → GUI scans available COM ports
-   → Selects port with ESP32 DSP board
+1. When started app will go to auto detect state
+   → Send packet all port with ESP32 DSP board vi USB-TTL until find right device
 
 OR
 
 1. Manually select port from dropdown menu
 2. Click "Connect" button
-3. Wait for "✓ Connected" message
+3. Wait for goto main layout
 ```
-
-**Status Indicators**:
-- ✓ Green = Connected
-- ✗ Red = Disconnected
-- ⟳ Yellow = Connecting...
 
 #### 2. **Enable/Disable Modules**
 
-Click checkbox next to module name:
+Click switch next to module name:
+
+<img width="2402" height="72" alt="{D8D60A6F-4EF0-4068-88DB-A84D0CD395DF}" src="https://github.com/user-attachments/assets/3da55d9b-db65-4d4b-9ab1-449db61441fb" />
+
 ```
 ☑ Module = ENABLED (active in pipeline)
 ☐ Module = DISABLED (bypassed)
@@ -89,12 +55,7 @@ Click checkbox next to module name:
 
 Each module has sliders/controls:
 
-```
-Module: Exciter
-├─ Gain: [0---●---10] dB
-├─ Saturation: [0---●---100] %
-└─ HPF Frequency: [100--●--10k] Hz
-```
+<img width="2414" height="279" alt="{6D8A3303-6181-4D38-9B5B-CE278662EEBF}" src="https://github.com/user-attachments/assets/6e24eaeb-b1f2-4df2-9aca-648559c4eca2" />
 
 **How to Use**:
 - Click and drag slider
@@ -105,37 +66,18 @@ Module: Exciter
 
 Click "EQ Designer..." button for EQ1 or EQ2:
 
-```
-┌─ EQ Designer (EQ1) ──────────────────┐
-│                                       │
-│  Frequency Response Graph:            │
-│  ┌───────────────────────────────┐   │
-│  │         /\                     │   │
-│  │        /  \                    │   │
-│  │       /    \___                │   │
-│  │      /          \              │   │
-│  │  ──────────────────────        │   │
-│  │  20Hz  100Hz  1kHz  10kHz     │   │
-│  └───────────────────────────────┘   │
-│                                       │
-│  Band 1: 100Hz, Gain: +5dB, Q: 0.7  │
-│  Band 2: 1kHz, Gain: -2dB, Q: 1.5   │
-│  Band 3: 5kHz, Gain: +3dB, Q: 1.0   │
-│                                       │
-│  [Add Band] [Remove Band] [Apply]    │
-└───────────────────────────────────────┘
-```
+<img width="2401" height="861" alt="{CCEF9C50-2971-4149-ABC2-2D52FD16A150}" src="https://github.com/user-attachments/assets/1f6c3df9-34ad-4205-8bd3-2d1362d198b6" />
 
 **Per Band Parameters**:
 - **Frequency**: 20Hz - 20kHz
-- **Gain**: -12dB to +12dB
-- **Q (Quality)**: 0.5 - 10 (higher = narrower)
+- **Gain**: -24dB to +24dB
+- **Q (Q Factor)**: 0.1 - 10 (higher = narrower)
 
 #### 5. **Save Presets**
 
 ```
 1. Adjust all modules and parameters
-2. Click "Save to Slot X" button
+2. Click "Save" button
 3. Preset saved to ESP32 NVS
 4. Next power-on: Slot 0 loads automatically
 ```
@@ -145,7 +87,7 @@ Click "EQ Designer..." button for EQ1 or EQ2:
 #### 6. **Load Presets**
 
 ```
-1. Click "Load from Slot X" button
+1. Click 1->8 preset slot button
 2. All module states restored
 3. GUI sliders update automatically
 ```
@@ -220,47 +162,15 @@ For clean audio:
 
 ### Bố Cục Cửa Sổ Chính
 
-```
-┌─ ESP32 DSP Core Điều Khiển ────────────────────────┐
-│                                                     │
-│  📡 Trạng Thái Kết Nối  ✓ Đã Kết Nối (COM3)       │
-│  [Tự động Phát Hiện] [Kết Nối] [Ngắt Kết Nối]   │
-│                                                     │
-│  ┌─ Điều Khiển Module ───────────────────────────┐ │
-│  │  ☑ Cổng Nhiễu      ─ Ngưỡng: [●---] -30dB    │ │
-│  │  ☑ Compander       ─ Tỷ Lệ: [●---] 4:1       │ │
-│  │  ☑ Kích Thích      ─ Đạt: [●---] +3dB        │ │
-│  │  ☑ Bass Ảo         ─ Cường: [●---] 50%       │ │
-│  │  ☑ Bass Cổ Điển    ─ Đạt: [●---] +5dB        │ │
-│  │  ☑ Mở Rộng Stereo  ─ Độ Rộng: [●---] 1.2x    │ │
-│  │  ☑ EQ Động         ─ Chế Độ: [EQ Thấp ▼]     │ │
-│  │  ☑ EQ1             ─ [EQ Designer...]         │ │
-│  │  ☑ EQ2             ─ [EQ Designer...]         │ │
-│  │  ☑ DRC             ─ Dải: [4 ▼]               │ │
-│  │  ☑ Âm Lượng         ─ Đạt: [●---] 0dB        │ │
-│  │  ☑ Kẹp Mềm         ─ Ngưỡng: [●---] 0dB     │ │
-│  └───────────────────────────────────────────────┘ │
-│                                                     │
-│  ┌─ Trạng Thái Hệ Thống ────────────────────────┐ │
-│  │  Sử Dụng CPU: 45% | Heap Còn Lại: 52KB       │ │
-│  │  Tần Số Mẫu: 96kHz | Định Dạng: 32-bit float│ │
-│  └───────────────────────────────────────────────┘ │
-│                                                     │
-│  ┌─ Preset ──────────────────────────────────────┐ │
-│  │  [Slot 0] [Slot 1]... [Slot 7]                │ │
-│  │  [Lưu] [Tải]                                  │ │
-│  └───────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────┘
-```
+<img width="2443" height="1574" alt="{51F4B98E-F3B9-43BF-8073-599A7667CA8D}" src="https://github.com/user-attachments/assets/b9b29d46-0472-4ce6-9631-57951dc82543" />
 
 ### Hướng Dẫn Từng Bước
 
 #### 1. **Kết Nối với ESP32**
 
 ```
-1. Nhấp nút "Tự Động Phát Hiện"
-   → GUI quét cổng COM
-   → Chọn cổng có bo mạch ESP32
+1. Khi mở app lần đầu đầu sẽ auto scan tất cả port
+   App sẽ gửi sync packet cho từng port qua USB-TTL đến khi tìm được đúng thiết bị
 
 HOẶC
 
@@ -271,7 +181,10 @@ HOẶC
 
 #### 2. **Bật/Tắt Module**
 
-Nhấp hộp kiểm bên cạnh tên module:
+Bật/Tắt công tắt bên cạnh tên module:
+
+<img width="2402" height="72" alt="{D8D60A6F-4EF0-4068-88DB-A84D0CD395DF}" src="https://github.com/user-attachments/assets/231b355e-f248-4841-9393-df6b14b7e791" />
+
 ```
 ☑ Module = BẬT (hoạt động)
 ☐ Module = TẮT (bỏ qua)
@@ -280,27 +193,18 @@ Nhấp hộp kiểm bên cạnh tên module:
 #### 3. **Điều Chỉnh Tham Số**
 
 Sử dụng thanh trượt/điều khiển:
-```
-Module: Kích Thích
-├─ Đạt: [0---●---10] dB
-├─ Độ Bão Hòa: [0---●---100] %
-└─ Tần Số HPF: [100--●--10k] Hz
-```
+
+<img width="2414" height="279" alt="{6D8A3303-6181-4D38-9B5B-CE278662EEBF}" src="https://github.com/user-attachments/assets/6e24eaeb-b1f2-4df2-9aca-648559c4eca2" />
 
 #### 4. **Thiết Kế Đường Cong EQ**
 
-Nhấp nút "EQ Designer...":
-```
-Tần Số: 100Hz | Đạt: +5dB | Q: 0.7
-Tần Số: 1kHz  | Đạt: -2dB | Q: 1.5
-Tần Số: 5kHz  | Đạt: +3dB | Q: 1.0
-```
+<img width="2401" height="861" alt="{CCEF9C50-2971-4149-ABC2-2D52FD16A150}" src="https://github.com/user-attachments/assets/1f6c3df9-34ad-4205-8bd3-2d1362d198b6" />
 
 #### 5. **Lưu Preset**
 
 ```
 1. Điều chỉnh tất cả module
-2. Nhấp "Lưu vào Slot X"
+2. Nhấp "Save"
 3. Preset lưu vào NVS của ESP32
 4. Lần khởi động tiếp: Slot 0 tải tự động
 ```
@@ -308,8 +212,8 @@ Tần Số: 5kHz  | Đạt: +3dB | Q: 1.0
 #### 6. **Tải Preset**
 
 ```
-1. Nhấp "Tải từ Slot X"
-2. Khôi phục tất cả trạng thái module
+1. Nhấp preset slot từ 1->9
+2. Nó sẽ tự động khôi phục tất cả trạng thái module
 3. Thanh trượt GUI cập nhật tự động
 ```
 

@@ -76,7 +76,7 @@ npm start
    ```
    PCM1808 (ADC) ← Line Input
    PCM5102A (DAC) → Line Output
-   GPIO0 ← MCLK with pulldown (10k)
+   GPIO0 ← MCLK
    ```
 
 2. **Serial Connection**:
@@ -101,12 +101,13 @@ npm start
 ### Troubleshooting
 
 #### Q: "Board not found" error
-**A**: Check USB cable and CH340 drivers installed
+**A**: Check USB cable and CH340 or CP210x drivers installed
 
 #### Q: No sound output
 **A**: 
 - Verify audio connectors
-- Check GPIO0 has pulldown resistor
+- Check GPIO0 has connected with MCLK PCM1808
+- Check PCM1808 must have both 3.3 and 5v connected
 - Inspect PCM5102A bypass capacitors (100nF)
 - Monitor serial output for errors
 
@@ -213,7 +214,7 @@ npm start
    ```
    PCM1808 (ADC) ← Đầu vào dòng
    PCM5102A (DAC) → Đầu ra dòng
-   GPIO0 ← MCLK với pulldown (10k)
+   GPIO0 ← MCLK
    ```
 
 2. **Kết Nối Nối Tiếp**:
@@ -238,12 +239,13 @@ npm start
 ### Khắc Phục Sự Cố
 
 #### Q: Lỗi "Board not found"
-**A**: Kiểm tra cáp USB và driver CH340 được cài
+**A**: Kiểm tra cáp USB và driver CH340 hoặc CP210x được cài
 
 #### Q: Không có âm thanh
 **A**:
 - Kiểm tra đầu nối audio
-- Kiểm tra GPIO0 có điện trở pulldown
+- Kiểm tra GPIO0 đã kết nối với chân MCLK của PCM1808 chưa
+- Kiểm tra PCM1808 đã có đủ nguồn 3.3 và 5v chưa
 - Kiểm tra tụ bypass trên PCM5102A (100nF)
 - Giám sát đầu ra nối tiếp
 
