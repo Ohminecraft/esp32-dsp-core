@@ -23,11 +23,13 @@ public:
 
     // ---- Parameter API ----
     void setCutoffFreq(int32_t freq);
-    void setDry(int32_t dry_q88);
-    void setWet(int32_t wet_q88);
+    void setDry(int32_t dry_percent);
+    void setWet(int32_t wet_percent);
 
 private:
     Biquad _hpf;
+    Biquad _lpf;
+    Biquad _hpf2;
     float _dryGain;
     float _wetGain;
     int32_t _fCut;

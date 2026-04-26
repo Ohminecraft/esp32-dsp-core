@@ -133,7 +133,7 @@ void setup() {
     DBG_INIT(115200);
     DBG_PRINTLN();
     DBG_PRINTLN("=================================");
-    DBG_PRINTLN("  ESP32 DSP Core v1.0");
+    DBG_PRINTF("  ESP32 DSP Core v%s\n", FIRMWARE_VERSION);
     DBG_PRINTLN("=================================");
     DBG_PRINTF("  CPU: %lu MHz\n", (unsigned long)ESP.getCpuFreqMHz());
     DBG_PRINTF("  Free heap: %lu bytes\n", (unsigned long)ESP.getFreeHeap());
@@ -164,7 +164,6 @@ void setup() {
     } else {
         LOG_INFO("INIT", "No saved preset found. Enabling defaults...");
         g_pipeline.getVolume().enable();
-        g_pipeline.getSoftClipper().enable();
     }
 
     // Create control task on Core 0 (low priority)

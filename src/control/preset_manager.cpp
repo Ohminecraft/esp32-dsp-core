@@ -15,24 +15,15 @@ struct PresetData {
   uint16_t en_mask;
   int16_t vol_db;
 
-  // NoiseGate
-  int32_t ng_lowerThreshDb, ng_upperThreshDb, ng_attackMs, ng_releaseMs,
-      ng_holdMs;
   // Compander
   int32_t cp_thresholdDb, cp_ratioBelow, cp_ratioAbove, cp_attackMs,
       cp_releaseMs, cp_pregainQ412;
   // Exciter
   int32_t ex_cutoffFreq, ex_dry, ex_wet;
-  // Virtual Bass
-  int32_t vb_cutoffFreq, vb_intensity, vb_enhanced;
-  // Bass Classic
-  int32_t bc_cutoffFreq, bc_intensity;
-  // Stereo Widener
-  int32_t sw_intensity;
+  // Dynamic Bass
+  int32_t db_cutoffFreq, db_intensity, db_enhanced, db_boostfullthreshold, db_neutralthreshold, db_clipfullthreshold, db_dampfullthreshold, db_clipattack, db_cliprelease;
   // DRC
   int32_t drc_thresholdDb, drc_ratio, drc_attackMs, drc_releaseMs;
-  // Soft Clipper
-  int32_t sc_thresholdDb;
 
   // EQ1 & EQ2
   int16_t eq1_pregain_q88;
@@ -67,25 +58,21 @@ void PresetManager::saveDefault(uint8_t slot) {
   static PresetData pd;
   memset(&pd, 0, sizeof(PresetData));
   pd.valid = true;
-  pd.vol_db = 0; 
-  // Default: Only Volume enabled (indices 10 and 11)
-  pd.en_mask = (1 << 10); 
-  
-  pd.ng_lowerThreshDb = -9000;
-  pd.ng_upperThreshDb = -8000;
-  pd.ng_attackMs = 5;
-  pd.ng_releaseMs = 100;
-  pd.ng_holdMs = 50;
+  pd.vol_db = 0;
 
-  pd.cp_thresholdDb = -2000;
   pd.cp_ratioBelow = 100; // 1.0
   pd.cp_ratioAbove = 100; // 2.0
   pd.cp_attackMs = 10;
   pd.cp_releaseMs = 200;
 
   pd.ex_cutoffFreq = 3000;
-  pd.vb_cutoffFreq = 60;
-  pd.bc_cutoffFreq = 100;
+  pd.db_cutoffFreq = 60;
+  pd.db_clipattack = 600;
+  pd.db_cliprelease = 200;
+  pd.db_clipfullthreshold = -1500;
+  pd.db_dampfullthreshold = -1000;
+  pd.db_neutralthreshold = -2000;
+  pd.db_boostfullthreshold = -4000;
 
   pd.deq_lowThresh = -4000;
   pd.deq_normThresh = -2000;
@@ -125,13 +112,6 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
   pd.en_mask = enableMask;
   pd.vol_db = pipeline.getVolume()._gainDb;
 
-  // NG
-  pd.ng_lowerThreshDb = pipeline.getNoiseGate()._lowerThreshDb;
-  pd.ng_upperThreshDb = pipeline.getNoiseGate()._upperThreshDb;
-  pd.ng_attackMs = pipeline.getNoiseGate()._attackMs;
-  pd.ng_releaseMs = pipeline.getNoiseGate()._releaseMs;
-  pd.ng_holdMs = pipeline.getNoiseGate()._holdMs;
-
   // CP
   pd.cp_thresholdDb = pipeline.getCompander()._thresholdDb;
   pd.cp_ratioBelow = pipeline.getCompander()._ratioBelow;
@@ -145,22 +125,22 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
   pd.ex_dry = pipeline.getExciter()._dry;
   pd.ex_wet = pipeline.getExciter()._wet;
 
-  // VB & BC
-  pd.vb_cutoffFreq = pipeline.getVirtualBass()._fCut;
-  pd.vb_intensity = pipeline.getVirtualBass()._intensity;
-  pd.vb_enhanced = pipeline.getVirtualBass()._enhanced;
-  pd.bc_cutoffFreq = pipeline.getBassClassic()._fCut;
-  pd.bc_intensity = pipeline.getBassClassic()._intensity;
+  // DB
+  pd.db_cutoffFreq = pipeline.getDynamicBass().getCutoffFreq();
+  pd.db_intensity = pipeline.getDynamicBass().getIntensity();
+  pd.db_enhanced = pipeline.getDynamicBass().getEnhanced();
+  pd.db_clipfullthreshold = pipeline.getDynamicBass().getClipFullThresh();
+  pd.db_dampfullthreshold = pipeline.getDynamicBass().getDampFullThresh();
+  pd.db_neutralthreshold = pipeline.getDynamicBass().getNeutralThresh();
+  pd.db_boostfullthreshold = pipeline.getDynamicBass().getBoostFullThresh();
+  pd.db_clipattack = pipeline.getDynamicBass().getClipAttack();
+  pd.db_cliprelease = pipeline.getDynamicBass().getClipRelease();
 
-  // SW
-  pd.sw_intensity = pipeline.getStereoWidener()._intensity;
-
-  // DRC & SC
+  // DRC
   pd.drc_thresholdDb = pipeline.getDrc()._bands[0].thresholdDb;
   pd.drc_ratio = pipeline.getDrc()._bands[0].ratio;
   pd.drc_attackMs = pipeline.getDrc()._bands[0].attackMs;
   pd.drc_releaseMs = pipeline.getDrc()._bands[0].releaseMs;
-  pd.sc_thresholdDb = pipeline.getSoftClipper()._threshold;
 
   // EQs
   pd.eq1_pregain_q88 = pipeline.getEqDsp_1().getPregain();
@@ -226,12 +206,6 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
 
   pipeline.getVolume().setGainDb(pd.vol_db);
 
-  pipeline.getNoiseGate().setLowerThreshold(pd.ng_lowerThreshDb);
-  pipeline.getNoiseGate().setUpperThreshold(pd.ng_upperThreshDb);
-  pipeline.getNoiseGate().setAttackTime(pd.ng_attackMs);
-  pipeline.getNoiseGate().setReleaseTime(pd.ng_releaseMs);
-  pipeline.getNoiseGate().setHoldTime(pd.ng_holdMs);
-
   pipeline.getCompander().setThreshold(pd.cp_thresholdDb);
   pipeline.getCompander().setRatioBelow(pd.cp_ratioBelow);
   pipeline.getCompander().setRatioAbove(pd.cp_ratioAbove);
@@ -244,20 +218,15 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
   pipeline.getExciter().setWet(pd.ex_wet);
 
   // Some of these don't have setters, so we assign directly via friend access
-  pipeline.getVirtualBass()._fCut = pd.vb_cutoffFreq;
-  pipeline.getVirtualBass()._intensity = pd.vb_intensity;
-  pipeline.getVirtualBass()._enhanced = pd.vb_enhanced;
-
-  pipeline.getBassClassic()._fCut = pd.bc_cutoffFreq;
-  pipeline.getBassClassic()._intensity = pd.bc_intensity;
-
-  pipeline.getStereoWidener()._intensity = pd.sw_intensity;
-  // Note: stereoWidener doesn't have a public setter for delay samples based on
-  // earlier viewing, but _delaySamples was accessible directly due to friend
-  // class if needed. But let's check. Actually, setWidth recalculates things.
-  // Let's just set the struct directly via friend class where needed, or use
-  // setters. To be safe and since I'm lazy with missing setters, I'll bypass
-  // setters and set the properties!
+  pipeline.getDynamicBass().setCutoffFreq(pd.db_cutoffFreq);
+  pipeline.getDynamicBass().setIntensity(pd.db_intensity);
+  pipeline.getDynamicBass().setEnhanced(pd.db_enhanced);
+  pipeline.getDynamicBass().setBoostFullThreshold(pd.db_boostfullthreshold);
+  pipeline.getDynamicBass().setNeutralThreshold(pd.db_neutralthreshold);
+  pipeline.getDynamicBass().setClipFullThreshold(pd.db_clipfullthreshold);
+  pipeline.getDynamicBass().setDampFullThreshold(pd.db_dampfullthreshold);
+  pipeline.getDynamicBass().setClipAttack(pd.db_clipattack);
+  pipeline.getDynamicBass().setClipRelease(pd.db_cliprelease);
 
   // Bypass setters to avoid missing method errors and force an exact state
   // restoration. EQs via API
@@ -291,8 +260,6 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
   pipeline.getDrc().setAttackTime(0, pd.drc_attackMs);
   pipeline.getDrc().setReleaseTime(0, pd.drc_releaseMs);
 
-  // Soft Clipper
-  pipeline.getSoftClipper().setThreshold(pd.sc_thresholdDb);
 
   LOG_INFO(TAG, "Loaded preset from slot %d", slot);
   return true;

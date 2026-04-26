@@ -11,6 +11,8 @@
 
 #include <stdint.h>
 
+#define FIRMWARE_VERSION "1.1"
+
 // ============================================================================
 // Audio Configuration
 // ============================================================================
@@ -36,21 +38,21 @@
 // DSP Pipeline — Module Count
 // ============================================================================
 
-#define DSP_MODULE_COUNT        12      // Total modules in pipeline
+#define DSP_MODULE_COUNT        10      // Total modules in pipeline
 
 // Module IDs (UART protocol)
 #define MODULE_ID_NOISE_GATE    0x01
 #define MODULE_ID_COMPANDER     0x02
 #define MODULE_ID_EXCITER       0x03
-#define MODULE_ID_VIRTUAL_BASS  0x04
-#define MODULE_ID_BASS_CLASSIC  0x05
-#define MODULE_ID_STEREO_WIDEN  0x06
-#define MODULE_ID_DYNAMIC_EQ    0x07    // Dynamic EQ — dual EQ system
-#define MODULE_ID_EQ_DSP_1      0x08    // EQ1 — main parametric EQ
-#define MODULE_ID_EQ_DSP_2      0x09    // EQ2 — post EQ / sound signature
-#define MODULE_ID_DRC           0x0A    // DRC — dynamic range compression
-#define MODULE_ID_VOLUME        0x0B    // Master volume
-#define MODULE_ID_SOFT_CLIP     0x0C    // Soft clipper
+#define MODULE_ID_DYNAMIC_BASS  0x04
+//#define MODULE_ID_BASS_CLASSIC  0x05
+//#define MODULE_ID_STEREO_WIDEN  0x06
+#define MODULE_ID_DYNAMIC_EQ    0x05    // Dynamic EQ — dual EQ system
+#define MODULE_ID_EQ_DSP_1      0x06    // EQ1 — main parametric EQ
+#define MODULE_ID_EQ_DSP_2      0x07    // EQ2 — post EQ / sound signature
+#define MODULE_ID_DRC           0x08    // DRC — dynamic range compression
+#define MODULE_ID_VOLUME        0x09    // Master volume
+#define MODULE_ID_SOFT_CLIP     0x0A    // Soft clipper
 #define MODULE_ID_SYSTEM        0xF0    // System control
 
 // ============================================================================

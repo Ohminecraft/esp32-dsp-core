@@ -8,18 +8,14 @@
 
 void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     // Build chain in exact processing order
-    _chain[0]  = &_noiseGate;     // UNSTABLE
-    _chain[1]  = &_compander;     // UNSTABLE
-    _chain[2]  = &_exciter;       // little bit UNSTABLE at high settings, but generally safe
-    _chain[3]  = &_virtualBass;   // UNSTABLE at high settings, but generally safe
-    _chain[4]  = &_bassClassic;   // STABLE
-    _chain[5]  = &_stereoWidener; // STABLE i think
-    _chain[6]  = &_dynamicEq;     // STABLE but watch your filter settings! (e.g. extreme boosts can cause instability)
-    _chain[7]  = &_eqDsp_1;       // STABILITY depends on your filter settings
-    _chain[8]  = &_eqDsp_2;       // STABILITY depends on your filter settings
-    _chain[9]  = &_drc;           // UNSTABLE
-    _chain[10] = &_volume;        // STABLE
-    _chain[11] = &_softClipper;   // STABLE
+    _chain[0]  = &_compander;     // UNSTABLE
+    _chain[1]  = &_exciter;       // little bit UNSTABLE at high settings, but generally safe
+    _chain[2]  = &_dynamicBass;   // little bit UNSTABLE at high settings, but generally safe
+    _chain[3]  = &_dynamicEq;     // STABLE but watch your filter settings! (e.g. extreme boosts can cause instability)
+    _chain[4]  = &_eqDsp_1;       // STABILITY depends on your filter settings
+    _chain[5]  = &_eqDsp_2;       // STABILITY depends on your filter settings
+    _chain[6]  = &_drc;           // UNSTABLE
+    _chain[7] = &_volume;        // STABLE
 
     // Set module IDs for EQ instances
     _eqDsp_1.setModuleId(MODULE_ID_EQ_DSP_1);
@@ -31,7 +27,6 @@ void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     }
     
     _volume.enable();
-    //_softClipper.enable();
 }
 
 void IRAM_ATTR DspPipeline::processFrame(float* __restrict samples, size_t numSamples) {

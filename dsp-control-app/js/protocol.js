@@ -34,40 +34,31 @@ export const CMD = {
 };
 
 export const MODULE = {
-    NOISE_GATE: 0x01,
     COMPANDER: 0x02,
     EXCITER: 0x03,
-    VIRTUAL_BASS: 0x04,
-    BASS_CLASSIC: 0x05,
-    STEREO_WIDEN: 0x06,
-    DYNAMIC_EQ: 0x07,
-    EQ_DSP_1: 0x08,
-    EQ_DSP_2: 0x09,
-    DRC: 0x0A,
-    VOLUME: 0x0B,
-    SOFT_CLIP: 0x0C,
+    DYNAMIC_BASS: 0x04,
+    DYNAMIC_EQ: 0x05,
+    EQ_DSP_1: 0x06,
+    EQ_DSP_2: 0x07,
+    DRC: 0x08,
+    VOLUME: 0x09,
     SYSTEM: 0xF0
 };
 
 export const MODULE_NAMES = {
-    [MODULE.NOISE_GATE]: 'Noise Gate',
     [MODULE.COMPANDER]: 'Compander',
     [MODULE.EXCITER]: 'Exciter',
-    [MODULE.VIRTUAL_BASS]: 'Virtual Bass',
-    [MODULE.BASS_CLASSIC]: 'Bass Classic',
-    [MODULE.STEREO_WIDEN]: 'Stereo Widener',
+    [MODULE.DYNAMIC_BASS]: 'Dynamic Bass',
     [MODULE.DYNAMIC_EQ]: 'Dynamic EQ',
     [MODULE.EQ_DSP_1]: 'Parmetric EQ 1',
     [MODULE.EQ_DSP_2]: 'Parmetric EQ 2',
     [MODULE.DRC]: 'Dynamic Range Compression',
     [MODULE.VOLUME]: 'Volume',
-    [MODULE.SOFT_CLIP]: 'Soft Clipper'
 };
 
 export const MODULE_ORDER = [
     MODULE.NOISE_GATE, MODULE.COMPANDER, MODULE.EXCITER,
-    MODULE.VIRTUAL_BASS, MODULE.BASS_CLASSIC, MODULE.STEREO_WIDEN, 
-    MODULE.DYNAMIC_EQ, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2,
+    MODULE.DYNAMIC_BASS, MODULE.DYNAMIC_EQ, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2,
     MODULE.DRC, MODULE.VOLUME, MODULE.SOFT_CLIP
 ];
 

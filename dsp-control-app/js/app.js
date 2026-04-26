@@ -250,13 +250,6 @@ parser.onFrame((frame) => {
 
         switch (frame.moduleId) {
             case MODULE.VOLUME: if (pIndex === 0) store.updateParam('volume', 'gainDb', val); break;
-            case MODULE.NOISE_GATE:
-                if (pIndex === 0) store.updateParam('noiseGate', 'lowerThresh', val);
-                else if (pIndex === 1) store.updateParam('noiseGate', 'upperThresh', val);
-                else if (pIndex === 2) store.updateParam('noiseGate', 'attackMs', val);
-                else if (pIndex === 3) store.updateParam('noiseGate', 'releaseMs', val);
-                else if (pIndex === 4) store.updateParam('noiseGate', 'holdMs', val);
-                break;
             case MODULE.COMPANDER:
                 if (pIndex === 0) store.updateParam('compander', 'threshold', val);
                 else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val);
@@ -269,17 +262,16 @@ parser.onFrame((frame) => {
                 else if (pIndex === 1) store.updateParam('exciter', 'dry', val);
                 else if (pIndex === 2) store.updateParam('exciter', 'wet', val);
                 break;
-            case MODULE.VIRTUAL_BASS:
-                if (pIndex === 0) store.updateParam('virtualBass', 'cutoffFreq', val);
-                else if (pIndex === 1) store.updateParam('virtualBass', 'intensity', val);
-                else if (pIndex === 2) store.updateParam('virtualBass', 'enhanced', val);
-                break;
-            case MODULE.BASS_CLASSIC:
-                if (pIndex === 0) store.updateParam('bassClassic', 'cutoffFreq', val);
-                else if (pIndex === 1) store.updateParam('bassClassic', 'intensity', val);
-                break;
-            case MODULE.STEREO_WIDEN:
-                if (pIndex === 0) store.updateParam('stereoWidener', 'intensity', val);
+            case MODULE.DYNAMIC_BASS:
+                if (pIndex === 0) store.updateParam('dynamicBass', 'cutoffFreq', val);
+                else if (pIndex === 1) store.updateParam('dynamicBass', 'intensity', val);
+                else if (pIndex === 2) store.updateParam('dynamicBass', 'enhanced', val);
+                else if (pIndex === 3) store.updateParam('dynamicBass', 'boostthreshold', val);
+                else if (pIndex === 4) store.updateParam('dynamicBass', 'neutralthreshold', val);
+                else if (pIndex === 5) store.updateParam('dynamicBass', 'clipthreshold', val);
+                else if (pIndex === 6) store.updateParam('dynamicBass', 'dampthreshol', val);
+                else if (pIndex === 7) store.updateParam('dynamicBass', 'clipattack', val);
+                else if (pIndex === 8) store.updateParam('dynamicBass', 'cliprelease', val);
                 break;
             case MODULE.DRC: {
                 // pIndex encodes band in upper nibble, param in lower nibble
@@ -296,12 +288,6 @@ parser.onFrame((frame) => {
                 }
                 break;
             }
-            case MODULE.SOFT_CLIP:
-                if (pIndex === 0) {
-                    const db = 20 * Math.log10(val / 2147483647);
-                    store.updateParam('softClipper', 'threshold', Math.round(db * 100));
-                }
-                break;
         }
     }
     else if (frame.cmd === CMD.SET_EQ_BAND && frame.data.length >= 11) {
@@ -346,12 +332,9 @@ parser.onFrame((frame) => {
 
 // Extended module list: split Dynamic EQ into DynEQ Thresh, DynEQ Low, DynEQ High
 const ACCORDION_MODULES = [
-    { id: MODULE.NOISE_GATE, name: 'Noise Gate', icon: '🔇' },
     { id: MODULE.COMPANDER, name: 'Compander', icon: '📊' },
     { id: MODULE.EXCITER, name: 'Exciter', icon: '✨' },
-    { id: MODULE.VIRTUAL_BASS, name: 'Virtual Bass', icon: '🔊' },
-    { id: MODULE.BASS_CLASSIC, name: 'Bass Classic', icon: '🎵' },
-    { id: MODULE.STEREO_WIDEN, name: 'Stereo Widener', icon: '🎧' },
+    { id: MODULE.DYNAMIC_BASS, name: 'Dynamic Bass', icon: '🔊' },
     { id: 'DYNEQ_THRESH', name: 'Dynamic EQ — Thresholds', icon: '⚡', parentId: MODULE.DYNAMIC_EQ },
     { id: 'DYNEQ_LOW', name: 'Dynamic EQ — Low', icon: '🔉', parentId: MODULE.DYNAMIC_EQ },
     { id: 'DYNEQ_HIGH', name: 'Dynamic EQ — High', icon: '🔊', parentId: MODULE.DYNAMIC_EQ },
@@ -359,7 +342,6 @@ const ACCORDION_MODULES = [
     { id: MODULE.EQ_DSP_2, name: 'Parmetric EQ 2', icon: '📉' },
     { id: MODULE.DRC, name: 'Dynamic Range Compression', icon: '🛡️' },
     { id: MODULE.VOLUME, name: 'Volume', icon: '🔈' },
-    { id: MODULE.SOFT_CLIP, name: 'Soft Clipper', icon: '🔧' },
 ];
 
 function buildAccordionModules() {
@@ -473,26 +455,6 @@ function buildAccordionModules() {
 
 function buildModuleBody(body, mod) {
     switch (mod.id) {
-        case MODULE.NOISE_GATE:
-            addSlider(body, 'Lower Thresh', -6000, 0, 100, 'dB',
-                () => store.noiseGate.lowerThresh,
-                (v) => { store.noiseGate.lowerThresh = v; sendFrame(buildSetParam(MODULE.NOISE_GATE, 0, v)); },
-                null, 0.01);
-            addSlider(body, 'Upper Thresh', -6000, 0, 100, 'dB',
-                () => store.noiseGate.upperThresh,
-                (v) => { store.noiseGate.upperThresh = v; sendFrame(buildSetParam(MODULE.NOISE_GATE, 1, v)); },
-                null, 0.01);
-            addSlider(body, 'Attack', 1, 100, 1, 'ms',
-                () => store.noiseGate.attackMs,
-                (v) => { store.noiseGate.attackMs = v; sendFrame(buildSetParam(MODULE.NOISE_GATE, 2, v)); });
-            addSlider(body, 'Release', 10, 500, 1, 'ms',
-                () => store.noiseGate.releaseMs,
-                (v) => { store.noiseGate.releaseMs = v; sendFrame(buildSetParam(MODULE.NOISE_GATE, 3, v)); });
-            addSlider(body, 'Hold', 10, 500, 1, 'ms',
-                () => store.noiseGate.holdMs,
-                (v) => { store.noiseGate.holdMs = v; sendFrame(buildSetParam(MODULE.NOISE_GATE, 4, v)); });
-            break;
-
         case MODULE.COMPANDER:
             addSlider(body, 'Threshold', -6000, 0, 100, 'dB',
                 () => store.compander.threshold,
@@ -526,31 +488,38 @@ function buildModuleBody(body, mod) {
                 (v) => { store.exciter.wet = v; sendFrame(buildSetParam(MODULE.EXCITER, 2, v)); });
             break;
 
-        case MODULE.VIRTUAL_BASS:
+        case MODULE.DYNAMIC_BASS:
             addSlider(body, 'Cutoff Freq', 30, 300, 5, 'Hz',
-                () => store.virtualBass.cutoffFreq,
-                (v) => { store.virtualBass.cutoffFreq = v; sendFrame(buildSetParam(MODULE.VIRTUAL_BASS, 0, v)); });
-            addSlider(body, 'Intensity', 0, 100, 1, '%',
-                () => store.virtualBass.intensity,
-                (v) => { store.virtualBass.intensity = v; sendFrame(buildSetParam(MODULE.VIRTUAL_BASS, 1, v)); });
-            addSwitch(body, 'Enhanced',
-                () => store.virtualBass.enhanced > 0,
-                (v) => { store.virtualBass.enhanced = v ? 1 : 0; sendFrame(buildSetParam(MODULE.VIRTUAL_BASS, 2, v ? 1 : 0)); });
-            break;
-
-        case MODULE.BASS_CLASSIC:
-            addSlider(body, 'Cutoff Freq', 30, 300, 5, 'Hz',
-                () => store.bassClassic.cutoffFreq,
-                (v) => { store.bassClassic.cutoffFreq = v; sendFrame(buildSetParam(MODULE.BASS_CLASSIC, 0, v)); });
-            addSlider(body, 'Intensity', 0, 100, 1, '%',
-                () => store.bassClassic.intensity,
-                (v) => { store.bassClassic.intensity = v; sendFrame(buildSetParam(MODULE.BASS_CLASSIC, 1, v)); });
-            break;
-
-        case MODULE.STEREO_WIDEN:
-            addSlider(body, 'Intensity', 0, 100, 1, '%',
-                () => store.stereoWidener.intensity,
-                (v) => { store.stereoWidener.intensity = v; sendFrame(buildSetParam(MODULE.STEREO_WIDEN, 0, v)); });
+                () => store.dynamicBass.cutoffFreq,
+                (v) => { store.dynamicBass.cutoffFreq = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 0, v)); });
+            addSlider(body, 'Boost Intensity', 0, 100, 1, '%',
+                () => store.dynamicBass.intensity,
+                (v) => { store.dynamicBass.intensity = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 1, v)); });
+            addSwitch(body, 'Boost Enhanced',
+                () => store.dynamicBass.enhanced > 0,
+                (v) => { store.dynamicBass.enhanced = v ? 1 : 0; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 2, v ? 1 : 0)); });
+            addSlider(body, 'Boost Full Thres', -6000, 0, 10, 'dB',
+                () => store.dynamicBass.boostthreshold,
+                (v) => { store.dynamicBass.boostthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 3, v)); },
+                null, 0.01);
+            addSlider(body, 'Neutral Thres', -6000, 0, 10, 'dB',
+                () => store.dynamicBass.neutralthreshold,
+                (v) => { store.dynamicBass.neutralthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 4, v)); },
+                null, 0.01);
+            addSlider(body, 'Clip Full Thres', -6000, 0, 10, 'dB',
+                () => store.dynamicBass.clipthreshold,
+                (v) => { store.dynamicBass.clipthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 5, v)); },
+                null, 0.01);
+            addSlider(body, 'Damp Full Thres', -6000, 0, 10, 'dB',
+                () => store.dynamicBass.dampthreshold,
+                (v) => { store.dynamicBass.dampthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 6, v)); },
+                null, 0.01);
+            addSlider(body, 'Clip Attack', 0, 2000, 1, 'ms',
+                () => store.dynamicBass.clipattack,
+                (v) => { store.dynamicBass.clipattack = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 7, v)); });
+            addSlider(body, 'Clip Release', 0, 2000, 1, 'ms',
+                () => store.dynamicBass.cliprelease,
+                (v) => { store.dynamicBass.cliprelease = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 8, v)); });
             break;
 
         case MODULE.EQ_DSP_1:
@@ -684,15 +653,6 @@ function buildModuleBody(body, mod) {
                 () => store.volume.gainDb,
                 (v) => { store.volume.gainDb = v; sendFrame(buildSetParam(MODULE.VOLUME, 0, v)); },
                 null, 0.01);
-            break;
-
-        case MODULE.SOFT_CLIP:
-            addSlider(body, 'Threshold', -6000, 0, 10, 'dB',
-                () => store.softClipper.threshold,
-                (v) => {
-                    store.softClipper.threshold = v;
-                    sendFrame(buildSetParam(MODULE.SOFT_CLIP, 0, dbToQ31(v / 100)));
-                }, null, 0.01);
             break;
     }
 }

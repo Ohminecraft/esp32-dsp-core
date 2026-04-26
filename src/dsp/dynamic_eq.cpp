@@ -217,15 +217,6 @@ void IRAM_ATTR DynamicEQ::process(float* __restrict samples, size_t numSamples) 
     float alphaFlat = 1.0f - _alphaLow - _alphaHigh;
     if (alphaFlat < 0.0f) alphaFlat = 0.0f;
 
-    #if defined(CORE_DEBUG_LEVEL) && (CORE_DEBUG_LEVEL >= 1) // log every frame when debugging to verify behavior (e.g. watch buffer, thresholds, smoothing)
-    static long long inittime = millis();
-    if (millis() - inittime > 100) { // log after 5 seconds to allow time for presets to load
-        DBG_PRINTF("DynamicEQ: energy=%.2f dBFS, targetLow=%.2f, targetHigh=%.2f, alphaLow=%.3f, alphaHigh=%.3f\n",
-              _energyDb, targetLow, targetHigh, _alphaLow, _alphaHigh);
-        inittime = millis();
-    }
-    #endif
-
     // ------------------------------------------------------------------
     // 6. Copy input to static dry buffer (never stack-allocate here)
     // ------------------------------------------------------------------

@@ -21,6 +21,7 @@
 #include <atomic>
 #include "config.h"
 #include "dsp_types.h"
+#include "../utils/debug_log.h"
 
 class DspModule {
 public:

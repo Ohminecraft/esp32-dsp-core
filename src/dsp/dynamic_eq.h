@@ -43,7 +43,6 @@
 #include "dsp_module.h"
 #include "eq.h"
 #include "../utils/fixed_math.h"
-#include "../utils/debug_log.h"
 #include "config.h"
 
 class DynamicEQ : public DspModule {

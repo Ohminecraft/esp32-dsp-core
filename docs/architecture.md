@@ -101,15 +101,13 @@ Audio Frame (256 stereo samples)
 [1]  NoiseGate          ┐
 [2]  Compander          │
 [3]  Exciter            │  Serial
-[4]  VirtualBass        │  Processing
-[5]  BassClassic        │  Chain
-[6]  StereoWidener      │  (each module
-[7]  DynamicEQ          │   modifies
-[8]  EQ1 (Main)         │   buffer
-[9]  EQ2 (Tone)         │   in-place)
-[10] DRC                │
-[11] Volume             │
-[12] SoftClipper        ┘
+[4]  VirtualBass        │  Processing Chain 
+[5]  DynamicEQ          │   (each module modifies
+[6]  EQ1 (Main)         │   buffer
+[7]  EQ2 (Tone)         │   in-place)
+[8] DRC                │
+[9] Volume             │
+[10] SoftClipper        ┘
      ↓
 Output Frame (256 stereo samples @ DAC)
 ```

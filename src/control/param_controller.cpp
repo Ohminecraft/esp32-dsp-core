@@ -112,31 +112,6 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
   int32_t value = extractInt32(&cmd.data[1]);
 
   switch (cmd.moduleId) {
-  case MODULE_ID_NOISE_GATE: {
-    NoiseGate &ng = _pipeline->getNoiseGate();
-    switch (paramId) {
-    case 0:
-      ng.setLowerThreshold(value);
-      break;
-    case 1:
-      ng.setUpperThreshold(value);
-      break;
-    case 2:
-      ng.setAttackTime(value);
-      break;
-    case 3:
-      ng.setReleaseTime(value);
-      break;
-    case 4:
-      ng.setHoldTime(value);
-      break;
-    default:
-      _uart->sendError(0x04);
-      return;
-    }
-    break;
-  }
-
   case MODULE_ID_COMPANDER: {
     Compander &cp = _pipeline->getCompander();
     switch (paramId) {
@@ -184,46 +159,36 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
     break;
   }
 
-  case MODULE_ID_VIRTUAL_BASS: {
-    VirtualBass &vb = _pipeline->getVirtualBass();
+  case MODULE_ID_DYNAMIC_BASS: {
+    DynamicBass &db = _pipeline->getDynamicBass();
     switch (paramId) {
     case 0:
-      vb.setCutoffFreq(value);
+      db.setCutoffFreq(value);
       break;
     case 1:
-      vb.setIntensity(value);
+      db.setIntensity(value);
       break;
     case 2:
-      vb.setEnhanced(value);
+      db.setEnhanced(value);
       break;
-    default:
-      _uart->sendError(0x04);
-      return;
-    }
-    break;
-  }
-
-  case MODULE_ID_BASS_CLASSIC: {
-    BassClassic &bc = _pipeline->getBassClassic();
-    switch (paramId) {
-    case 0:
-      bc.setCutoffFreq(value);
+    case 3:
+      db.setBoostFullThreshold(value);
       break;
-    case 1:
-      bc.setIntensity(value);
+    case 4:
+      db.setNeutralThreshold(value);
       break;
-    default:
-      _uart->sendError(0x04);
-      return;
-    }
-    break;
-  }
-
-  case MODULE_ID_STEREO_WIDEN: {
-    StereoWidener &sw = _pipeline->getStereoWidener();
-    switch (paramId) {
-    case 0:
-      sw.setIntensity(value);
+    case 5:
+      db.setClipFullThreshold(value);
+      break;
+    case 6:
+      db.setDampFullThreshold(value);
+      break;
+    case 7:
+      db.setClipAttack(value);
+      break;
+    case 8:
+      db.setClipRelease(value);
+      break;
       break;
     default:
       _uart->sendError(0x04);
@@ -241,22 +206,6 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
     case 1:
       vol.setMute(value != 0);
       break;
-    default:
-      _uart->sendError(0x04);
-      return;
-    }
-    break;
-  }
-
-  case MODULE_ID_SOFT_CLIP: {
-    SoftClipper &sc = _pipeline->getSoftClipper();
-    switch (paramId) {
-    case 0:
-      sc.setThreshold(value);
-      break;
-    //case 1:
-    //  sc.setMode(value);
-    //  break;
     default:
       _uart->sendError(0x04);
       return;
@@ -409,6 +358,8 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
 
   // Enable states
   DspModule **chain = _pipeline->getChain();
+  _uart->sendFrame(CMD_ENABLE_MODULE, MODULE_ID_VOLUME, nullptr, 0);
+  _uart->sendFrame(CMD_ENABLE_MODULE, MODULE_ID_SOFT_CLIP, nullptr, 0);
   for (size_t i = 0; i < _pipeline->getChainLength(); i++) {
     DspModule *mod = chain[i];
     if (mod->isEnabled())
@@ -429,13 +380,6 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
   // Volume
   sendPkt(MODULE_ID_VOLUME, 0, _pipeline->getVolume()._gainDb);
 
-  // NG
-  sendPkt(MODULE_ID_NOISE_GATE, 0, _pipeline->getNoiseGate()._lowerThreshDb);
-  sendPkt(MODULE_ID_NOISE_GATE, 1, _pipeline->getNoiseGate()._upperThreshDb);
-  sendPkt(MODULE_ID_NOISE_GATE, 2, _pipeline->getNoiseGate()._attackMs);
-  sendPkt(MODULE_ID_NOISE_GATE, 3, _pipeline->getNoiseGate()._releaseMs);
-  sendPkt(MODULE_ID_NOISE_GATE, 4, _pipeline->getNoiseGate()._holdMs);
-
   // CP
   sendPkt(MODULE_ID_COMPANDER, 0, _pipeline->getCompander()._thresholdDbInt);
   sendPkt(MODULE_ID_COMPANDER, 1, _pipeline->getCompander()._ratioBelowQ88);
@@ -449,17 +393,16 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
   sendPkt(MODULE_ID_EXCITER, 1, _pipeline->getExciter()._dry);
   sendPkt(MODULE_ID_EXCITER, 2, _pipeline->getExciter()._wet);
 
-  // VB
-  sendPkt(MODULE_ID_VIRTUAL_BASS, 0, _pipeline->getVirtualBass()._fCut);
-  sendPkt(MODULE_ID_VIRTUAL_BASS, 1, _pipeline->getVirtualBass()._intensity);
-  sendPkt(MODULE_ID_VIRTUAL_BASS, 2, _pipeline->getVirtualBass()._enhanced);
-
-  // BC
-  sendPkt(MODULE_ID_BASS_CLASSIC, 0, _pipeline->getBassClassic()._fCut);
-  sendPkt(MODULE_ID_BASS_CLASSIC, 1, _pipeline->getBassClassic()._intensity);
-
-  // SW
-  sendPkt(MODULE_ID_STEREO_WIDEN, 0, _pipeline->getStereoWidener()._intensity);
+  // DB
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 0, _pipeline->getDynamicBass().getCutoffFreq());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 1, _pipeline->getDynamicBass().getIntensity());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 2, _pipeline->getDynamicBass().getEnhanced());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 3, _pipeline->getDynamicBass().getBoostFullThresh());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 4, _pipeline->getDynamicBass().getNeutralThresh());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 5, _pipeline->getDynamicBass().getClipFullThresh());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 6, _pipeline->getDynamicBass().getDampFullThresh());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 7, _pipeline->getDynamicBass().getClipAttack());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 8, _pipeline->getDynamicBass().getClipRelease());
 
   // DRC
   sendPkt(MODULE_ID_DRC, 0, _pipeline->getDrc()._bands[0].thresholdDbInt);
@@ -467,9 +410,6 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
   sendPkt(MODULE_ID_DRC, 2, _pipeline->getDrc()._bands[0].attackMs);
   sendPkt(MODULE_ID_DRC, 3, _pipeline->getDrc()._bands[0].releaseMs);
   sendPkt(MODULE_ID_DRC, 4, _pipeline->getDrc()._bands[0].pregainQ412);
-
-  // SC
-  sendPkt(MODULE_ID_SOFT_CLIP, 0, _pipeline->getSoftClipper()._thresholdDb);
 
   // EQ bands
   auto sendEq = [&](uint8_t cmdEq, uint8_t mid, ParametricEQ &eq) {

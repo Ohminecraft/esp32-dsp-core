@@ -21,7 +21,7 @@ __attribute__((always_inline)) static inline float IRAM_ATTR fast_abs(float x) {
 }
 
 // ============================================================================
-// dB <-> Linear Conversion
+// Some Conversion Function
 // ============================================================================
 
 static inline float db_to_linear_gain(float db) {
@@ -39,6 +39,14 @@ static inline float linear_to_db(float linear) {
  */
 static inline float db_q88_to_linear_gain(int16_t db_q88) {
     return db_to_linear_gain(DB_Q8_TO_FLOAT(db_q88));
+}
+
+/**
+ * Convert dB to sq
+ */
+static inline float db001_to_sq(int32_t db_001) {
+    float db = (float)db_001 / 100.0f;
+    return powf(10.0f, db / 10.0f);
 }
 
 // ============================================================================
@@ -80,6 +88,7 @@ __attribute__((always_inline)) static inline float IRAM_ATTR rms_update(float cu
     float sample_sq = sample * sample;
     return current_rms_sq + coeff * (sample_sq - current_rms_sq);
 }
+
 
 // ============================================================================
 // Saturation / Clipping

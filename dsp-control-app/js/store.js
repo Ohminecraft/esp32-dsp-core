@@ -46,12 +46,6 @@ class Store extends EventEmitter {
             eqHigh: makeEqState()
         };
 
-        // Noise Gate
-        this.noiseGate = {
-            lowerThresh: -6000, upperThresh: -4000,
-            attackMs: 5, releaseMs: 50, holdMs: 100
-        };
-
         // Compander
         this.compander = {
             threshold: -2000, ratioBelow: 100, ratioAbove: 400,
@@ -61,16 +55,10 @@ class Store extends EventEmitter {
         // Exciter
         this.exciter = { cutoffFreq: 3000, dry: 100, wet: 30 };
 
-        // Virtual Bass
-        this.virtualBass = { cutoffFreq: 80, intensity: 50, enhanced: 1 };
+        // Dynamic Bass
+        this.dynamicBass = { cutoffFreq: 80, intensity: 50, enhanced: 0, boostthreshold: -4000, neutralthreshold: -2000, clipthreshold: -1500, dampthreshold: -1000, clipattack: 600, cliprelease: 200 };
 
-        // Bass Classic
-        this.bassClassic = { cutoffFreq: 120, intensity: 40 };
-
-        // Stereo Widener
-        this.stereoWidener = { intensity: 50 };
-
-        // DRC
+        // DRC (WIP)
         this.drc = {
             mode: 0,
             bands: [
@@ -84,8 +72,6 @@ class Store extends EventEmitter {
         // Volume
         this.volume = { gainDb: 0, mute: false };
 
-        // Soft Clipper
-        this.softClipper = { threshold: -250, mode: 0 };
 
         // System
         this.system = {

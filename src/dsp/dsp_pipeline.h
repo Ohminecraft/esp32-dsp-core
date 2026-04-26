@@ -7,17 +7,17 @@
 #define DSP_PIPELINE_H
 
 #include "dsp_module.h"
-#include "noise_gate.h"
+//#include "noise_gate.h"
 #include "compander.h"
 #include "exciter.h"
-#include "virtual_bass.h"
-#include "bass_classic.h"
-#include "stereo_widener.h"
+#include "dynamic_bass.h"
+//#include "bass_classic.h"
+//#include "stereo_widener.h"
 #include "eq.h"
 #include "dynamic_eq.h"
 #include "drc.h"
 #include "volume.h"
-#include "soft_clip.h"
+//#include "soft_clip.h"
 
 class DspPipeline {
 public:
@@ -36,18 +36,14 @@ public:
     void processFrame(float* __restrict samples, size_t numSamples);
 
     // ---- Module Accessors ----
-    NoiseGate&       getNoiseGate()      { return _noiseGate; }
     Compander&       getCompander()      { return _compander; }
     Exciter&         getExciter()        { return _exciter; }
-    VirtualBass&     getVirtualBass()    { return _virtualBass; }
-    BassClassic&     getBassClassic()    { return _bassClassic; }
-    StereoWidener&   getStereoWidener()  { return _stereoWidener; }
+    DynamicBass&     getDynamicBass()    { return _dynamicBass; }
     DynamicEQ&       getDynamicEq()      { return _dynamicEq; }
     ParametricEQ&    getEqDsp_1()        { return _eqDsp_1; }
     ParametricEQ&    getEqDsp_2()        { return _eqDsp_2; }
     DRC&             getDrc()            { return _drc; }
     VolumeControl&   getVolume()         { return _volume; }
-    SoftClipper&     getSoftClipper()    { return _softClipper; }
 
     /**
      * Get module by UART module ID.
@@ -62,21 +58,16 @@ public:
     size_t getChainLength() const { return CHAIN_LENGTH; }
 
 private:
-    static const size_t CHAIN_LENGTH = 12;
+    static const size_t CHAIN_LENGTH = 8;
 
-    // Pipeline modules in EXACT processing order (MVSilicon v0.3.2)
-    NoiseGate      _noiseGate;     // [01] Noise Gate
-    Compander      _compander;     // [02] Compander
-    Exciter        _exciter;       // [03] Harmonic Exciter
-    VirtualBass    _virtualBass;   // [04] Virtual Bass
-    BassClassic    _bassClassic;   // [05] Bass Classic
-    StereoWidener  _stereoWidener; // [06] 3D / Stereo Widener
-    DynamicEQ      _dynamicEq;     // [07] Dynamic EQ (dual-EQ system)
-    ParametricEQ   _eqDsp_1;       // [08] EQ1 (main parametric EQ)
-    ParametricEQ   _eqDsp_2;       // [09] EQ2 (post EQ / sound signature)
-    DRC            _drc;           // [10] DRC (dynamic range compression)
-    VolumeControl  _volume;        // [11] Master Volume
-    SoftClipper    _softClipper;   // [12] Soft Clipper
+    Compander      _compander;     // [01] Compander
+    Exciter        _exciter;       // [02] Harmonic Exciter
+    DynamicBass    _dynamicBass;   // [03] Dynamic Bass
+    DynamicEQ      _dynamicEq;     // [04] Dynamic EQ (dual-EQ system)
+    ParametricEQ   _eqDsp_1;       // [05] EQ1 (main parametric EQ)
+    ParametricEQ   _eqDsp_2;       // [06] EQ2 (post EQ / sound signature)
+    DRC            _drc;           // [07] DRC (dynamic range compression)
+    VolumeControl  _volume;        // [08] Master Volume
 
     DspModule* _chain[CHAIN_LENGTH];
 };
