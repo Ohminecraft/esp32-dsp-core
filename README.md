@@ -130,8 +130,8 @@ OUTPUT (I2S: PCM5102A DAC, 96kHz stereo)
 | 3 | **Dynamic Bass** | Stable | 3-zone adaptive bass extension |
 | 4 | **Stereo Widener** | Stable | Enhance stereo field (M/S) |
 | 5 | **Dynamic EQ** | Stable | Level-dependent dual-EQ |
-| 6 | **EQ1** | Config-Dependent | Main parametric EQ (10-band) |
-| 7 | **EQ2** | Config-Dependent | Post-EQ tone shaping (10-band) |
+| 6 | **EQ1** | Stable | Main parametric EQ (10-band) |
+| 7 | **EQ2** | Stable | Post-EQ tone shaping (10-band) |
 | 8 | **DRC** | Unstable | Multi-band compression/limiting |
 | 9 | **Volume** | Stable | Master volume control |
 
@@ -192,8 +192,8 @@ ESP32 DSP Core kết hợp:
 | 3 | **Dynamic Bass** | Ổn định | Bass động 3-zone |
 | 4 | **Stereo Widener** | Ổn định | Mở rộng trường stereo |
 | 5 | **Dynamic EQ** | Ổn định | EQ thích ứng theo mức |
-| 6 | **EQ1** | Tùy cấu hình | EQ chính 10 dải |
-| 7 | **EQ2** | Tùy cấu hình | EQ hậu xử lý |
+| 6 | **EQ1** | Ổn Định | EQ chính 10 dải |
+| 7 | **EQ2** | Ổn Định | EQ hậu xử lý |
 | 8 | **DRC** | Chưa | Nén động đa dải |
 | 9 | **Volume** | Ổn định | Âm lượng chính |
 
