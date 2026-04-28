@@ -38,7 +38,7 @@
 // DSP Pipeline — Module Count
 // ============================================================================
 
-#define DSP_MODULE_COUNT        10      // Total modules in pipeline
+#define DSP_MODULE_COUNT        9      // Total modules in pipeline
 
 // Module IDs (UART protocol)
 #define MODULE_ID_NOISE_GATE    0x01
@@ -52,7 +52,7 @@
 #define MODULE_ID_EQ_DSP_2      0x07    // EQ2 — post EQ / sound signature
 #define MODULE_ID_DRC           0x08    // DRC — dynamic range compression
 #define MODULE_ID_VOLUME        0x09    // Master volume
-#define MODULE_ID_SOFT_CLIP     0x0A    // Soft clipper
+//#define MODULE_ID_SOFT_CLIP     0x0A    // Soft clipper
 #define MODULE_ID_SYSTEM        0xF0    // System control
 
 // ============================================================================

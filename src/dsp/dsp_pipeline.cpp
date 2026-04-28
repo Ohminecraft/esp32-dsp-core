@@ -15,7 +15,7 @@ void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     _chain[4]  = &_eqDsp_1;       // STABILITY depends on your filter settings
     _chain[5]  = &_eqDsp_2;       // STABILITY depends on your filter settings
     _chain[6]  = &_drc;           // UNSTABLE
-    _chain[7] = &_volume;        // STABLE
+    _chain[7]  = &_volume;        // STABLE
 
     // Set module IDs for EQ instances
     _eqDsp_1.setModuleId(MODULE_ID_EQ_DSP_1);

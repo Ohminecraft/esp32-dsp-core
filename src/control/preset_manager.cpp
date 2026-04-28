@@ -58,6 +58,9 @@ void PresetManager::saveDefault(uint8_t slot) {
   static PresetData pd;
   memset(&pd, 0, sizeof(PresetData));
   pd.valid = true;
+
+  pd.en_mask = (1 << 7); // only volume turn on
+
   pd.vol_db = 0;
 
   pd.cp_ratioBelow = 100; // 1.0
