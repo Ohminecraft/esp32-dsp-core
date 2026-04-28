@@ -21,7 +21,7 @@ struct PresetData {
   // Exciter
   int32_t ex_cutoffFreq, ex_dry, ex_wet;
   // Dynamic Bass
-  int32_t db_cutoffFreq, db_intensity, db_enhanced, db_boostfullthreshold, db_neutralthreshold, db_clipfullthreshold, db_dampfullthreshold, db_clipattack, db_cliprelease;
+  int32_t db_cutoffFreq, db_gainBoost, db_enhanced, db_boostfullthreshold, db_neutralthreshold, db_clipfullthreshold, db_clipattack, db_cliprelease;
   // DRC
   int32_t drc_thresholdDb, drc_ratio, drc_attackMs, drc_releaseMs;
 
@@ -70,12 +70,12 @@ void PresetManager::saveDefault(uint8_t slot) {
 
   pd.ex_cutoffFreq = 3000;
   pd.db_cutoffFreq = 60;
+  pd.db_gainBoost = 600;   // +6.00 dB default
   pd.db_clipattack = 600;
   pd.db_cliprelease = 200;
-  pd.db_clipfullthreshold = -1500;
-  pd.db_dampfullthreshold = -1000;
-  pd.db_neutralthreshold = -2000;
-  pd.db_boostfullthreshold = -4000;
+  pd.db_clipfullthreshold = -800;
+  pd.db_neutralthreshold = -1600;
+  pd.db_boostfullthreshold = -2400;
 
   pd.deq_lowThresh = -4000;
   pd.deq_normThresh = -2000;
@@ -130,10 +130,9 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
 
   // DB
   pd.db_cutoffFreq = pipeline.getDynamicBass().getCutoffFreq();
-  pd.db_intensity = pipeline.getDynamicBass().getIntensity();
+  pd.db_gainBoost = pipeline.getDynamicBass().getGainBoost();
   pd.db_enhanced = pipeline.getDynamicBass().getEnhanced();
   pd.db_clipfullthreshold = pipeline.getDynamicBass().getClipFullThresh();
-  pd.db_dampfullthreshold = pipeline.getDynamicBass().getDampFullThresh();
   pd.db_neutralthreshold = pipeline.getDynamicBass().getNeutralThresh();
   pd.db_boostfullthreshold = pipeline.getDynamicBass().getBoostFullThresh();
   pd.db_clipattack = pipeline.getDynamicBass().getClipAttack();
@@ -222,12 +221,11 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
 
   // Some of these don't have setters, so we assign directly via friend access
   pipeline.getDynamicBass().setCutoffFreq(pd.db_cutoffFreq);
-  pipeline.getDynamicBass().setIntensity(pd.db_intensity);
+  pipeline.getDynamicBass().setGainBoost(pd.db_gainBoost);
   pipeline.getDynamicBass().setEnhanced(pd.db_enhanced);
   pipeline.getDynamicBass().setBoostFullThreshold(pd.db_boostfullthreshold);
   pipeline.getDynamicBass().setNeutralThreshold(pd.db_neutralthreshold);
   pipeline.getDynamicBass().setClipFullThreshold(pd.db_clipfullthreshold);
-  pipeline.getDynamicBass().setDampFullThreshold(pd.db_dampfullthreshold);
   pipeline.getDynamicBass().setClipAttack(pd.db_clipattack);
   pipeline.getDynamicBass().setClipRelease(pd.db_cliprelease);
 

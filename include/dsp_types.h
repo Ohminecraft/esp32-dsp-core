@@ -11,7 +11,7 @@
 //#include <esp_dsp.h>
 
 // ============================================================================
-// Communication Format Macros (MVSilicon Compatible)
+// Communication Format Macros
 // ============================================================================
 
 // dB value in Q8.8 format (e.g., -768 = -3.0dB, 640 = +2.5dB)

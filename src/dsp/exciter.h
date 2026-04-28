@@ -27,14 +27,17 @@ public:
     void setWet(int32_t wet_percent);
 
 private:
-    Biquad _hpf;
-    Biquad _lpf;
-    Biquad _hpf2;
+    // 3-band crossover filters
+    Biquad _bassLpf;    // LP at BASS_FREQ (~250 Hz) → bass band (always 100%)
+    Biquad _midLpf;     // LP at fCut → bass+mid band (subtract bass to get mid only)
+    Biquad _trebleHpf;  // HP at fCut → treble band (wet/harmonic path)
     float _dryGain;
     float _wetGain;
     int32_t _fCut;
     int32_t _dry;
     int32_t _wet;
+
+    static constexpr float BASS_FREQ = 250.0f; // Fixed bass/mid crossover
 
     void recalcCoeffs();
 };

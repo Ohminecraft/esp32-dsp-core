@@ -9,11 +9,11 @@
 void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     // Build chain in exact processing order
     _chain[0]  = &_compander;     // UNSTABLE
-    _chain[1]  = &_exciter;       // little bit UNSTABLE at high settings, but generally safe
-    _chain[2]  = &_dynamicBass;   // little bit UNSTABLE at high settings, but generally safe
-    _chain[3]  = &_dynamicEq;     // STABLE but watch your filter settings! (e.g. extreme boosts can cause instability)
-    _chain[4]  = &_eqDsp_1;       // STABILITY depends on your filter settings
-    _chain[5]  = &_eqDsp_2;       // STABILITY depends on your filter settings
+    _chain[1]  = &_exciter;       // STABLE
+    _chain[2]  = &_dynamicBass;   // STABLE
+    _chain[3]  = &_dynamicEq;     // STABLE
+    _chain[4]  = &_eqDsp_1;       // STABLE
+    _chain[5]  = &_eqDsp_2;       // STABLE
     _chain[6]  = &_drc;           // UNSTABLE
     _chain[7]  = &_volume;        // STABLE
 

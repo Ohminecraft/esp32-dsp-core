@@ -68,7 +68,7 @@ INPUT (I2S: 96kHz stereo, 256 samples/frame)
      └────────┬─────────┘
               ↓
 [3]  ┌──────────────────┐
-     │  Dynamic Bass    │  4-zone adaptive bass with EQ-based extension
+     │  Dynamic Bass    │  3-zone adaptive bass with clip protection
      └────────┬─────────┘
               ↓
 [4]  ┌──────────────────┐
@@ -126,8 +126,8 @@ OUTPUT (I2S: PCM5102A DAC, 96kHz stereo)
 | # | Module | Stability | Purpose |
 |---|--------|-----------|---------|
 | 1 | **Compander** | Unstable | Dynamic compression/expansion |
-| 2 | **Exciter** | Unstable+ | Add clarity and presence |
-| 3 | **Dynamic Bass** | Stable | 4-zone adaptive bass extension |
+| 2 | **Exciter** | Stable | Add clarity and presence |
+| 3 | **Dynamic Bass** | Stable | 3-zone adaptive bass extension |
 | 4 | **Stereo Widener** | Stable | Enhance stereo field (M/S) |
 | 5 | **Dynamic EQ** | Stable | Level-dependent dual-EQ |
 | 6 | **EQ1** | Config-Dependent | Main parametric EQ (10-band) |
@@ -188,8 +188,8 @@ ESP32 DSP Core kết hợp:
 | # | Module | Ổn định | Mục Đích |
 |---|--------|---------|---------|
 | 1 | **Compander** | Chưa | Nén/mở rộng động |
-| 2 | **Exciter** | Chưa+ | Thêm sắc nét |
-| 3 | **Dynamic Bass** | Ổn định | Bass động 4-zone |
+| 2 | **Exciter** | Ổn định | Thêm sắc nét |
+| 3 | **Dynamic Bass** | Ổn định | Bass động 3-zone |
 | 4 | **Stereo Widener** | Ổn định | Mở rộng trường stereo |
 | 5 | **Dynamic EQ** | Ổn định | EQ thích ứng theo mức |
 | 6 | **EQ1** | Tùy cấu hình | EQ chính 10 dải |

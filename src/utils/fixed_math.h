@@ -35,6 +35,35 @@ static inline float linear_to_db(float linear) {
 }
 
 /**
+ * Fast log2 approximation using IEEE754 float representation.
+ * Accuracy: ~5% error — suitable for energy threshold comparisons.
+ * Cost: ~3-5 cycles vs ~200 cycles for log10f on ESP32.
+ */
+__attribute__((always_inline)) static inline float IRAM_ATTR fast_log2(float x) {
+    union { float f; uint32_t i; } u = {x};
+    return (float)((int32_t)(u.i) - (int32_t)0x3F800000) * (1.0f / (float)(1 << 23));
+}
+
+/**
+ * Fast linear amplitude to dBFS.
+ * Uses IEEE754 bit trick instead of log10f.
+ * 20*log10(x) = 20 * log2(x) / log2(10) ≈ 6.0206 * log2(x)
+ */
+__attribute__((always_inline)) static inline float IRAM_ATTR fast_linear_to_db(float linear) {
+    if (linear <= 1e-6f) return -96.0f;
+    return 6.0206f * fast_log2(linear);
+}
+
+/**
+ * Fast energy-squared to dBFS (eliminates sqrtf entirely).
+ * 20*log10(sqrt(E²)) = 10*log10(E²) = 3.0103 * log2(E²)
+ */
+__attribute__((always_inline)) static inline float IRAM_ATTR fast_energy_sq_to_db(float energySq) {
+    if (energySq <= 1e-12f) return -96.0f;
+    return 3.0103f * fast_log2(energySq);
+}
+
+/**
  * Convert Q8.8 dB value to linear float gain
  */
 static inline float db_q88_to_linear_gain(int16_t db_q88) {

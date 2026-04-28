@@ -33,35 +33,33 @@ Complete reference for all parameters across 9 DSP modules.
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Cutoff Frequency | 300 to 10000 | 3000 | Hz | Cutoff HighShelf for Processing |
-| Dry | 0 to 100 | 0 | % | Mid Level |
-| Wet | 0 to 100 | 0 | % | High Level |
+| Cutoff Frequency | 300 to 10000 | 3000 | Hz | Crossover frequency for Exciter |
+| Dry | 0 to 100 | 100 | % | Mid-range level (100% = No cut) |
+| Wet | 0 to 100 | 30 | % | Treble harmonic level |
 
 ---
 
 ### [3] Dynamic Bass
 
-**Purpose**: 4-zone adaptive bass extension using EQ-based harmonic generation
+**Purpose**: 3-zone adaptive bass extension with automatic gain fading for speaker protection.
 
 **How it Works**:
-- Measures RMS energy in bass band (LP filter @ 80Hz default)
-- 4-zone state machine based on energy level:
-  1. **Low energy** (≤ Boost threshold): Full bass boost applied
-  2. **Ramp zone** (Boost → Neutral): Smoothly reduce boost
-  3. **Mid zone** (Neutral ≤ energy ≤ Clip): No processing
-  4. **High energy** (≥ Clip threshold): Apply clip/damp for protection
+- Measures RMS energy in bass band (LP filter @ Cutoff default)
+- 3-zone state machine based on energy level:
+  1. **Low energy zone** (≤ Boost threshold): Full `Gain Boost` applied.
+  2. **Transition zone** (Boost → Neutral): Gain smoothly fades down to 0dB.
+  3. **Protection zone** (Neutral → Clip): Gain fades out entirely and sub-limiter protection kicks in.
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Cutoff Frequency | 30 to 300 | 80 | Hz | Bass band center frequency |
-| Intensity | 0 to 100 | 0 | % | Bass boost strength (0=flat, 100=max) |
-| Enhanced | on/off | off | bool | Enhanced punch (peaking filter) |
-| Boost Full Threshold | -3000 to 0 | -2400 | 0.01dB | Energy level for full boost |
-| Neutral Threshold | -3000 to 0 | -1600 | 0.01dB | No-processing zone |
-| Clip Full Threshold | -3000 to 0 | -800 | 0.01dB | Energy level for full clipping |
-| Damp Full Threshold | -3000 to 0 | -400 | 0.01dB | Damping strength threshold |
-| Clip Attack | 1 to 2000 | 600 | ms | Attack time for clip response |
-| Clip Release | 1 to 2000 | 200 | ms | Release time for clip response |
+| Cutoff Frequency | 30 to 300 | 80 | Hz | Bass band crossover frequency |
+| Gain Boost | 0 to 20 | 6.00 | dB | Bass boost strength (0.01 dB steps) |
+| Enhanced | on/off | off | bool | Peaking punch around cutoff |
+| Boost Full Threshold | -60 to 0 | -24.00 | dB | Level for full boost (0.01 dB steps) |
+| Neutral Threshold | -60 to 0 | -16.00 | dB | Transition midpoint (0.01 dB steps) |
+| Clip Full Threshold | -60 to 0 | -8.00 | dB | Level where boost is fully removed |
+| Clip Attack | 1 to 2000 | 600 | ms | Smoothing attack for zone switching |
+| Clip Release | 1 to 2000 | 200 | ms | Smoothing release for zone switching |
 
 **Tuning Tips**:
 ```
@@ -182,35 +180,33 @@ Tham chiếu hoàn chỉnh cho 9 module DSP.
 
 | Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
 |---------|---------|----------|--------|--------|
-| Tần Số Cutoff | 300 đến 10000 | 3000 | Hz | Cutoff HighShelf |
-| Dry | 0 đến 100 | 0 | % | Mức giữa |
-| Wet | 0 đến 100 | 0 | % | Mức cao |
+| Tần Số Cutoff | 300 đến 10000 | 3000 | Hz | Tần số chia (crossover) cho Exciter |
+| Dry | 0 đến 100 | 100 | % | Mức dải Mid (100% = giữ nguyên) |
+| Wet | 0 đến 100 | 30 | % | Mức hài âm Treble |
 
 ---
 
 ### [3] Dynamic Bass
 
-**Mục đích**: Bass động 4-zone thích ứng với năng lượng tín hiệu
+**Mục đích**: Bass động 3-zone thích ứng với năng lượng, tự động giảm boost khi tín hiệu quá lớn để bảo vệ loa.
 
 **Cách Hoạt Động**:
-- Đo RMS năng lượng trong dải bass (LP filter @ 80Hz)
-- 4-zone state machine dựa trên mức năng lượng:
-  1. **Năng lượng thấp**: Tăng bass đầy đủ
-  2. **Vùng ramp**: Giảm dần boost
-  3. **Vùng giữa**: Không xử lý
-  4. **Năng lượng cao**: Áp dụng bảo vệ (clip/damp)
+- Đo RMS năng lượng trong dải bass (LP filter @ Cutoff)
+- 3-zone state machine dựa trên mức năng lượng:
+  1. **Vùng năng lượng thấp**: Áp dụng đầy đủ `Gain Boost`.
+  2. **Vùng chuyển tiếp**: Gain giảm dần về 0dB khi đến ngưỡng Neutral.
+  3. **Vùng bảo vệ**: Gain biến mất hoàn toàn và kích hoạt bộ lọc sub-limiter.
 
 | Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
 |---------|---------|----------|--------|--------|
-| Tần Số Cutoff | 30 đến 300 | 80 | Hz | Tần số trung tâm dải bass |
-| Cường Độ | 0 đến 100 | 0 | % | Cường độ tăng bass |
-| Tăng Cường | on/off | off | bool | Punch tăng cường (peaking) |
-| Ngưỡng Boost Đầy | -3000 đến 0 | -2400 | 0.01dB | Mức năng lượng cho boost đầy |
-| Ngưỡng Bình Thường | -3000 đến 0 | -1600 | 0.01dB | Vùng không xử lý |
-| Ngưỡng Clip Đầy | -3000 đến 0 | -800 | 0.01dB | Mức năng lượng cho clip đầy |
-| Ngưỡng Damp Đầy | -3000 đến 0 | -400 | 0.01dB | Ngưỡng cường độ damping |
-| Clip Attack | 1 đến 2000 | 600 | ms | Thời gian attack cho clip |
-| Clip Release | 1 đến 2000 | 200 | ms | Thời gian release cho clip |
+| Tần Số Cutoff | 30 đến 300 | 80 | Hz | Tần số chia dải bass |
+| Gain Boost | 0 đến 20 | 6.00 | dB | Cường độ tăng bass (bước 0.01 dB) |
+| Tăng Cường | on/off | off | bool | Tạo punch tại tần số cutoff |
+| Ngưỡng Boost Đầy | -60 đến 0 | -24.00 | dB | Mức năng lượng cho boost đầy |
+| Ngưỡng Trung Tính | -60 đến 0 | -16.00 | dB | Điểm giữa vùng chuyển tiếp |
+| Ngưỡng Clip Đầy | -60 đến 0 | -8.00 | dB | Mức năng lượng xóa bỏ boost |
+| Clip Attack | 1 đến 2000 | 600 | ms | Tốc độ chuyển vùng (mượt mà) |
+| Clip Release | 1 đến 2000 | 200 | ms | Tốc độ quay lại vùng boost |
 
 **Mẹo Chỉnh Tham Số**:
 ```

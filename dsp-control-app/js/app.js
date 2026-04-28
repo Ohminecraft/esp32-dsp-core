@@ -264,14 +264,13 @@ parser.onFrame((frame) => {
                 break;
             case MODULE.DYNAMIC_BASS:
                 if (pIndex === 0) store.updateParam('dynamicBass', 'cutoffFreq', val);
-                else if (pIndex === 1) store.updateParam('dynamicBass', 'intensity', val);
+                else if (pIndex === 1) store.updateParam('dynamicBass', 'gainBoost', val);
                 else if (pIndex === 2) store.updateParam('dynamicBass', 'enhanced', val);
                 else if (pIndex === 3) store.updateParam('dynamicBass', 'boostthreshold', val);
                 else if (pIndex === 4) store.updateParam('dynamicBass', 'neutralthreshold', val);
                 else if (pIndex === 5) store.updateParam('dynamicBass', 'clipthreshold', val);
-                else if (pIndex === 6) store.updateParam('dynamicBass', 'dampthreshol', val);
-                else if (pIndex === 7) store.updateParam('dynamicBass', 'clipattack', val);
-                else if (pIndex === 8) store.updateParam('dynamicBass', 'cliprelease', val);
+                else if (pIndex === 6) store.updateParam('dynamicBass', 'clipattack', val);
+                else if (pIndex === 7) store.updateParam('dynamicBass', 'cliprelease', val);
                 break;
             case MODULE.DRC: {
                 // pIndex encodes band in upper nibble, param in lower nibble
@@ -492,9 +491,10 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Cutoff Freq', 30, 300, 5, 'Hz',
                 () => store.dynamicBass.cutoffFreq,
                 (v) => { store.dynamicBass.cutoffFreq = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 0, v)); });
-            addSlider(body, 'Boost Intensity', 0, 100, 1, '%',
-                () => store.dynamicBass.intensity,
-                (v) => { store.dynamicBass.intensity = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 1, v)); });
+            addSlider(body, 'Gain Boost', 0, 2000, 10, 'dB',
+                () => store.dynamicBass.gainBoost,
+                (v) => { store.dynamicBass.gainBoost = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 1, v)); },
+                null, 0.01);
             addSwitch(body, 'Boost Enhanced',
                 () => store.dynamicBass.enhanced > 0,
                 (v) => { store.dynamicBass.enhanced = v ? 1 : 0; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 2, v ? 1 : 0)); });
@@ -510,16 +510,12 @@ function buildModuleBody(body, mod) {
                 () => store.dynamicBass.clipthreshold,
                 (v) => { store.dynamicBass.clipthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 5, v)); },
                 null, 0.01);
-            addSlider(body, 'Damp Full Thres', -6000, 0, 10, 'dB',
-                () => store.dynamicBass.dampthreshold,
-                (v) => { store.dynamicBass.dampthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 6, v)); },
-                null, 0.01);
             addSlider(body, 'Clip Attack', 0, 2000, 1, 'ms',
                 () => store.dynamicBass.clipattack,
-                (v) => { store.dynamicBass.clipattack = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 7, v)); });
+                (v) => { store.dynamicBass.clipattack = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 6, v)); });
             addSlider(body, 'Clip Release', 0, 2000, 1, 'ms',
                 () => store.dynamicBass.cliprelease,
-                (v) => { store.dynamicBass.cliprelease = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 8, v)); });
+                (v) => { store.dynamicBass.cliprelease = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 7, v)); });
             break;
 
         case MODULE.EQ_DSP_1:

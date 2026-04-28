@@ -2,37 +2,27 @@
  * @file dynamic_bass.h
  * @brief Dynamic Bass — EQ-based bass extension, ESP32 Float32
  *
- * Algorithm (DynamicEQ Case 1 — đầy đủ 4 zone):
+ * Algorithm (3-zone):
  *
  *   Energy detection:
- *     - Per-sample IIR RMS trên LP-filtered bass signal → dBFS
+ *     - Per-sample IIR RMS on LP-filtered bass signal → dBFS
  *
- *   4-zone state machine (mirror DynamicEQ Case 1):
+ *   3-zone state machine:
  *
- *   [BOOST full]──ramp──[NEUTRAL]──ramp──[CLIP full]──ramp──[DAMP full]
- *        ↑                  ↑                 ↑                  ↑
- *   _boostFullDb      _neutralDb         _clipFullDb        _dampFullDb
+ *   [BOOST full]──ramp──[NEUTRAL]──ramp──[CLIP: boost fades out]
+ *        ↑                  ↑                 ↑
+ *   _boostFullDb      _neutralDb         _clipFullDb
  *
- *   Zone A (≤ boostFull)       : boost=1,         clip=0, damp=0
- *   Zone B (boostFull→neutral) : boost ramps 1→0, clip=0, damp=0
- *   Zone C (neutral, no-proc)  : boost=0,         clip=0, damp=0
- *   Zone D (neutral→clipFull)  : boost=0,         clip ramps 0→1, damp=0
- *   Zone E (clipFull→dampFull) : boost=0,         clip=1, damp ramps 0→1
- *   Zone F (≥ dampFull)        : boost=0,         clip=1, damp=1
+ *   Zone A (≤ boostFull)       : alpha = +1  (extra boost active)
+ *   Zone B (boostFull→neutral) : alpha +1→0
+ *   Zone C (neutral)           : alpha = 0   (flat pass-through)
+ *   Zone D (neutral→clipFull)  : alpha 0→-1  (fade reduction)
+ *   Zone E (≥ clipFull)        : alpha = -1  (full clip protection)
  *
- *   Output mixing (parallel boost/clip, serial clip→damp):
- *     boosted  = _fboost[2](LP(in))          ← main boost, luôn tính
- *     extra    = _fboostExtra(boosted)        ← luôn chạy, dùng khi zone thấp
- *     clipped  = _flowclip(boosted)           ← luôn chạy, dùng khi zone cao
- *     damped   = _fdamp(clipped)              ← luôn chạy, nối tiếp clipped
+ *   Gain boost parameter controls the amount of bass boost in dB.
  *
- *     alphaFlat = clamp(1 - alphaBoost - alphaClip, 0, 1)
- *     protected = lerp(clipped, damped, alphaDamp)
- *     result    = extra·αBoost + boosted·αFlat + protected·αClip
- *     out       = sat(in + result)
- *
- *   Thresholds đơn vị 0.01 dBFS (giống DynamicEQ):  -2400 = -24.00 dBFS
- *   Constraint: boostFull < neutral < clipFull < dampFull
+ *   Thresholds: 0.01 dBFS  -2400 = -24.00 dBFS
+ *   Constraint: boostFull < neutral < clipFull
  */
 
 #pragma once
@@ -63,20 +53,19 @@ public:
     // Filter / sound parameters
     // -------------------------------------------------------------------------
     bool setCutoffFreq(int32_t fCut);
-    void setIntensity(int32_t intensity);   // 0..100
+    void setGainBoost(int32_t gainDb_x100); // boost amount in 0.01 dB (e.g. 600 = +6.00 dB)
     void setEnhanced(bool enhanced);
 
     // -------------------------------------------------------------------------
-    // Thresholds — đơn vị 0.01 dBFS (giống DynamicEQ)
-    //   Constraint phải đảm bảo: boostFull < neutral < clipFull < dampFull
+    // Thresholds — unit: 0.01 dBFS
+    //   Constraint: boostFull < neutral < clipFull
     // -------------------------------------------------------------------------
-    void setBoostFullThreshold(int32_t db_001);  // tín hiệu đủ thấp → boost đầy
-    void setNeutralThreshold  (int32_t db_001);  // vùng trung tính, không xử lý
-    void setClipFullThreshold (int32_t db_001);  // flowclip đạt 100%
-    void setDampFullThreshold (int32_t db_001);  // fdamp đạt 100%
+    void setBoostFullThreshold(int32_t db_001);
+    void setNeutralThreshold  (int32_t db_001);
+    void setClipFullThreshold (int32_t db_001);
 
     // -------------------------------------------------------------------------
-    // Attack / Release dùng chung cho cả 3 alpha (ms)
+    // Attack / Release (ms)
     // -------------------------------------------------------------------------
     void setClipAttack (int32_t ms);
     void setClipRelease(int32_t ms);
@@ -85,72 +74,53 @@ public:
     // Getters
     // -------------------------------------------------------------------------
     int32_t getCutoffFreq()       const { return _fCut;         }
-    int32_t getIntensity()        const { return _intensity;    }
+    int32_t getGainBoost()        const { return _gainBoostDb;  }
     bool    getEnhanced()         const { return _enhanced;     }
     int32_t getBoostFullThresh()  const { return _boostFullDb;  }
     int32_t getNeutralThresh()    const { return _neutralDb;    }
     int32_t getClipFullThresh()   const { return _clipFullDb;   }
-    int32_t getDampFullThresh()   const { return _dampFullDb;   }
     int32_t getClipAttack()       const { return _clipattack;   }
     int32_t getClipRelease()      const { return _cliprelease;  }
 
-    float   getAlphaBoost()  const { return _alphaBoost;  }  // 0..1
-    float   getAlphaClip()   const { return _alphaClip;   }  // 0..1
-    float   getAlphaDamp()   const { return _alphaDamp;   }  // 0..1
+    float   getAlpha()       const { return _alpha;       }  // -1..+1
     float   getEnergyDb()    const { return _energyDb;    }  // dBFS
 
 private:
     // ---- Filters ----
-    Biquad  _flp1;          // LP  @ f_cut+10        — tách bass band
+    Biquad  _flp1;          // LP  @ f_cut+10        — extract bass band
     Biquad  _fboost;        // Low-shelf @ f_cut     — main boost
     Biquad  _fboost2;       // Peaking @ f_cut       — enhanced punch
-    Biquad  _fboostExtra;   // Peaking @ f_cut×0.6   — extra boost (zone thấp)
-    Biquad  _flowclip;      // Peaking @ 35Hz -20dB  — sub limiter (stage 1)
-    Biquad  _fdamp;         // Peaking @ f_cut, neg  — damp (stage 2)
+    Biquad  _fboostExtra;   // Peaking @ f_cut×0.6   — extra boost (low energy zone)
+    Biquad  _flowclip;      // Peaking @ 35Hz -20dB  — sub limiter (high energy zone)
 
     // ---- Sound parameters ----
     int32_t _fCut          = 80;
-    int32_t _intensity     = 50;
-    float   _intensityGain = 0.0f;   // dB (0..20) = intensity²×20
+    int32_t _gainBoostDb   = 600;       // boost in 0.01 dB (default +6.00 dB)
+    float   _gainBoostDbF  = 6.0f;      // cached float dB
     bool    _enhanced      = false;
 
     // ---- Thresholds (0.01 dBFS) ----
     int32_t _boostFullDb = -2400;    // -24.00 dBFS
     int32_t _neutralDb   = -1600;    // -16.00 dBFS
     int32_t _clipFullDb  =  -800;    //  -8.00 dBFS
-    int32_t _dampFullDb  =  -400;    //  -4.00 dBFS
 
     // ---- Timing ----
     int32_t _clipattack  = 600;      // ms
     int32_t _cliprelease = 200;      // ms
 
     // ---- Energy follower ----
-    float   _rmsEnergySq = 0.0f;    // IIR state: E[x²]
-    float   _energyDb    = -96.0f;  // dBFS snapshot cuối frame
-    float   _rmsCoeff    = 0.0f;    // per-sample IIR coeff (20 ms window)
+    float   _rmsEnergySq = 0.0f;
+    float   _energyDb    = -96.0f;
+    float   _rmsCoeff    = 0.0f;
 
-    // ---- Blend alphas ----
-    // Tương đương DynamicEQ: alphaBoost↔alphaLow, alphaClip↔alphaHigh
-    float   _alphaBoost  = 0.0f;    // [0..1] extra boost (zone thấp)
-    float   _alphaClip   = 0.0f;    // [0..1] flowclip protection
-    float   _alphaDamp   = 0.0f;    // [0..1] fdamp (nested trong clip path)
+    // ---- Blend alpha ----
+    float   _alpha       = 0.0f;     // [-1, +1]
 
     // ---- Envelope smoothing coefficients ----
-    float   _envAttack   = 0.0f;    // per-sample IIR coeff
-    float   _envRelease  = 0.0f;    // per-sample IIR coeff
+    float   _envAttack   = 0.0f;
+    float   _envRelease  = 0.0f;
 
     // ---- Helpers ----
     void recalcFilters();
-
-    /**
-     * @brief 4-zone state machine — mirror DynamicEQ::computeTargetAlphas (Case 1).
-     *
-     *   alphaBoost  ↔  DynamicEQ.alphaLow   (active khi tín hiệu yếu)
-     *   alphaClip   ↔  DynamicEQ.alphaHigh  (active khi tín hiệu mạnh)
-     *   alphaDamp   :  nested bên trong vùng clip
-     */
-    void computeTargetAlphas(float  energyDb,
-                              float& outTargetBoost,
-                              float& outTargetClip,
-                              float& outTargetDamp) const;
+    float computeTargetAlpha(float energyDb) const;
 };

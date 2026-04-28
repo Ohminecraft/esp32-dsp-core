@@ -2,25 +2,21 @@
  * @file dynamic_bass.cpp
  * @brief Dynamic Bass — EQ-based bass extension, ESP32 Float32
  *
- * Refactored to DynamicEQ Case 1 — 4 zone với extra boost ở zone thấp:
+ * OPTIMIZED for ESP32:
+ *   - No sqrtf(): uses 10*log10(E²) ≡ 20*log10(sqrt(E²))
+ *   - Fast log10 via IEEE754 bit trick (~5 cycles vs ~200 for log10f)
+ *   - Decimated energy/alpha target: computed every 16 samples
+ *   - Conditional filter processing: unused paths skipped
  *
- *   Sơ đồ xử lý:
- *
- *                    ┌─────────────────────────────────────────────┐
- *   in──►LP──►boost──┼──►_fboostExtra──────────────────►·αBoost  │
- *                    │                                             │
- *                    ├──────────────────────────────────►·αFlat   ├──►+──►sat──►out
- *                    │                                             │   ↑
- *                    └──►_flowclip──►_fdamp                       │   │
- *                             lerp(clip,damp,αDamp)──►·αClip─────┘  in
- *
- *   Các filter (_fboostExtra, _flowclip, _fdamp) luôn được gọi mỗi sample
- *   để giữ biquad state ổn định — kết quả blend theo alpha.
+ * 3-zone architecture with gainBoost as sole gain control.
  */
 
 #include "dynamic_bass.h"
 #include <math.h>
 #include <string.h>
+
+// Decimation factor: compute expensive dB/alpha every N samples
+static constexpr int DECIM_FACTOR = 16;
 
 // ============================================================================
 // init
@@ -29,8 +25,8 @@ void DynamicBass::init(int32_t sampleRate, int32_t numChannels) {
     DspModule::init(sampleRate, numChannels);
 
     _fCut          = 80;
-    _intensity     = 50;
-    _intensityGain = 0.0f;
+    _gainBoostDb   = 600;       // +6.00 dB default
+    _gainBoostDbF  = 6.0f;
     _enhanced      = false;
     _clipattack    = 600;
     _cliprelease   = 200;
@@ -38,7 +34,6 @@ void DynamicBass::init(int32_t sampleRate, int32_t numChannels) {
     _boostFullDb = -2400;
     _neutralDb   = -1600;
     _clipFullDb  =  -800;
-    _dampFullDb  =  -400;
 
     recalcFilters();
     reset();
@@ -53,13 +48,10 @@ void DynamicBass::reset() {
     _fboost2.reset();
     _fboostExtra.reset();
     _flowclip.reset();
-    _fdamp.reset();
 
     _rmsEnergySq = 0.0f;
     _energyDb    = -96.0f;
-    _alphaBoost  = 0.0f;
-    _alphaClip   = 0.0f;
-    _alphaDamp   = 0.0f;
+    _alpha       = 0.0f;
 }
 
 // ============================================================================
@@ -72,12 +64,9 @@ bool DynamicBass::setCutoffFreq(int32_t fCut) {
     return true;
 }
 
-void DynamicBass::setIntensity(int32_t intensity) {
-    if (intensity < 0)   intensity = 0;
-    if (intensity > 100) intensity = 100;
-    _intensity     = intensity;
-    float t        = (float)intensity / 100.0f;
-    _intensityGain = t * t * 20.0f;
+void DynamicBass::setGainBoost(int32_t gainDb_x100) {
+    _gainBoostDb  = gainDb_x100;
+    _gainBoostDbF = (float)gainDb_x100 / 100.0f;
     recalcFilters();
 }
 
@@ -86,11 +75,10 @@ void DynamicBass::setEnhanced(bool enhanced) {
     recalcFilters();
 }
 
-// Threshold setters — không cần recalcFilters, dùng trực tiếp trong process()
+// Threshold setters
 void DynamicBass::setBoostFullThreshold(int32_t db_001) { _boostFullDb = db_001; }
 void DynamicBass::setNeutralThreshold  (int32_t db_001) { _neutralDb   = db_001; }
 void DynamicBass::setClipFullThreshold (int32_t db_001) { _clipFullDb  = db_001; }
-void DynamicBass::setDampFullThreshold (int32_t db_001) { _dampFullDb  = db_001; }
 
 void DynamicBass::setClipAttack(int32_t ms) {
     if (ms <= 0) ms = 1;
@@ -108,28 +96,29 @@ void DynamicBass::setClipRelease(int32_t ms) {
 // recalcFilters
 // ============================================================================
 void DynamicBass::recalcFilters() {
-    const float fc = (float)_fCut;
-    const float fs = (float)_sampleRate;
+    const float fc   = (float)_fCut;
+    const float fs   = (float)_sampleRate;
+    const float gain = _gainBoostDbF;   // dB
 
     _flp1.design(EQ_FILTER_TYPE_LOW_PASS, fc + 10.0f, 0.707f, 0.0f, fs);
 
-    // Main boost
-    _fboost.design(EQ_FILTER_TYPE_LOW_SHELF, fc, 0.1f, _intensityGain, fs);
+    // Main boost — low shelf
+    _fboost.design(EQ_FILTER_TYPE_LOW_SHELF, fc, 0.1f, gain, fs);
 
-    // Enhanced punch (bypass khi _enhanced=false)
+    // Enhanced punch (bypass when _enhanced=false)
     if (_enhanced) {
-        float enhGain = (_intensityGain / 20.0f) * 6.0f;
+        float enhGain = (gain / 20.0f) * 6.0f;
         _fboost2.design(EQ_FILTER_TYPE_PEAKING, fc, 0.5f, enhGain, fs);
     } else {
         _fboost2.design(EQ_FILTER_TYPE_PEAKING, 1.0f, 0.707f, 0.0f, fs);
     }
 
-    const float extraGain = _intensityGain * 0.4f;
-    _fboostExtra.design(EQ_FILTER_TYPE_PEAKING, fc * 0.6f, 0.5f, extraGain, fs);
+    // Extra boost for low-energy zone
+    const float extraBoostGain = gain * 0.8f;
+    _fboostExtra.design(EQ_FILTER_TYPE_PEAKING, fc * 0.6f, 0.5f, extraBoostGain, fs);
 
+    // Sub limiter for high-energy zone
     _flowclip.design(EQ_FILTER_TYPE_PEAKING, 35.0f, 0.6f, -20.0f, fs);
-
-    _fdamp.design(EQ_FILTER_TYPE_PEAKING, fc, 0.6f, -_intensityGain + 18.0f, fs);
 
     _envAttack  = calc_envelope_coeff(_sampleRate, _clipattack);
     _envRelease = calc_envelope_coeff(_sampleRate, _cliprelease);
@@ -137,135 +126,106 @@ void DynamicBass::recalcFilters() {
 }
 
 // ============================================================================
-// computeTargetAlphas — 4-zone state machine (dBFS)
-//
-//   Mirror DynamicEQ::computeTargetAlphas (Case 1), chiều ngược:
-//     - alphaBoost hoạt động ở NĂNG LƯỢNG THẤP  (↔ DynamicEQ.alphaLow)
-//     - alphaClip  hoạt động ở NĂNG LƯỢNG CAO   (↔ DynamicEQ.alphaHigh)
-//     - alphaDamp  nested bên trong clip zone
-//
-//   B = boostFull,  N = neutral,  C = clipFull,  D = dampFull  (dBFS float)
-//
-//   energy ≤ B          → boost=1,        clip=0, damp=0
-//   B < energy < N      → boost ramps 1→0, clip=0, damp=0
-//   N ≤ energy ≤ N      → boost=0,        clip=0, damp=0   (no-proc zone)
-//   N < energy < C      → boost=0,        clip ramps 0→1, damp=0
-//   C ≤ energy < D      → boost=0,        clip=1, damp ramps 0→1
-//   energy ≥ D          → boost=0,        clip=1, damp=1
+// computeTargetAlpha — 3-zone state machine (dBFS)
 // ============================================================================
-void DynamicBass::computeTargetAlphas(float  energyDb,
-                                       float& outTargetBoost,
-                                       float& outTargetClip,
-                                       float& outTargetDamp) const
-{
+float IRAM_ATTR DynamicBass::computeTargetAlpha(float energyDb) const {
     const float B = (float)_boostFullDb / 100.0f;
     const float N = (float)_neutralDb   / 100.0f;
     const float C = (float)_clipFullDb  / 100.0f;
-    const float D = (float)_dampFullDb  / 100.0f;
-
-    outTargetBoost = 0.0f;
-    outTargetClip  = 0.0f;
-    outTargetDamp  = 0.0f;
 
     if (energyDb <= B) {
-        outTargetBoost = 1.0f;
-        return;
+        return 1.0f;
     }
     if (energyDb < N) {
         const float span = N - B;
-        outTargetBoost = (span > 1e-6f) ? (N - energyDb) / span : 0.0f;
-        return;
+        return (span > 1e-6f) ? (N - energyDb) / span : 0.0f;
     }
-
     if (energyDb < C) {
         const float span = C - N;
-        outTargetClip = (span > 1e-6f) ? (energyDb - N) / span : 1.0f;
-        return;
+        return (span > 1e-6f) ? -(energyDb - N) / span : -1.0f;
     }
-
-    outTargetClip = 1.0f;
-
-    if (energyDb < D) {
-        const float span = D - C;
-        outTargetDamp = (span > 1e-6f) ? (energyDb - C) / span : 1.0f;
-    } else {
-        outTargetDamp = 1.0f;
-    }
+    return -1.0f;
 }
 
 // ============================================================================
-// process
+// process  — OPTIMIZED
 // ============================================================================
 void IRAM_ATTR DynamicBass::process(float* __restrict samples, size_t numSamples) {
     if (!_enabled) return;
 
-    // Local copies tránh aliasing
     float rmsEnergySq = _rmsEnergySq;
-    float alphaBoost  = _alphaBoost;
-    float alphaClip   = _alphaClip;
-    float alphaDamp   = _alphaDamp;
+    float alpha       = _alpha;
 
     const float rmsCoeff = _rmsCoeff;
     const float envAtk   = _envAttack;
     const float envRel   = _envRelease;
+    const bool  enhanced = _enhanced;
+
+    // Cache target alpha from last known energy — updated every DECIM_FACTOR samples
+    float targetAlpha = computeTargetAlpha(_energyDb);
+    int   decimCount  = 0;
 
     for (size_t i = 0; i < numSamples; i++) {
         const int base = (int)(i * _numChannels);
 
-        float bassLp[2];
+        // ── LP filter + energy accumulation (cheap: 1 biquad + multiply) ──
         float sqSum = 0.0f;
-
+        float bassLp[2];
         for (int ch = 0; ch < _numChannels; ch++) {
             bassLp[ch] = _flp1.processSample(samples[base + ch], ch);
             sqSum += bassLp[ch] * bassLp[ch];
         }
 
-        const float sqAvg    = sqSum / (float)_numChannels;
-        rmsEnergySq          = rmsEnergySq + rmsCoeff * (sqAvg - rmsEnergySq);
-        const float rms      = (rmsEnergySq > 0.0f) ? sqrtf(rmsEnergySq) : 0.0f;
-        const float energyDb = linear_to_db(rms);   // floor tại -96 dBFS
+        // IIR energy update (cheap: 1 multiply-add)
+        const float sqAvg = sqSum * (1.0f / (float)_numChannels);
+        rmsEnergySq = rmsEnergySq + rmsCoeff * (sqAvg - rmsEnergySq);
 
-        float targetBoost = 0.0f, targetClip = 0.0f, targetDamp = 0.0f;
-        computeTargetAlphas(energyDb, targetBoost, targetClip, targetDamp);
+        // ── Decimated: expensive dB + alpha target every 16 samples ──
+        if (++decimCount >= DECIM_FACTOR) {
+            decimCount = 0;
+            // No sqrtf! Direct energy² → dB via fast bit-trick log2
+            const float energyDb = fast_energy_sq_to_db(rmsEnergySq);
+            targetAlpha = computeTargetAlpha(energyDb);
+        }
 
-        alphaBoost = envelope_follow(alphaBoost, targetBoost,
-                                     (targetBoost > alphaBoost) ? envAtk : envRel);
-        alphaClip  = envelope_follow(alphaClip,  targetClip,
-                                     (targetClip  > alphaClip)  ? envAtk : envRel);
-        alphaDamp  = envelope_follow(alphaDamp,  targetDamp,
-                                     (targetDamp  > alphaDamp)  ? envAtk : envRel);
+        // ── Per-sample alpha smoothing (cheap: 1 multiply-add) ──
+        const float coeff = (targetAlpha > alpha) ? envAtk : envRel;
+        alpha = envelope_follow(alpha, targetAlpha, coeff);
 
-        const float alphaFlat = (alphaBoost + alphaClip < 1.0f)
-                                 ? (1.0f - alphaBoost - alphaClip)
-                                 : 0.0f;
-
+        // ── Filter chain with conditional processing ──
         for (int ch = 0; ch < _numChannels; ch++) {
 
-            // --- Main boost ---
+            // Main boost (always runs — 1 biquad)
             float boosted = _fboost.processSample(bassLp[ch], ch);
-            if (_enhanced) {
+            if (enhanced) {
                 boosted = _fboost2.processSample(boosted, ch);
             }
 
-            const float extra = _fboostExtra.processSample(boosted, ch);
+            float result;
 
-            const float clipped   = _flowclip.processSample(boosted, ch);
-            const float damped    = _fdamp.processSample(clipped, ch);
-            const float protectedSig = clipped + alphaDamp * (damped - clipped);
+            if (alpha > 0.02f) {
+                // Low energy zone: extra boost active
+                const float extra = _fboostExtra.processSample(boosted, ch);
+                _flowclip.processSample(0.0f, ch);  // keep state alive (zero input = cheap)
+                result = boosted + alpha * (extra - boosted);
+            } else if (alpha < -0.02f) {
+                // High energy zone: clip protection active
+                _fboostExtra.processSample(0.0f, ch);  // keep state alive
+                const float clipped = _flowclip.processSample(boosted, ch);
+                result = boosted + (-alpha) * (clipped - boosted);
+            } else {
+                // Neutral zone: skip both extra filters entirely
+                _fboostExtra.processSample(0.0f, ch);
+                _flowclip.processSample(0.0f, ch);
+                result = boosted;
+            }
 
-            const float result = extra    * alphaBoost
-                               + boosted  * alphaFlat
-                               + protectedSig * alphaClip;
-
-            // --- Add to input + saturate ---
             samples[base + ch] = sat_float(samples[base + ch] + result);
         }
     }
 
-    // Ghi lại state
+    // Write back state
     _rmsEnergySq = rmsEnergySq;
-    _alphaBoost  = alphaBoost;
-    _alphaClip   = alphaClip;
-    _alphaDamp   = alphaDamp;
-    _energyDb    = linear_to_db((rmsEnergySq > 0.0f) ? sqrtf(rmsEnergySq) : 0.0f);
+    _alpha       = alpha;
+    _energyDb    = fast_energy_sq_to_db(rmsEnergySq);
 }

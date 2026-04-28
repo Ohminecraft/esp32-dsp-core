@@ -56,7 +56,7 @@ class Store extends EventEmitter {
         this.exciter = { cutoffFreq: 3000, dry: 100, wet: 30 };
 
         // Dynamic Bass
-        this.dynamicBass = { cutoffFreq: 80, intensity: 50, enhanced: 0, boostthreshold: -4000, neutralthreshold: -2000, clipthreshold: -1500, dampthreshold: -1000, clipattack: 600, cliprelease: 200 };
+        this.dynamicBass = { cutoffFreq: 80, gainBoost: 600, enhanced: 0, boostthreshold: -2400, neutralthreshold: -1600, clipthreshold: -800, clipattack: 600, cliprelease: 200 };
 
         // DRC (WIP)
         this.drc = {

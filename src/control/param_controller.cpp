@@ -166,7 +166,7 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
       db.setCutoffFreq(value);
       break;
     case 1:
-      db.setIntensity(value);
+      db.setGainBoost(value);
       break;
     case 2:
       db.setEnhanced(value);
@@ -181,14 +181,10 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
       db.setClipFullThreshold(value);
       break;
     case 6:
-      db.setDampFullThreshold(value);
-      break;
-    case 7:
       db.setClipAttack(value);
       break;
-    case 8:
+    case 7:
       db.setClipRelease(value);
-      break;
       break;
     default:
       _uart->sendError(0x04);
@@ -393,14 +389,13 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
 
   // DB
   sendPkt(MODULE_ID_DYNAMIC_BASS, 0, _pipeline->getDynamicBass().getCutoffFreq());
-  sendPkt(MODULE_ID_DYNAMIC_BASS, 1, _pipeline->getDynamicBass().getIntensity());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 1, _pipeline->getDynamicBass().getGainBoost());
   sendPkt(MODULE_ID_DYNAMIC_BASS, 2, _pipeline->getDynamicBass().getEnhanced());
   sendPkt(MODULE_ID_DYNAMIC_BASS, 3, _pipeline->getDynamicBass().getBoostFullThresh());
   sendPkt(MODULE_ID_DYNAMIC_BASS, 4, _pipeline->getDynamicBass().getNeutralThresh());
   sendPkt(MODULE_ID_DYNAMIC_BASS, 5, _pipeline->getDynamicBass().getClipFullThresh());
-  sendPkt(MODULE_ID_DYNAMIC_BASS, 6, _pipeline->getDynamicBass().getDampFullThresh());
-  sendPkt(MODULE_ID_DYNAMIC_BASS, 7, _pipeline->getDynamicBass().getClipAttack());
-  sendPkt(MODULE_ID_DYNAMIC_BASS, 8, _pipeline->getDynamicBass().getClipRelease());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 6, _pipeline->getDynamicBass().getClipAttack());
+  sendPkt(MODULE_ID_DYNAMIC_BASS, 7, _pipeline->getDynamicBass().getClipRelease());
 
   // DRC
   sendPkt(MODULE_ID_DRC, 0, _pipeline->getDrc()._bands[0].thresholdDbInt);
