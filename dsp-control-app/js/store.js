@@ -95,6 +95,10 @@ class Store extends EventEmitter {
     // ─── Module Enable/Disable ───────────────────────────────────
 
     setModuleEnabled(moduleId, enabled) {
+        if (!this.modules[moduleId]) {
+            // Auto-register unknown module IDs received from firmware
+            this.modules[moduleId] = { enabled: false };
+        }
         this.modules[moduleId].enabled = enabled;
         this.emit('module:enabled', moduleId, enabled);
     }

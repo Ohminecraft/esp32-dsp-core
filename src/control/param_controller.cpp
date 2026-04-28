@@ -358,7 +358,6 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
 
   // Enable states
   DspModule **chain = _pipeline->getChain();
-  _uart->sendFrame(CMD_ENABLE_MODULE, MODULE_ID_VOLUME, nullptr, 0);
   for (size_t i = 0; i < _pipeline->getChainLength(); i++) {
     DspModule *mod = chain[i];
     if (mod->isEnabled())
