@@ -50,9 +50,9 @@ void ParamController::handleCommand(const UartCommand &cmd) {
   case CMD_SET_DYNEQ_THRESH:
     handleSetDynEqThresholds(cmd);
     break;
-  case CMD_GET_SYSTEM_INFO:
-    handleGetSystemInfo(cmd);
-    break;
+  //case CMD_GET_SYSTEM_INFO:
+  //  handleGetSystemInfo(cmd);
+  //  break;
 
   case CMD_SAVE_PRESET:
     if (cmd.dataLen > 0)
@@ -326,6 +326,8 @@ void ParamController::handleSetDynEqThresholds(const UartCommand &cmd) {
 
   _uart->sendAck(cmd.moduleId, 0);
 }
+
+/*
 void ParamController::handleGetSystemInfo(const UartCommand &cmd) {
   uint8_t info[6];
   info[0] = static_cast<uint8_t>(DSP_SAMPLE_RATE >> 8);
@@ -337,6 +339,7 @@ void ParamController::handleGetSystemInfo(const UartCommand &cmd) {
 
   _uart->sendAck(MODULE_ID_SYSTEM, 0, info, sizeof(info));
 }
+*/
 
 int32_t ParamController::extractInt32(const uint8_t *data) {
   return (int32_t)data[0] | ((int32_t)data[1] << 8) | ((int32_t)data[2] << 16) |

@@ -94,7 +94,7 @@ public:
 
 protected:
     std::atomic<bool> _enabled = false;     // Default: disabled
-    int32_t _sampleRate  = DSP_SAMPLE_RATE;
+    int32_t _sampleRate  = DSP_SAMPLE_RATE_DEFAULT;
     int32_t _numChannels = DSP_NUM_CHANNELS;
 };
 

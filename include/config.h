@@ -10,6 +10,7 @@
 #define CONFIG_H
 
 #include <stdint.h>
+#include <stdatomic.h>
 
 #define FIRMWARE_VERSION "1.1"
 
@@ -17,10 +18,17 @@
 // Audio Configuration
 // ============================================================================
 
-#define DSP_SAMPLE_RATE         96000   // Hz
+// DSP_SAMPLE_RATE is no longer a compile-time constant.
+// The actual rate is determined at runtime by AudioSync (QCC5125 clock detect).
+// Use g_currentSampleRate everywhere you previously used DSP_SAMPLE_RATE.
+//
+// DSP_SAMPLE_RATE_DEFAULT: used only for initial I2S/pipeline init before
+// AudioSync fires its first callback. AudioSync will reinit within ~100ms.
+#define DSP_SAMPLE_RATE_DEFAULT 96000   // Hz — max QCC5125 LDAC rate
+
 #define DSP_NUM_CHANNELS        2       // Stereo
 #define DSP_FRAME_SIZE          256     // Samples per frame per channel
-#define DSP_FRAME_SAMPLES       (DSP_FRAME_SIZE * DSP_NUM_CHANNELS) // Total samples per frame (256)
+#define DSP_FRAME_SAMPLES       (DSP_FRAME_SIZE * DSP_NUM_CHANNELS)
 
 // ============================================================================
 // EQ Configuration
@@ -45,27 +53,28 @@
 #define MODULE_ID_COMPANDER     0x02
 #define MODULE_ID_EXCITER       0x03
 #define MODULE_ID_DYNAMIC_BASS  0x04
-//#define MODULE_ID_BASS_CLASSIC  0x05
-//#define MODULE_ID_STEREO_WIDEN  0x06
-#define MODULE_ID_DYNAMIC_EQ    0x05    // Dynamic EQ — dual EQ system
-#define MODULE_ID_EQ_DSP_1      0x06    // EQ1 — main parametric EQ
-#define MODULE_ID_EQ_DSP_2      0x07    // EQ2 — post EQ / sound signature
-#define MODULE_ID_DRC           0x08    // DRC — dynamic range compression
-#define MODULE_ID_VOLUME        0x09    // Master volume
-//#define MODULE_ID_SOFT_CLIP     0x0A    // Soft clipper
-#define MODULE_ID_SYSTEM        0xF0    // System control
+#define MODULE_ID_DYNAMIC_EQ    0x05
+#define MODULE_ID_EQ_DSP_1      0x06
+#define MODULE_ID_EQ_DSP_2      0x07
+#define MODULE_ID_DRC           0x08
+#define MODULE_ID_VOLUME        0x09
+#define MODULE_ID_SYSTEM        0xF0
 
 // ============================================================================
 // Task Configuration
 // ============================================================================
 
-#define AUDIO_TASK_CORE         1       // Pin audio task to Core 1
-#define AUDIO_TASK_PRIORITY     23      // High priority for real-time audio
-#define AUDIO_TASK_STACK_SIZE   16384   // Stack size in bytes (increased for DynamicEQ stack buffers)
+#define AUDIO_TASK_CORE         1
+#define AUDIO_TASK_PRIORITY     23
+#define AUDIO_TASK_STACK_SIZE   16384
 
-#define CONTROL_TASK_CORE       0       // Pin control task to Core 0
-#define CONTROL_TASK_PRIORITY   5       // Low priority for control
-#define CONTROL_TASK_STACK_SIZE 4096    // Stack size in bytes
+#define CONTROL_TASK_CORE       0
+#define CONTROL_TASK_PRIORITY   5
+#define CONTROL_TASK_STACK_SIZE 4096
+
+// AudioSync monitor task — Core 1, lower priority than audio task
+#define SYNC_TASK_CORE          1
+#define SYNC_TASK_PRIORITY      5
 
 // ============================================================================
 // UART Control Protocol
@@ -79,23 +88,7 @@
 // Preset Configuration
 // ============================================================================
 
-#define MAX_PRESET_SLOTS        8       // NVS preset slots
-
-// ============================================================================
-// Input/Output Source
-// ============================================================================
-
-/*
-typedef enum {
-    INPUT_SOURCE_I2S = 0,
-    INPUT_SOURCE_ADC = 1
-} InputSource;
-
-typedef enum {
-    OUTPUT_SOURCE_I2S = 0,          // External DAC (PCM5102A)
-    OUTPUT_SOURCE_ANALOG = 1        // Internal DAC (GPIO25/26)
-} OutputSource;
-*/
+#define MAX_PRESET_SLOTS        8
 
 // ============================================================================
 // Feature Flags
@@ -108,27 +101,11 @@ typedef enum {
 // ============================================================================
 // Debug Logging Configuration
 // ============================================================================
-//
-// Debug level controlled via platformio.ini: -DCORE_DEBUG_LEVEL=0..5
-// Levels:
-//   0 = NONE   (no debug output, smallest binary)
-//   1 = ERROR  (errors only)
-//   2 = WARN   (warnings + errors)
-//   3 = INFO   (general info logs)
-//   4 = DEBUG  (detailed debug info — recommended for development)
-//   5 = VERBOSE (very detailed — for DSP module debugging)
-//
-// Usage in code:
-//   CORE_LOGI("tag", "Info message: %d\n", value);
-//   CORE_LOGD("tag", "Debug message: %f\n", float_val);
-//   CORE_LOGW("tag", "Warning: %s\n", str);
-//   CORE_LOGE("tag", "Error: %d\n", errno);
 
 #ifndef CORE_DEBUG_LEVEL
-#define CORE_DEBUG_LEVEL 0  // Default: no debug if not defined
+#define CORE_DEBUG_LEVEL 0
 #endif
 
-// Logging macros using ESP-IDF log functions
 #include <esp_log.h>
 
 #define DSP_LOG_TAG "ESP32_DSP"

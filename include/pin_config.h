@@ -9,52 +9,66 @@
 // ============================================================================
 // I2S Output (to PCM5102A DAC)
 //
-// ⚠️ WARNING: GPIO25 = DAC1, GPIO26 = DAC2 (hardwired in silicon).
-// If you use GPIO25/26 for I2S BCK/WS, the analog output mode
-// CANNOT work simultaneously. When switching to analog output,
-// the I2S driver is uninstalled and replaced with I2S_MODE_DAC_BUILT_IN
-// which takes over GPIO25/26 automatically.
+// I2S_NUM_0 — Always MASTER. ESP32 generates BCK/WS for PCM5102A.
+// Output BCK/WS (GPIO26/25) are SEPARATE from input (GPIO4/5).
+// AudioSync detects QCC5125 sample rate and reinits output at matching rate.
 //
-// To use BOTH modes independently, move BCK/WS to other GPIOs.
+// ⚠️ GPIO25 = DAC1, GPIO26 = DAC2 (hardwired in silicon).
+//    Using these for I2S digital output is fine — DAC function is overridden.
 // ============================================================================
 
-#define I2S_OUT_BCK_PIN         26      // Bit clock (⚠️ shared with DAC2)
-#define I2S_OUT_WS_PIN          25      // Word select / LRCK (⚠️ shared with DAC1)
-#define I2S_OUT_DATA_PIN        22      // Serial data out
+#define I2S_OUT_BCK_PIN         26               // Bit clock out → PCM5102A
+#define I2S_OUT_WS_PIN          25               // Word select out → PCM5102A
+#define I2S_OUT_DATA_PIN        22               // Serial data out → PCM5102A
 
 // ============================================================================
-// I2S Input (from PCM1808 ADC)
+// I2S Input (from QCC5125 Bluetooth receiver — I2S MASTER)
 //
-// BCK và WS dùng chung với Output để PCM1808 và PCM5102A đồng bộ clock.
-// Nối dây:
-//   GPIO26 → BCK  của cả PCM1808 lẫn PCM5102A
-//   GPIO25 → LRCK của cả PCM1808 lẫn PCM5102A
-//   GPIO0  → SCK  của PCM1808 (MCLK, bắt buộc)
+// QCC5125 drives BCK and WS at 24-bit/96kHz (LDAC) or 44.1/48kHz (other codecs).
+// ESP32 I2S_NUM_1 is SLAVE — it follows QCC5125 clock.
 //
-// ⚠️ GPIO0 là pin duy nhất hỗ trợ MCLK output trên ESP32.
-//    Đảm bảo GPIO0 không bị kéo LOW lúc boot (sẽ vào flash mode).
+// Wiring:
+//   QCC5125 BCK  → GPIO4  (also feeds PCM5102A BCK and I2S_NUM_0 BCK)
+//   QCC5125 WS   → GPIO5  (also feeds PCM5102A WS  and I2S_NUM_0 WS)
+//   QCC5125 DOUT → GPIO35 (input-only pin)
+//
+// QCC5125 is self-clocked — no MCLK needed from ESP32.
 // ============================================================================
 
-#define I2S_IN_BCK_PIN          I2S_OUT_BCK_PIN   // GPIO26 — chung với output
-#define I2S_IN_WS_PIN           I2S_OUT_WS_PIN    // GPIO25 — chung với output
-#define I2S_IN_DATA_PIN         35                // Serial data in (input-only pin)
-#define I2S_IN_MCLK_PIN         0                 // MCLK → SCK của PCM1808 (GPIO0)
+#define I2S_IN_BCK_PIN          4                // Bit clock from QCC5125
+#define I2S_IN_WS_PIN           5                // Word select from QCC5125
+#define I2S_IN_DATA_PIN         35               // Serial data in (input-only pin)
+#define I2S_IN_MCLK_PIN         0                // Using for PCM1808
 
 // ============================================================================
-// Analog Input (ESP32 ADC) — không dùng khi có PCM1808
+// Clock Monitor (AudioSync — PCNT hardware pulse counter)
+//
+// Monitors BCK from QCC5125 to detect:
+//   1. Clock presence / absence
+//   2. Sample rate changes (44.1 / 48 / 96 kHz)
+//
+// Uses PCNT unit 0. BCK pin must be readable — GPIO4 is fine.
 // ============================================================================
 
-//#define ADC_INPUT_LEFT_PIN    36     // ADC1_CH0 (GPIO36 / VP)
+#define SYNC_BCK_MONITOR_PIN    I2S_IN_BCK_PIN   // GPIO4 — BCK pulse counting
+#define SYNC_DETECT_INTERVAL_MS 100              // Measure window in ms
+#define SYNC_ABSENT_THRESHOLD   10               // Pulses below this = clock absent
+
+// ============================================================================
+// Analog Input (ESP32 ADC) — unused
+// ============================================================================
+
+//#define ADC_INPUT_LEFT_PIN    36
 //#define ADC_INPUT_LEFT        ADC_CHANNEL_0
-//#define ADC_INPUT_RIGHT_PIN   39     // ADC1_CH3 (GPIO39 / VN)
+//#define ADC_INPUT_RIGHT_PIN   39
 //#define ADC_INPUT_RIGHT       ADC_CHANNEL_6
 
 // ============================================================================
 // Analog Output (ESP32 Internal DAC) — fixed in silicon
 // ============================================================================
 
-//#define DAC_OUT_LEFT_PIN      25      // DAC_CHANNEL_1 (informational only)
-//#define DAC_OUT_RIGHT_PIN     26      // DAC_CHANNEL_2 (informational only)
+//#define DAC_OUT_LEFT_PIN      25      // DAC_CHANNEL_1
+//#define DAC_OUT_RIGHT_PIN     26      // DAC_CHANNEL_2
 
 // ============================================================================
 // UART Control (Serial2)
@@ -67,7 +81,7 @@
 // I2S Port Numbers
 // ============================================================================
 
-#define I2S_OUTPUT_PORT         I2S_NUM_0   // Main output (PCM5102A)
-#define I2S_INPUT_PORT          I2S_NUM_1   // Input (PCM1808)
+#define I2S_OUTPUT_PORT         I2S_NUM_0   // Output (PCM5102A) — MASTER (ESP32 drives)
+#define I2S_INPUT_PORT          I2S_NUM_1   // Input  (QCC5125)  — SLAVE under QCC5125
 
 #endif // PIN_CONFIG_H

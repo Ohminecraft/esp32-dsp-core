@@ -34,7 +34,7 @@ private:
   void handleSetEqBand(const UartCommand &cmd);
   void handleSetDynEqBand(const UartCommand &cmd, bool isHigh);
   void handleSetDynEqThresholds(const UartCommand &cmd);
-  void handleGetSystemInfo(const UartCommand &cmd);
+  //void handleGetSystemInfo(const UartCommand &cmd);
   void handleGetAllState(const UartCommand &cmd);
 
   // Utility: extract int32 from data buffer
