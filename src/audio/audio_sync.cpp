@@ -233,7 +233,7 @@ void AudioSync::start() {
         nullptr,
         5,          // Priority — higher than idle, lower than audio tasks
         &_taskHandle,
-        1           // Core 1 — keep Core 0 for DSP
+        CONTROL_TASK_CORE
     );
     LOG_INFO(TAG, "Monitor task started");
 }

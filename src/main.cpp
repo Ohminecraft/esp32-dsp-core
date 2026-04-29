@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file main.cpp
  * @brief ESP32 DSP Core - Main entry point
  *
@@ -34,6 +34,7 @@
 #include "control/uart_protocol.h"
 #include "control/param_controller.h"
 #include "control/preset_manager.h"
+#include "utils/status_led.h"
 #include "utils/debug_log.h"
 
 // ============================================================================
@@ -67,7 +68,7 @@ static volatile uint32_t g_lastFrameUs = 0;
 static volatile uint32_t g_maxFrameUs  = 0;
 
 // ============================================================================
-// Pipeline Reinit — called from AudioSync callback (sync task context, Core 1)
+// Pipeline Reinit — called from AudioSync callback (sync task context, Core 0)
 // ============================================================================
 
 static void reinitPipeline(uint32_t newRateHz, bool clockPresent) {
@@ -119,7 +120,7 @@ static void reinitPipeline(uint32_t newRateHz, bool clockPresent) {
 
 // ============================================================================
 // AudioSync Rate Change Callback
-// Called from AudioSync monitor task (Core 1, Priority 5)
+// Called from AudioSync monitor task (Core 0, Priority 5)
 // ============================================================================
 
 static void onRateChange(ClockState state, uint32_t rateHz) {
@@ -195,38 +196,51 @@ void controlTask(void* param) {
             g_paramCtrl.handleCommand(g_uart.getCommand());
         }
 
-        // Periodic status report
+        // Periodic status report (every 2s)
         uint32_t nowMs = millis();
+
+        // Cache values for LED update outside the timer block
+        static float s_usage = 0;
+        static uint8_t s_heapPct = 100;
+        static uint32_t s_fs = 0;
+
         if (nowMs - lastStatusMs >= 2000) {
             lastStatusMs = nowMs;
 
             // Use current dynamic sample rate for budget calculation
-            uint32_t fs = g_currentSampleRate;
-            float budgetUs = (fs > 0)
-                ? ((float)DSP_FRAME_SIZE / (float)fs * 1e6f)
+            s_fs = g_currentSampleRate;
+            float budgetUs = (s_fs > 0)
+                ? ((float)DSP_FRAME_SIZE / (float)s_fs * 1e6f)
                 : 2666.67f; // fallback: 96kHz budget
 
-            float usage = (budgetUs > 0.0f)
+            s_usage = (budgetUs > 0.0f)
                 ? ((float)g_lastFrameUs / budgetUs * 100.0f)
                 : 0.0f;
-            if (usage > 100.0f) usage = 100.0f;
+            if (s_usage > 100.0f) s_usage = 100.0f;
 
-            uint16_t cpu10  = (uint16_t)(usage * 10.0f);
-            uint8_t heapPct = (uint8_t)((float)ESP.getFreeHeap() / ESP.getHeapSize() * 100.0f);
+            uint16_t cpu10  = (uint16_t)(s_usage * 10.0f);
+            s_heapPct = (uint8_t)((float)ESP.getFreeHeap() / ESP.getHeapSize() * 100.0f);
 
-            uint8_t data[3] = {
+            uint8_t data[7] = {
                 (uint8_t)(cpu10 & 0xFF),
                 (uint8_t)((cpu10 >> 8) & 0xFF),
-                heapPct
+                s_heapPct,
+                (uint8_t)(s_fs & 0xFF),
+                (uint8_t)((s_fs >> 8) & 0xFF),
+                (uint8_t)((s_fs >> 16) & 0xFF),
+                (uint8_t)((s_fs >> 24) & 0xFF)
             };
-            g_uart.sendFrame(CMD_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, 3);
+            g_uart.sendFrame(CMD_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, 7);
 
-            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %u/%u (%u%%)",
-                g_lastFrameUs, usage, (unsigned long)fs,
-                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), heapPct);
+            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%)",
+                g_lastFrameUs, s_usage, (unsigned long)s_fs,
+                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct);
 
             g_maxFrameUs = 0;
         }
+
+        // Smooth RGB LED update (Core 0)
+        StatusLED::update(s_usage, s_heapPct, g_currentSampleRate);
 
         vTaskDelay(1);
     }
@@ -275,7 +289,7 @@ void setup() {
         g_pipeline.getVolume().enable();
     }
 
-    // 5. Init AudioSync — starts PCNT clock monitor on Core 1
+    // 5. Init AudioSync — starts PCNT clock monitor on Core 0
     //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)
     LOG_INFO("INIT", "Starting AudioSync clock monitor...");
     AudioSync::init(onRateChange);

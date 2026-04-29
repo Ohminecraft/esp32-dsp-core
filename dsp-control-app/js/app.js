@@ -320,10 +320,11 @@ parser.onFrame((frame) => {
         store.updateParam('dynamicEq', 'attackMs', leToInt32(frame.data, 12));
         store.updateParam('dynamicEq', 'releaseMs', leToInt32(frame.data, 16));
     }
-    else if (frame.cmd === CMD.REPORT_CPU_USAGE && frame.data.length >= 3) {
+    else if (frame.cmd === CMD.REPORT_CPU_USAGE && frame.data.length >= 7) {
         const cpu10 = frame.data[0] | (frame.data[1] << 8);
         const heapPct = frame.data[2];
-        updateCpuUI(cpu10 / 10.0, 100 - heapPct);
+        const fs = readInt32(frame.data, 3);
+        updateCpuUI(cpu10 / 10.0, 100 - heapPct, fs);
     }
 });
 
@@ -1070,20 +1071,23 @@ function mountGraphToAccordion(acc) {
     eqGraph = new EQGraph(canvas);
 }
 
-function updateCpuUI(usage, heapPct) {
+function updateCpuUI(usage, heapPct, fs) {
     const cpuContainer = document.getElementById('cpu-container');
     const cpuBar = document.getElementById('cpu-bar-fill');
     const cpuText = document.getElementById('cpu-value');
     const heapContainer = document.getElementById('heap-container');
     const heapBar = document.getElementById('heap-bar-fill');
     const heapText = document.getElementById('heap-value');
+    const fsContainer = document.getElementById('fs-container');
+    const fsText = document.getElementById('fs-value');
 
     if (!cpuContainer || !cpuBar || !cpuText) return;
 
     // Show containers if they were hidden
-    if (cpuContainer.style.display === 'none' && store.system.connected) {
-        cpuContainer.style.display = 'flex';
-        if (heapContainer) heapContainer.style.display = 'flex';
+    if (store.system.connected) {
+        if (cpuContainer.style.display === 'none') cpuContainer.style.display = 'flex';
+        if (heapContainer && heapContainer.style.display === 'none') heapContainer.style.display = 'flex';
+        if (fsContainer && fsContainer.style.display === 'none') fsContainer.style.display = 'flex';
     }
 
     cpuText.textContent = `${usage.toFixed(1)}%`;
@@ -1102,6 +1106,17 @@ function updateCpuUI(usage, heapPct) {
         if (heapPct > 85) heapBar.style.background = 'var(--accent-red)';
         else if (heapPct > 70) heapBar.style.background = 'var(--accent-orange)';
         else heapBar.style.background = 'var(--accent-purple)';
+    }
+
+    // Update Sample Rate
+    if (fsContainer && fsText) {
+        if (fs > 0) {
+            fsText.textContent = `${(fs / 1000).toFixed(1)} kHz`;
+            fsText.style.color = 'var(--accent-green)';
+        } else {
+            fsText.textContent = 'Clock Absent';
+            fsText.style.color = 'var(--accent-red)';
+        }
     }
 }
 

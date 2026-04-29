@@ -21,6 +21,7 @@
 
 #include <stdint.h>
 #include <functional>
+#include "config.h"
 #include "../utils/debug_log.h"
 
 // ---------------------------------------------------------------------------
