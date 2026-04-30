@@ -251,9 +251,10 @@ void controlTask(void* param) {
                 : 0.0f;
             if (s_usage > 100.0f) s_usage = 100.0f;
 
+            s_usage = g_isclockabsent ? 0 : s_usage;
+
             uint16_t cpu10  = (uint16_t)(s_usage * 10.0f);
 
-            cpu10 = g_isclockabsent ? 0 : cpu10;
             s_heapPct = (uint8_t)((float)ESP.getFreeHeap() / ESP.getHeapSize() * 100.0f);
 
             uint8_t data[7] = {
