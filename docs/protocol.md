@@ -1,4 +1,4 @@
-# UART Protocol Specification
+# Binary Protocol Specification
 
 > **Languages**: [English](#english) | [Tiếng Việt](#tiếng-việt)
 
@@ -6,174 +6,91 @@
 
 <a name="english"></a>
 
-## Binary UART Protocol (English)
+## ⚡ Binary Protocol (English)
 
-### Frame Format
+The ESP32 DSP Core uses a compact binary protocol for all control operations. It supports both **Point-to-Point UART** and **Atomic WebSocket Batching**.
+
+### 1. Frame Format
+
+Each packet (Frame) follows this structure:
 
 ```
-[SYNC_H][SYNC_L][CMD][MODULE_ID][LEN_H][LEN_L][DATA...][CRC8]
-  0xAA    0x55    1B    1B        1B     1B     N bytes  1B
+[SYNC1][SYNC2][CMD][MOD_ID][LEN_L][LEN_H][DATA...][CRC8]
+ 0xAA   0x55   1B    1B      1B     1B     N bytes  1B
 ```
 
-**Total Frame Size**: 8 + N bytes (N = payload length)
-
-### Field Descriptions
-
-| Field | Size | Description |
-|-------|------|-------------|
-| SYNC_H | 1B | Start marker high: 0xAA |
-| SYNC_L | 1B | Start marker low: 0x55 |
-| CMD | 1B | Command opcode (0x01-0x0F) |
-| MODULE_ID | 1B | Target module ID (0-11) or 0xFF for system |
-| LEN_H | 1B | Payload length high byte |
-| LEN_L | 1B | Payload length low byte |
-| DATA | N | Payload data |
-| CRC8 | 1B | CRC8 checksum of entire frame |
-
-**Byte Order**: Big-endian for multi-byte values
+- **SYNC**: `0xAA55`
+- **CMD**: Command Opcode.
+- **MOD_ID**: Target DSP Module ID.
+- **LEN**: 16-bit payload length (Little Endian).
+- **CRC8**: XOR-based checksum of all previous bytes.
 
 ---
 
-### Command Opcodes
+### 2. Command Opcodes
 
-| Opcode | Name | Direction | Payload |
-|--------|------|-----------|---------|
-| 0x01 | SET_PARAM | PC→ESP | param_index(1B) \| value(4B float) |
-| 0x02 | GET_PARAM | PC→ESP | param_index(1B) |
-| 0x03 | ENABLE_MODULE | PC→ESP | (none) |
-| 0x04 | DISABLE_MODULE | PC→ESP | (none) |
-| 0x05 | SET_EQ_BAND | PC→ESP | band(1B) \| freq(4B) \| gain(4B) \| q(4B) |
-| 0x06 | SAVE_PRESET | PC→ESP | slot(1B) |
-| 0x07 | LOAD_PRESET | PC→ESP | slot(1B) |
-| 0x08 | GET_STATUS | ESP→PC | cpu_usage(1B) \| heap_left(2B) |
-| 0x0F | RESET | PC→ESP | (none) |
-
----
-
-### Example Transactions
-
-#### Example 1: Set Exciter Gain to +5dB
-
-**Request**:
-```
-AA 55 01 03 00 05 00 7F 40 00 XX
-│  │  │  │  │  │  │  └─ float +5.0 (IEEE 754)
-│  │  │  │  │  │  └──── Data length: 5 bytes
-│  │  │  │  │  └─────── Param index: 0 (Gain)
-│  │  │  │  └────────── Module 3 (Exciter)
-│  │  │  └───────────── CMD: SET_PARAM (0x01)
-│  │  └──────────────── SYNC: 0xAA55
-└─ 0xAA
-```
-
-**Response**: (none - fire and forget)
+| Opcode | Name | Description |
+|--------|------|-------------|
+| **0x01** | SET_PARAM | Set a specific parameter index to a value |
+| **0x03** | ENABLE_MODULE | Enable processing for a module |
+| **0x04** | DISABLE_MODULE | Bypass processing for a module |
+| **0x05** | SET_EQ_BAND | Set EQ band parameters (Freq, Gain, Q) |
+| **0x06** | SAVE_PRESET | Save current state to NVS slot (0-7) |
+| **0x07** | LOAD_PRESET | Load state from NVS slot |
+| **0x09** | GET_ALL_STATE | Request full state dump (triggers batch) |
+| **0x20** | WIFI_SCAN | Scan for nearby WiFi networks |
+| **0x21** | WIFI_SET_STA | Configure Station credentials |
+| **0x24** | WIFI_GET_STATUS | Get current IP/RSSI/SSID |
+| **0x32** | GET_SYSTEM_ALIVE | Heartbeat / Ping |
 
 ---
 
-#### Example 2: Get Volume Parameter
+### 3. Module IDs
 
-**Request**:
-```
-AA 55 02 0B 00 01 00 XX
-   └── Module 11 (Volume)
-   └────── CMD: GET_PARAM (0x02)
-   └────────── Param index: 0 (Gain)
-```
-
-**Response**:
-```
-AA 55 02 0B 00 04 00 7F 40 00 XX
-            └── Length: 4 bytes
-            └────── Value: +5.0dB (float)
-```
+| ID | Module Name | Primary Parameters |
+|----|-------------|--------------------|
+| **0x01** | Compander | Threshold, Ratios, Attack/Release |
+| **0x02** | Exciter | Cutoff Frequency, Mix |
+| **0x03** | Dynamic Bass | Gain, Harmonic Intensity |
+| **0x06** | Dynamic EQ | Thresholds, HPF/LPF |
+| **0x07** | EQ1 (Main) | 10-band Parametric EQ |
+| **0x08** | EQ2 (Tone) | 10-band Post-EQ |
+| **0x09** | DRC | Compression Curves |
+| **0x0A** | Volume | Master Gain (dB) |
+| **0xFF** | System | WiFi, Presets, Telemetry |
 
 ---
 
-### CRC8 Calculation
+### 4. WebSocket Batching
 
-XOR-based CRC8:
-
-```python
-def calc_crc8(data):
-    crc = 0
-    for byte in data:
-        crc ^= byte
-    return crc
-
-# Example:
-frame_without_crc = [0xAA, 0x55, 0x01, 0x03, 0x00, 0x05, 0x00, 0x7F, 0x40, 0x00]
-crc = calc_crc8(frame_without_crc)
-full_frame = frame_without_crc + [crc]
-```
-
----
-
-### Module ID Reference
-
-```
-0x00 = NoiseGate
-0x01 = Compander
-0x02 = Exciter
-0x03 = VirtualBass
-0x04 = BassClassic
-0x05 = StereoWidener
-0x06 = DynamicEQ
-0x07 = EQ1 (ParametricEQ)
-0x08 = EQ2 (ParametricEQ)
-0x09 = DRC
-0x0A = Volume
-0x0B = SoftClipper
-0xFF = System (GET_STATUS, RESET)
-```
+For high-speed synchronization over WiFi, multiple frames are concatenated into a single binary message:
+`[Frame 1][Frame 2]...[Frame N]`
+The server (ESP32) uses a **2KB static buffer** to batch these frames, ensuring atomic updates and sub-500ms sync times.
 
 ---
 
 <a name="tiếng-việt"></a>
 
-## Giao Thức UART Nhị Phân (Tiếng Việt)
+## ⚡ Giao Thức Nhị Phân (Tiếng Việt)
 
-### Định Dạng Frame
+### 1. Định dạng Frame
+Mạch sử dụng giao thức nhị phân tối ưu để giảm độ trễ điều khiển.
 
 ```
-[SYNC_H][SYNC_L][CMD][MODULE_ID][LEN_H][LEN_L][DATA...][CRC8]
-  0xAA    0x55    1B    1B        1B     1B     N bytes  1B
+[Bắt đầu: 0xAA55][Lệnh: 1B][Module: 1B][Độ dài: 2B LE][Dữ liệu: N bytes][Checksum: 1B]
 ```
 
-### Mô Tả Trường
+### 2. Mã lệnh quan trọng
+- **0x01 (SET_PARAM)**: Cấu hình tham số (Volume, Gain, Thresh...).
+- **0x05 (SET_EQ_BAND)**: Chỉnh EQ (Tần số, Độ lợi, Q).
+- **0x09 (GET_ALL_STATE)**: Lệnh đồng bộ toàn bộ App (Dùng Batching).
+- **0x20 - 0x24**: Các lệnh cấu hình WiFi.
+- **0x32**: Lệnh Heartbeat (Nhịp tim) duy trì kết nối.
 
-| Trường | Kích Thước | Mô Tả |
-|--------|-----------|-------|
-| SYNC_H | 1B | Ký hiệu bắt đầu cao: 0xAA |
-| SYNC_L | 1B | Ký hiệu bắt đầu thấp: 0x55 |
-| CMD | 1B | Mã lệnh (0x01-0x0F) |
-| MODULE_ID | 1B | ID module đích (0-11) |
-| LEN_H | 1B | Byte cao của độ dài payload |
-| LEN_L | 1B | Byte thấp của độ dài payload |
-| DATA | N | Dữ liệu payload |
-| CRC8 | 1B | Checksum CRC8 |
-
-### Mã Lệnh
-
-| Mã | Tên | Hướng | Payload |
-|----|----|------|---------|
-| 0x01 | SET_PARAM | PC→ESP | param_index(1B) \| value(4B float) |
-| 0x02 | GET_PARAM | PC→ESP | param_index(1B) |
-| 0x03 | ENABLE_MODULE | PC→ESP | (none) |
-| 0x04 | DISABLE_MODULE | PC→ESP | (none) |
-| 0x05 | SET_EQ_BAND | PC→ESP | band(1B) \| freq(4B) \| gain(4B) \| q(4B) |
-| 0x06 | SAVE_PRESET | PC→ESP | slot(1B) |
-| 0x07 | LOAD_PRESET | PC→ESP | slot(1B) |
-| 0x08 | GET_STATUS | ESP→PC | cpu_usage(1B) \| heap_left(2B) |
-| 0x0F | RESET | PC→ESP | (none) |
+### 3. Đặc tính kỹ thuật
+- **Dữ liệu**: Sử dụng số nguyên cố định (Fixed-point) thay vì số thực để tối ưu CPU.
+- **Batching**: Gộp hàng trăm gói tin vào 1 gói WebSocket duy nhất để đồng bộ trong tích tắc.
+- **An toàn**: Mọi gói tin đều được kiểm tra CRC8 trước khi thực thi.
 
 ---
-
-### Tính CRC8
-
-```python
-def calc_crc8(data):
-    crc = 0
-    for byte in data:
-        crc ^= byte
-    return crc
-```
+**Last Updated**: April 30, 2026

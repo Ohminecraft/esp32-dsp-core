@@ -10,12 +10,13 @@
 
 void ParamController::init(DspPipeline *pipeline, AudioInput *input,
                            AudioOutput *output, UartProtocol *uart,
-                           PresetManager *presetMgr) {
-  _pipeline = pipeline;
-  _input = input;
-  _output = output;
-  _uart = uart;
+                           PresetManager *presetMgr, WiFiManager *wifiMgr) {
+  _pipeline  = pipeline;
+  _input     = input;
+  _output    = output;
+  _uart      = uart;
   _presetMgr = presetMgr;
+  _wifiMgr   = wifiMgr;
 }
 
 void ParamController::handleCommand(const UartCommand &cmd) {
@@ -50,9 +51,9 @@ void ParamController::handleCommand(const UartCommand &cmd) {
   case CMD_SET_DYNEQ_THRESH:
     handleSetDynEqThresholds(cmd);
     break;
-  //case CMD_GET_SYSTEM_INFO:
-  //  handleGetSystemInfo(cmd);
-  //  break;
+  case CMD_GET_SYSTEM_ALIVE:
+    handleIsAlive(cmd);
+    break;
 
   case CMD_SAVE_PRESET:
     if (cmd.dataLen > 0)
@@ -72,6 +73,23 @@ void ParamController::handleCommand(const UartCommand &cmd) {
 
   case CMD_GET_ALL_STATE:
     handleGetAllState(cmd);
+    break;
+
+  // ── WiFi configuration commands ─────────────────────────────────────────
+  case CMD_WIFI_SCAN:
+    handleWifiScan(cmd);
+    break;
+
+  case CMD_WIFI_SET_STA:
+    handleWifiSetSTA(cmd);
+    break;
+
+  case CMD_WIFI_SET_AP:
+    handleWifiSetAP(cmd);
+    break;
+
+  case CMD_WIFI_GET_STATUS:
+    handleWifiGetStatus(cmd);
     break;
 
   case CMD_GET_MODULE_STATUS: {
@@ -327,19 +345,10 @@ void ParamController::handleSetDynEqThresholds(const UartCommand &cmd) {
   _uart->sendAck(cmd.moduleId, 0);
 }
 
-/*
-void ParamController::handleGetSystemInfo(const UartCommand &cmd) {
-  uint8_t info[6];
-  info[0] = static_cast<uint8_t>(DSP_SAMPLE_RATE >> 8);
-  info[1] = DSP_SAMPLE_RATE & 0xFF;
-  info[2] = DSP_NUM_CHANNELS;
-  info[3] = DSP_FRAME_SIZE & 0xFF;
-  info[4] = DSP_MODULE_COUNT;
-  info[5] = 0; // Reserved
-
-  _uart->sendAck(MODULE_ID_SYSTEM, 0, info, sizeof(info));
+void ParamController::handleIsAlive(const UartCommand &cmd) {
+  // Dummy handler for heartbeat
+  _uart->sendAck(MODULE_ID_SYSTEM, 0);
 }
-*/
 
 int32_t ParamController::extractInt32(const uint8_t *data) {
   return (int32_t)data[0] | ((int32_t)data[1] << 8) | ((int32_t)data[2] << 16) |
@@ -351,6 +360,7 @@ int16_t ParamController::extractInt16(const uint8_t *data) {
 }
 
 void ParamController::handleGetAllState(const UartCommand &cmd) {
+  _uart->startBatch();
   // We send back individual packets for each parameter and EQ band,
   // exactly replicating a master sending config to a slave.
   uint8_t pkt[16];
@@ -449,4 +459,137 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
 
   // Tell host we're done
   _uart->sendAck(MODULE_ID_SYSTEM, 0);
+  _uart->endBatch();
 }
+
+// ── WiFi handlers ─────────────────────────────────────────────────────────────
+
+#include <WiFi.h>
+
+void ParamController::handleWifiScan(const UartCommand &cmd) {
+  if (!_wifiMgr) { _uart->sendError(0x10); return; }
+
+  int n = WiFi.scanComplete();
+
+  if (n == WIFI_SCAN_RUNNING) {
+    // Already scanning, tell JS to keep polling
+    _uart->sendAck(MODULE_ID_SYSTEM, 0xFF);
+    return;
+  }
+
+  if (n == WIFI_SCAN_FAILED) {
+    // Not started yet, or previous scan deleted. Start a new one.
+    _wifiMgr->startScan();
+    _uart->sendAck(MODULE_ID_SYSTEM, 0xFF);
+    LOG_INFO(TAG, "WiFi scan started");
+    return;
+  }
+
+  // Scan complete (n >= 0)
+  int count = (n > WIFI_MAX_SCAN_RESULTS) ? WIFI_MAX_SCAN_RESULTS : n;
+  
+  if (count == 0) {
+    _uart->sendAck(MODULE_ID_SYSTEM, 0);
+    LOG_INFO(TAG, "WiFi scan results sent: 0 networks");
+    WiFi.scanDelete(); // Reset state for next time
+    return;
+  }
+
+  // Send each scan result as a separate ACK frame
+  // Payload: [index(1B)][total(1B)][rssi(1B)][encrypted(1B)][ssid bytes]
+  for (int i = 0; i < count && i < WIFI_MAX_SCAN_RESULTS; i++) {
+    String entry = _wifiMgr->getScanEntry(i); // "SSID\tRSSI\tencrypted"
+    int tab1 = entry.indexOf('\t');
+    int tab2 = entry.lastIndexOf('\t');
+    if (tab1 < 0) continue;
+
+    String ssid  = entry.substring(0, tab1);
+    int8_t rssi  = (int8_t)entry.substring(tab1 + 1, tab2).toInt();
+    uint8_t enc  = (entry.substring(tab2 + 1) == "1") ? 1 : 0;
+    uint8_t ssidLen = (uint8_t)min((int)ssid.length(), 32);
+
+    uint8_t pkt[36];
+    pkt[0] = (uint8_t)i;
+    pkt[1] = (uint8_t)count;
+    pkt[2] = (uint8_t)rssi;
+    pkt[3] = enc;
+    memcpy(pkt + 4, ssid.c_str(), ssidLen);
+    _uart->sendFrame(CMD_WIFI_SCAN, MODULE_ID_SYSTEM, pkt, 4 + ssidLen);
+  }
+
+  // Final ACK signals end of scan list
+  _uart->sendAck(MODULE_ID_SYSTEM, 0);
+  LOG_INFO(TAG, "WiFi scan results sent: %d networks", count);
+  
+  // Clear scan results so the next request forces a fresh scan
+  WiFi.scanDelete();
+}
+
+void ParamController::handleWifiSetSTA(const UartCommand &cmd) {
+  // Payload: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) + ip(4B, 0=DHCP)
+  if (!_wifiMgr || cmd.dataLen < 2) { _uart->sendError(0x03); return; }
+
+  uint8_t ssidLen = cmd.data[0];
+  if (cmd.dataLen < (uint16_t)(1 + ssidLen + 1)) { _uart->sendError(0x03); return; }
+
+  char ssid[33] = {};
+  memcpy(ssid, &cmd.data[1], min((int)ssidLen, 32));
+
+  uint8_t passLen = cmd.data[1 + ssidLen];
+  uint16_t offset = 2 + ssidLen;
+  if (cmd.dataLen < offset + passLen) { _uart->sendError(0x03); return; }
+
+  char pass[65] = {};
+  memcpy(pass, &cmd.data[offset], min((int)passLen, 64));
+
+  // Optional static IP (4 bytes, 0 = DHCP)
+  IPAddress staticIP = INADDR_NONE;
+  offset += passLen;
+  if (cmd.dataLen >= offset + 4) {
+    uint32_t ip = cmd.data[offset] | ((uint32_t)cmd.data[offset+1] << 8)
+                | ((uint32_t)cmd.data[offset+2] << 16) | ((uint32_t)cmd.data[offset+3] << 24);
+    if (ip != 0) staticIP = IPAddress(ip);
+  }
+
+  // ACK first, then switch (WiFi restart may briefly interrupt Serial2)
+  _uart->sendAck(MODULE_ID_SYSTEM, 0);
+  LOG_INFO(TAG, "WiFi STA requested — SSID: %s", ssid);
+  _wifiMgr->setSTAMode(ssid, pass, staticIP);
+
+  // After reconnect, send new status so app gets updated IP
+  uint8_t statusBuf[40];
+  uint16_t statusLen = 0;
+  _wifiMgr->buildStatusPayload(statusBuf, statusLen);
+  _uart->sendFrame(CMD_WIFI_GET_STATUS, MODULE_ID_SYSTEM, statusBuf, statusLen);
+}
+
+void ParamController::handleWifiSetAP(const UartCommand &cmd) {
+  if (!_wifiMgr) { _uart->sendError(0x10); return; }
+  _uart->sendAck(MODULE_ID_SYSTEM, 0);
+  LOG_INFO(TAG, "WiFi AP mode requested");
+  _wifiMgr->setAPMode();
+
+  // Send new status
+  uint8_t statusBuf[40];
+  uint16_t statusLen = 0;
+  _wifiMgr->buildStatusPayload(statusBuf, statusLen);
+  _uart->sendFrame(CMD_WIFI_GET_STATUS, MODULE_ID_SYSTEM, statusBuf, statusLen);
+}
+
+void ParamController::handleWifiGetStatus(const UartCommand &cmd) {
+  if (!_wifiMgr) {
+    // WiFi not initialised — send placeholder
+    uint8_t noWifi[2] = { 0x00, 0x00 }; // mode=unknown, ip=0
+    _uart->sendFrame(CMD_WIFI_GET_STATUS, MODULE_ID_SYSTEM, noWifi, 2);
+    return;
+  }
+
+  uint8_t statusBuf[40];
+  uint16_t statusLen = 0;
+  _wifiMgr->buildStatusPayload(statusBuf, statusLen);
+  _uart->sendFrame(CMD_WIFI_GET_STATUS, MODULE_ID_SYSTEM, statusBuf, statusLen);
+  LOG_INFO(TAG, "WiFi status sent — mode=%s IP=%s",
+           _wifiMgr->isAPMode() ? "AP" : "STA",
+           _wifiMgr->getIP().toString().c_str());
+}
+

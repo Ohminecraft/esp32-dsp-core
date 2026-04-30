@@ -13,6 +13,10 @@
 #include "utils/debug_log.h"
 #include <Arduino.h>
 
+// Forward declaration — avoids pulling in full ESPAsyncWebServer in this header
+class AsyncWebSocket;
+class AsyncWebSocketClient;
+
 // UART Command IDs
 #define CMD_SET_PARAM 0x01
 #define CMD_GET_PARAM 0x02
@@ -28,14 +32,22 @@
 #define CMD_LOAD_PRESET 0x21
 #define CMD_SET_INPUT_SOURCE 0x30
 #define CMD_SET_OUTPUT_SOURCE 0x31
-#define CMD_GET_SYSTEM_INFO 0x32
+#define CMD_GET_SYSTEM_ALIVE 0x32
 #define CMD_GET_ALL_STATE 0x33
 #define CMD_REPORT_CPU_USAGE 0x40
+
+// WiFi configuration commands (0x50–0x5F)
+#define CMD_WIFI_SCAN       0x50  // ESP32 scans WiFi, returns SSID list via ACK frames
+#define CMD_WIFI_SET_STA    0x51  // Data: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) + ip(4B opt)
+#define CMD_WIFI_SET_AP     0x52  // No data — switch back to AP mode
+#define CMD_WIFI_GET_STATUS 0x53  // No data — reply with mode/IP/SSID/RSSI
+
 #define CMD_ACK_RESPONSE 0xFE
 #define CMD_ERROR 0xFF
 
 // Maximum data payload
 #define UART_MAX_DATA_LEN 64
+#define BATCH_CAPACITY    2048
 
 struct UartCommand {
   uint8_t cmd;
@@ -81,9 +93,28 @@ public:
 
   /**
    * Send arbitrary frame upstream.
+   * If a WebSocket has been registered via setWebSocket(), the frame is
+   * broadcast to all WS clients in addition to Serial2.
    */
   void sendFrame(uint8_t cmd, uint8_t moduleId, const uint8_t *data,
                  uint16_t dataLen);
+
+  /**
+   * Register an AsyncWebSocket for dual output.
+   * After this call, every sendFrame() also broadcasts to WS clients.
+   * @param ws Pointer to the AsyncWebSocket instance (owned by DspWebServer)
+   */
+  void setWebSocket(AsyncWebSocket* ws) { _ws = ws; }
+
+  /**
+   * Start batching multiple frames into a single WebSocket packet.
+   */
+  void startBatch();
+
+  /**
+   * End batching and send the accumulated frames as a single WebSocket message.
+   */
+  void endBatch();
 
 private:
   UartCommand _cmd;
@@ -102,6 +133,14 @@ private:
   ParseState _state = WAIT_SYNC1;
   uint16_t _dataIndex = 0;
   uint8_t _calcCrc = 0;
+
+  // Optional WebSocket for dual output (nullptr = Serial2 only)
+  AsyncWebSocket* _ws = nullptr;
+
+  // Batching support
+  bool _isBatching = false;
+  uint8_t _batchBuf[BATCH_CAPACITY]; 
+  size_t _batchSize = 0;
 
   void resetParser();
   uint8_t calcCRC8(const uint8_t *data, size_t len);

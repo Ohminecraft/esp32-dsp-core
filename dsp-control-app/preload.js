@@ -16,3 +16,12 @@ contextBridge.exposeInMainWorld('serialAPI', {
     onError:        (cb) => ipcRenderer.on('serial:error', (_, msg) => cb(msg)),
     onDisconnected: (cb) => ipcRenderer.on('serial:disconnected', () => cb()),
 });
+
+contextBridge.exposeInMainWorld('wsAPI', {
+    connect:     (url)        => ipcRenderer.invoke('ws:connect', url),
+    disconnect:  ()           => ipcRenderer.invoke('ws:disconnect'),
+    send:        (frameArray) => ipcRenderer.invoke('ws:send', frameArray),
+
+    onData:         (cb) => ipcRenderer.on('ws:data', (_, data) => cb(data)),
+    onDisconnected: (cb) => ipcRenderer.on('ws:disconnected', () => cb()),
+});

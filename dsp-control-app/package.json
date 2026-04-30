@@ -9,7 +9,8 @@
     "package": "electron-packager . \"ESP32 DSP Control\" --platform=win32 --arch=x64 --out=dist --overwrite"
   },
   "dependencies": {
-    "serialport": "^12.0.0"
+    "serialport": "^12.0.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "electron": "^28.0.0",

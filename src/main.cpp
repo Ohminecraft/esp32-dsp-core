@@ -1,25 +1,15 @@
-/**
+﻿/**
  * @file main.cpp
  * @brief ESP32 DSP Core - Main entry point
  *
  * System architecture:
- *   Core 1 (Priority 23): Audio Task  — I2S read → DSP pipeline → I2S write
- *   Core 1 (Priority  5): Sync Task   — PCNT clock monitor (AudioSync)
+ *   Core 1 (Priority 23): Audio Task   — I2S read → DSP pipeline → I2S write
+ *   Core 0 (Priority  5): Sync Task    — PCNT clock monitor (AudioSync)
  *   Core 0 (Priority  5): Control Task — UART command parsing → parameter updates
  *   Serial (USB):          Debug output
  *
- * Pipeline order (MVSilicon v0.3.2):
- *   INPUT → NoiseGate → Compander → Exciter → VirtualBass → BassClassic →
- *   StereoWidener → EQ1 → DynamicEQ → EQ2 → DRC → Volume → SoftClipper → OUTPUT
- *
- * Clock sync:
- *   QCC5125 (Bluetooth A2DP/LDAC) is the I2S master.
- *   AudioSync monitors BCK via PCNT hardware and detects sample rate
- *   (44.1 / 48 / 96 kHz). On rate change the full pipeline is reinit'd:
- *     1. audioTask suspended
- *     2. I2S input + output reinit at new rate
- *     3. DSP pipeline reinit at new rate
- *     4. audioTask resumed
+ * Pipeline order:
+ *   INPUT → Compander → Exciter → DynamicEQ → EQ1 → EQ2 → DRC → Volume → OUTPUT
  */
 
 #include <Arduino.h>
@@ -34,6 +24,8 @@
 #include "control/uart_protocol.h"
 #include "control/param_controller.h"
 #include "control/preset_manager.h"
+#include "control/wifi_manager.h"
+#include "control/web_server.h"
 #include "utils/status_led.h"
 #include "utils/debug_log.h"
 
@@ -47,6 +39,8 @@ static AudioOutput     g_audioOutput;
 static UartProtocol    g_uart;
 static ParamController g_paramCtrl;
 static PresetManager   g_presetMgr;
+static WiFiManager     g_wifiMgr;
+static DspWebServer    g_webServer;
 
 // Audio processing buffer
 static float g_audioBuf[DSP_FRAME_SAMPLES];
@@ -62,6 +56,9 @@ static volatile uint32_t g_currentSampleRate = DSP_SAMPLE_RATE_DEFAULT;
 // Use a simple flag + suspend/resume rather than a mutex to avoid
 // priority inversion between the high-priority audio task and the sync callback.
 static volatile bool g_pipelineReady = false;
+
+// Clock Absent check flag
+static volatile bool g_isclockabsent = false;
 
 // Performance monitoring
 static volatile uint32_t g_lastFrameUs = 0;
@@ -109,10 +106,11 @@ static void reinitPipeline(uint32_t newRateHz, bool clockPresent) {
     // 5. Resume audio task only if clock is present
     if (clockPresent && newRateHz > 0) {
         g_pipelineReady = true;
+        g_isclockabsent = false;
         if (g_audioTaskHandle) {
             vTaskResume(g_audioTaskHandle);
         }
-    }
+    } else if (!clockPresent) g_isclockabsent = true;
 
     LOG_INFO("SYNC", "Pipeline reinit done: %lu Hz, clock=%d",
              (unsigned long)newRateHz, (int)clockPresent);
@@ -196,6 +194,41 @@ void controlTask(void* param) {
             g_paramCtrl.handleCommand(g_uart.getCommand());
         }
 
+        // Web server housekeeping
+        g_webServer.loop();
+        g_wifiMgr.loop();
+
+        // Push WiFi status if connection state changes (e.g., STA connected or fell back to AP)
+        static bool lastWifiReady = false;
+        static bool pendingReboot = false;
+        static uint32_t rebootStartTime = 0;
+
+        bool wifiReady = g_wifiMgr.isReady();
+        if (wifiReady != lastWifiReady) {
+            lastWifiReady = wifiReady;
+            if (wifiReady) {
+                uint8_t statusBuf[40];
+                uint16_t statusLen = 0;
+                g_wifiMgr.buildStatusPayload(statusBuf, statusLen);
+                g_uart.sendFrame(CMD_WIFI_GET_STATUS, MODULE_ID_SYSTEM, statusBuf, statusLen);
+
+                // If user just configured STA, save and reboot to switch to pure STA
+                if (!g_wifiMgr.isAPMode() && g_wifiMgr.isNewlyConfiguredSTA()) {
+                    g_wifiMgr.clearNewlyConfiguredSTA();
+                    LOG_INFO("SYS", "New STA configured. Saving Preset 0...");
+                    g_presetMgr.savePreset(0, g_pipeline);
+                    pendingReboot = true;
+                    rebootStartTime = millis();
+                }
+            }
+        }
+
+        if (pendingReboot && (millis() - rebootStartTime >= 5000)) {
+            LOG_INFO("SYS", "Rebooting to apply pure STA mode...");
+            delay(100);
+            ESP.restart();
+        }
+
         // Periodic status report (every 2s)
         uint32_t nowMs = millis();
 
@@ -208,7 +241,7 @@ void controlTask(void* param) {
             lastStatusMs = nowMs;
 
             // Use current dynamic sample rate for budget calculation
-            s_fs = g_currentSampleRate;
+            s_fs = g_isclockabsent ? 0 : g_currentSampleRate;
             float budgetUs = (s_fs > 0)
                 ? ((float)DSP_FRAME_SIZE / (float)s_fs * 1e6f)
                 : 2666.67f; // fallback: 96kHz budget
@@ -219,6 +252,8 @@ void controlTask(void* param) {
             if (s_usage > 100.0f) s_usage = 100.0f;
 
             uint16_t cpu10  = (uint16_t)(s_usage * 10.0f);
+
+            cpu10 = g_isclockabsent ? 0 : cpu10;
             s_heapPct = (uint8_t)((float)ESP.getFreeHeap() / ESP.getHeapSize() * 100.0f);
 
             uint8_t data[7] = {
@@ -240,7 +275,7 @@ void controlTask(void* param) {
         }
 
         // Smooth RGB LED update (Core 0)
-        StatusLED::update(s_usage, s_heapPct, g_currentSampleRate);
+        StatusLED::update(s_usage, s_heapPct, g_currentSampleRate, g_isclockabsent);
 
         vTaskDelay(1);
     }
@@ -278,7 +313,12 @@ void setup() {
     LOG_INFO("INIT", "Initializing UART control...");
     g_uart.init();
     g_presetMgr.init();
-    g_paramCtrl.init(&g_pipeline, &g_audioInput, &g_audioOutput, &g_uart, &g_presetMgr);
+
+    LOG_INFO("INIT", "Initializing WiFi & Web Server...");
+    g_wifiMgr.init();
+    
+    g_paramCtrl.init(&g_pipeline, &g_audioInput, &g_audioOutput, &g_uart, &g_presetMgr, &g_wifiMgr);
+    g_webServer.init(&g_wifiMgr, &g_uart, &g_paramCtrl);
 
     // 4. Load preset
     if (g_presetMgr.hasPreset(0)) {
@@ -294,6 +334,7 @@ void setup() {
     LOG_INFO("INIT", "Starting AudioSync clock monitor...");
     AudioSync::init(onRateChange);
     AudioSync::start();
+    g_isclockabsent = true;
 
     // 6. Create control task (Core 0)
     xTaskCreatePinnedToCore(

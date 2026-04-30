@@ -6,9 +6,11 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { SerialPortManager } = require('./js/serial');
+const WsTransport = require('./ws-transport');
 
 let mainWindow = null;
 let serialManager = null;
+let wsManager = null;
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -39,6 +41,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
     serialManager = new SerialPortManager();
+    wsManager = new WsTransport();
 
     // ─── Serial IPC Handlers ───────────────────────────────────────
 
@@ -81,6 +84,32 @@ app.whenReady().then(() => {
         }
     });
 
+    // ─── WebSocket IPC Handlers ───────────────────────────────────────
+
+    ipcMain.handle('ws:connect', async (event, url) => {
+        return await wsManager.connect(url);
+    });
+
+    ipcMain.handle('ws:disconnect', async () => {
+        return await wsManager.disconnect();
+    });
+
+    ipcMain.handle('ws:send', async (event, frameArray) => {
+        return await wsManager.send(frameArray);
+    });
+
+    wsManager.onData((data) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('ws:data', Array.from(data));
+        }
+    });
+
+    wsManager.onDisconnected(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('ws:disconnected');
+        }
+    });
+
     createWindow();
 
     app.on('activate', () => {
@@ -90,5 +119,6 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
     if (serialManager) serialManager.disconnect();
+    if (wsManager) wsManager.disconnect();
     if (process.platform !== 'darwin') app.quit();
 });

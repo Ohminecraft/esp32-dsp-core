@@ -19,11 +19,11 @@ public:
      * @param heapPct Percentage (0 - 100)
      * @param sampleRate Current sample rate in Hz (0 if absent)
      */
-    static void update(float cpuUsage, uint8_t heapPct, uint32_t sampleRate) {
+    static void update(float cpuUsage, uint8_t heapPct, uint32_t sampleRate, bool is_absent) {
         uint8_t r = 0, g = 0, b = 0;
 
         // 1. Clock Presence / Sample Rate Base Color
-        if (sampleRate == 0) {
+        if (sampleRate == 0 || is_absent) {
             // No clock: Breathing Red
             float phase = sin(millis() * 0.003f);
             r = (uint8_t)(60 + 60 * phase); 

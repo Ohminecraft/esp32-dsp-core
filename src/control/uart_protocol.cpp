@@ -4,6 +4,7 @@
  */
 
 #include "uart_protocol.h"
+#include <ESPAsyncWebServer.h>
 #include "pin_config.h"
 
 void UartProtocol::init(uint32_t baud) {
@@ -120,6 +121,47 @@ void UartProtocol::sendFrame(uint8_t cmd, uint8_t moduleId, const uint8_t* data,
     }
 
     Serial2.write(crc);
+
+    // ── Dual output: broadcast to WebSocket clients ────────────────────────
+    if (_ws && _ws->count() > 0) {
+        size_t totalLen = 7 + dataLen; 
+        
+        if (_isBatching) {
+            // If new frame won't fit, flush the current batch first
+            if (_batchSize + totalLen > BATCH_CAPACITY) {
+                _ws->binaryAll(_batchBuf, _batchSize);
+                _batchSize = 0;
+            }
+            
+            // Append to batch buffer
+            memcpy(_batchBuf + _batchSize, header, 6);
+            if (data && dataLen > 0) memcpy(_batchBuf + _batchSize + 6, data, dataLen);
+            _batchBuf[_batchSize + 6 + dataLen] = crc;
+            _batchSize += totalLen;
+        } else {
+            // Send single frame safely without alloca
+            uint8_t frameBuf[128]; // Max frame is 7+64 = 71
+            if (totalLen <= sizeof(frameBuf)) {
+                memcpy(frameBuf, header, 6);
+                if (data && dataLen > 0) memcpy(frameBuf + 6, data, dataLen);
+                frameBuf[6 + dataLen] = crc;
+                _ws->binaryAll(frameBuf, totalLen);
+            }
+        }
+    }
+}
+
+void UartProtocol::startBatch() {
+    _isBatching = true;
+    _batchSize = 0;
+}
+
+void UartProtocol::endBatch() {
+    if (_isBatching && _ws && _ws->count() > 0 && _batchSize > 0) {
+        _ws->binaryAll(_batchBuf, _batchSize);
+    }
+    _isBatching = false;
+    _batchSize = 0;
 }
 
 void UartProtocol::sendAck(uint8_t moduleId, uint8_t status, const uint8_t* data, uint16_t dataLen) {
