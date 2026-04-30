@@ -495,8 +495,8 @@ void ParamController::handleWifiScan(const UartCommand &cmd) {
     return;
   }
 
-  // Send each scan result as a separate ACK frame
-  // Payload: [index(1B)][total(1B)][rssi(1B)][encrypted(1B)][ssid bytes]
+  // Send each scan result as a separate frame, but use batching for efficiency
+  _uart->startBatch();
   for (int i = 0; i < count && i < WIFI_MAX_SCAN_RESULTS; i++) {
     String entry = _wifiMgr->getScanEntry(i); // "SSID\tRSSI\tencrypted"
     int tab1 = entry.indexOf('\t');
@@ -517,8 +517,9 @@ void ParamController::handleWifiScan(const UartCommand &cmd) {
     _uart->sendFrame(CMD_WIFI_SCAN, MODULE_ID_SYSTEM, pkt, 4 + ssidLen);
   }
 
-  // Final ACK signals end of scan list
   _uart->sendAck(MODULE_ID_SYSTEM, 0);
+  _uart->endBatch();
+  
   LOG_INFO(TAG, "WiFi scan results sent: %d networks", count);
   
   // Clear scan results so the next request forces a fresh scan

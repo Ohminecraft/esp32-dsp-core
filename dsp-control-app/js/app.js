@@ -224,7 +224,7 @@ function onConnectedWS(url) {
         } else {
             clearInterval(window.wsHeartbeat);
         }
-    }, 10000);
+    }, 6000);
 }
 
 async function disconnectWebSocket() {
