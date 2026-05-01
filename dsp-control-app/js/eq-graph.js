@@ -161,9 +161,9 @@ export class EQGraph {
         const dHigh = store.dynamicEq.eqHigh;
 
         // Combined curve for EQ Low (cyan)
-        this._drawOverlayCurve(ctx, dLow.bands, '#64ffda', 'EQ Low', store.activeEq === 'dynLow');
+        this._drawOverlayCurve(ctx, dLow.bands, '#64ffda', 'EQ Low', store.activeEq === 'dynLow', dLow.pregain || 0);
         // Combined curve for EQ High (orange)
-        this._drawOverlayCurve(ctx, dHigh.bands, '#ffa06b', 'EQ High', store.activeEq === 'dynHigh');
+        this._drawOverlayCurve(ctx, dHigh.bands, '#ffa06b', 'EQ High', store.activeEq === 'dynHigh', dHigh.pregain || 0);
 
         // Legend
         ctx.font = '11px Inter, sans-serif';
@@ -182,8 +182,9 @@ export class EQGraph {
         ctx.fillText('EQ High', legendX + 96, legendY);
     }
 
-    _drawOverlayCurve(ctx, bands, color, label, isActive) {
-        const combined = computeCombinedCurve(bands, DSP_SAMPLE_RATE, NUM_POINTS);
+    // Legend
+    _drawOverlayCurve(ctx, bands, color, label, isActive, pregainDb = 0) {
+        const combined = computeCombinedCurve(bands, DSP_SAMPLE_RATE, NUM_POINTS, pregainDb);
 
         // Fill
         ctx.beginPath();

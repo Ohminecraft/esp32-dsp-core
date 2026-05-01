@@ -268,9 +268,9 @@ void controlTask(void* param) {
             };
             g_uart.sendFrame(CMD_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, 7);
 
-            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%)",
-                g_lastFrameUs, s_usage, (unsigned long)s_fs,
-                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct);
+            //OG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%)",
+            //    g_lastFrameUs, s_usage, (unsigned long)s_fs,
+            //    g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct);
 
             g_maxFrameUs = 0;
         }

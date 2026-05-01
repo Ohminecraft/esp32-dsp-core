@@ -36,26 +36,6 @@ static inline int32_t IRAM_ATTR floatToI32Sat(float x) {
     return (int32_t)(x * 2147483648.0f);
 }
 
-static __attribute__((always_inline)) inline
-float IRAM_ATTR fast_recipsf2(float a) {
-    float result;
-    asm volatile (
-        "wfr f1, %1\n"
-        "recip0.s f0, f1\n"
-        "const.s f2, 1\n"
-        "msub.s f2, f1, f0\n"
-        "maddn.s f0, f0, f2\n"
-        "const.s f2, 1\n"
-        "msub.s f2, f1, f0\n"
-        "maddn.s f0, f0, f2\n"
-        "rfr %0, f0\n"
-        :"=r"(result):"r"(a):"f0","f1","f2"
-    );
-    return result;
-}
-
-#define fast_div(a, b) ((a) * fast_recipsf2(b))
-
 // ============================================================================
 // EQ Filter Types
 // ============================================================================

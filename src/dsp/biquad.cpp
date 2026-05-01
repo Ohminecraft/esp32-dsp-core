@@ -11,9 +11,11 @@
 #endif
 
 void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float fs) {
-    float A = sqrtf(powf(10.0f, fast_div(gain_dB, 20.0f)));  // sqrt(10^(dB/20))
-    float inv_A = fast_recipsf2(A);
-    float w0 = fast_div(2.0f * M_PI * f0, fs);
+    float A = sqrtf(powf(10.0f, gain_dB / 20.0f));  // sqrt(10^(dB/20))
+    float inv_A = 1.0f / A;
+    // Use accurate division for w0 — fast_div error amplifies nonlinearly
+    // through sin/cos, especially when f0 approaches fs/2.
+    float w0 = (2.0f * M_PI * f0) / fs;
     float cos_w0 = cosf(w0);
     float sin_w0 = sinf(w0);
     float alpha;
@@ -25,7 +27,7 @@ void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float f
 
     switch (type) {
         case EQ_FILTER_TYPE_PEAKING:
-            alpha = fast_div(sin_w0, 2.0f * Q);
+            alpha = sin_w0 / (2.0f * Q);
             b0f =  1.0f + alpha * A;
             b1f = -2.0f * cos_w0;
             b2f =  1.0f - alpha * A;
@@ -35,7 +37,9 @@ void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float f
             break;
 
         case EQ_FILTER_TYPE_LOW_SHELF: {
-            alpha = sin_w0 / 2.0f * sqrtf((A + 1.0f / A) * (1.0f / Q - 1.0f) + 2.0f);
+            float shelf_term = (A + 1.0f / A) * (1.0f / Q - 1.0f) + 2.0f;
+            if (shelf_term < 0.0f) shelf_term = 0.0f;  // guard against NaN when Q > 1
+            alpha = sin_w0 / 2.0f * sqrtf(shelf_term);
             float sqrtA = sqrtf(A);
             float twoSqrtAAlpha = 2.0f * sqrtA * alpha;
             b0f =  A * ((A + 1.0f) - (A - 1.0f) * cos_w0 + twoSqrtAAlpha);
@@ -48,7 +52,9 @@ void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float f
         }
 
         case EQ_FILTER_TYPE_HIGH_SHELF: {
-            alpha = sin_w0 / 2.0f * sqrtf((A + 1.0f / A) * (1.0f / Q - 1.0f) + 2.0f);
+            float shelf_term = (A + 1.0f / A) * (1.0f / Q - 1.0f) + 2.0f;
+            if (shelf_term < 0.0f) shelf_term = 0.0f;  // guard against NaN when Q > 1
+            alpha = sin_w0 / 2.0f * sqrtf(shelf_term);
             float sqrtA = sqrtf(A);
             float twoSqrtAAlpha = 2.0f * sqrtA * alpha;
             b0f =  A * ((A + 1.0f) + (A - 1.0f) * cos_w0 + twoSqrtAAlpha);
@@ -130,12 +136,26 @@ void Biquad::design(EQFilterType type, float f0, float Q, float gain_dB, float f
             break;
     }
 
-    float inv_a0 = fast_recipsf2(a0f);
+    // Use accurate division here — design() is not a hot path,
+    // and fast_recipsf2 (~12-bit precision) can push poles outside
+    // the unit circle at high gain, causing state blow-up.
+    float inv_a0 = 1.0f / a0f;
     _coeffs[0] = b0f * inv_a0;
     _coeffs[1] = b1f * inv_a0;
     _coeffs[2] = b2f * inv_a0;
     _coeffs[3] = a1f * inv_a0;
     _coeffs[4] = a2f * inv_a0;
+
+    // Stability check: poles must lie inside the unit circle.
+    // Conditions: |a2| < 1  AND  |a1| < 1 + a2
+    bool stable = (fabsf(_coeffs[4]) < 1.0f) &&
+                  (fabsf(_coeffs[3]) < 1.0f + _coeffs[4]);
+    if (!stable) {
+        // Fall back to passthrough and reset state to prevent blow-up.
+        _coeffs[0] = 1.0f;
+        _coeffs[1] = _coeffs[2] = _coeffs[3] = _coeffs[4] = 0.0f;
+        reset();
+    }
 }
 
 void Biquad::designFromParams(const EQFilterParams& params, int32_t sampleRate) {

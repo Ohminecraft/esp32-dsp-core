@@ -1201,7 +1201,7 @@ function mountGraphToAccordion(acc) {
 
     if (eqState) {
         addSlider(controls, 'Pregain', -2400, 2400, 50, 'dB',
-            () => eqState.pregain * 100,
+            () => (eqState.pregain || 0) * 100,
             (v) => {
                 eqState.pregain = v / 100;
                 store.emit('eq:changed');
