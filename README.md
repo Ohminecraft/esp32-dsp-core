@@ -14,7 +14,7 @@ A high-performance real-time audio digital signal processing (DSP) framework for
 
 ESP32 DSP Core is a professional audio platform featuring:
 - **Dual-Core Processing**: Core 1 handles the 96kHz audio pipeline; Core 0 handles system control and networking.
-- **Advanced DSP Pipeline**: 10+ modules including Dynamic Bass, Exciter, Compander, and Level-Dependent Dynamic EQ.
+- **Advanced DSP Pipeline**: 11+ modules including Pre Gain, Compander, Exciter, Dynamic Bass, Dynamic EQ, Dual Parametric EQ, Left/Right Independent EQ, DRC, and Post Gain.
 - **Hybrid Connectivity**: Seamlessly switch between **High-speed UART** (USB) and **Low-latency WebSocket** (WiFi).
 - **Sub-500ms Sync**: Proprietary frame batching protocol for near-instant state synchronization over WiFi.
 - **Auto Clock Sync**: Built-in PCNT-based frequency monitor for real-time sample rate tracking and I2S re-initialization.
@@ -32,7 +32,7 @@ ESP32 DSP Core is a professional audio platform featuring:
 ├─────────────────────────────┬───────────────────────────────┤
 │  Core 0 (Control & Web)     │  Core 1 (Audio DSP)           │
 │  ├─ WebSocket Server        │  ├─ I2S Input (96kHz)         │
-│  ├─ UART Protocol Handler   │  ├─ DSP Pipeline (9 modules)  │
+│  ├─ UART Protocol Handler   │  ├─ DSP Pipeline (10 modules) │
 │  ├─ Clock Monitor (PCNT)    │  ├─ Sample Rate Auto-Sync     │
 │  └─ NVS Preset Manager      │  └─ I2S Output (Master)       │
 └──────────────┬──────────────┴───────────────────────────────┘
@@ -46,7 +46,7 @@ ESP32 DSP Core is a professional audio platform featuring:
 ```
 
 ### Signal Chain
-`INPUT → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → DRC → Volume → OUTPUT`
+`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → Left/Right EQ → DRC → Post Gain → OUTPUT`
 
 ---
 
@@ -97,7 +97,7 @@ ESP32 DSP Core là một framework xử lý âm thanh kỹ thuật số (DSP) hi
 - **Giao diện hiện đại**: UI Glassmorphism, tối ưu cho cả máy tính (Electron) và điện thoại (Browser).
 
 ### 🏗️ Chuỗi xử lý (Signal Chain)
-`INPUT → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → DRC → Volume → OUTPUT`
+`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → Left/Right EQ → DRC → Post Gain → OUTPUT`
 
 ---
 
