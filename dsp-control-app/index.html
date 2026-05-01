@@ -12,7 +12,7 @@
 <div id="scan-overlay">
     <div class="scan-card">
         <!-- Connection Choice View (for Local/Electron) -->
-        <div id="lobby-choice-content" style="display:none">
+        <div id="lobby-choice-content">
             <div class="scan-title">ESP32 DSP Control</div>
             <div class="scan-subtitle" style="margin-bottom: 25px;">Select connection method:</div>
             
@@ -52,7 +52,7 @@
         </div>
 
         <!-- Auto-Scan View (for Serial) -->
-        <div id="scan-auto-content">
+        <div id="scan-auto-content" style="display:none">
             <div class="scan-spinner"></div>
             <div class="scan-title">ESP32 DSP Core</div>
             <div class="scan-subtitle">Searching for your hardware device via serial ports...</div>
@@ -177,12 +177,6 @@
 
     <!-- ═══ Bottom Bar ═══ -->
     <footer id="bottom-bar">
-        <div class="bottom-section">
-            <span class="bottom-label">Master</span>
-            <input type="range" id="master-vol" class="param-slider"
-                   min="-9600" max="1800" step="25" value="0">
-            <span id="master-vol-label" class="val-badge">0.0 dB</span>
-        </div>
         <div class="bottom-section">
             <button class="btn btn-primary btn-sm" id="btn-save-preset" style="font-weight:800; padding: 4px 12px;">SAVE</button>
         </div>

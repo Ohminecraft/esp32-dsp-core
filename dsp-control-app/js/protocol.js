@@ -38,6 +38,7 @@ export const CMD = {
 };
 
 export const MODULE = {
+    PRE_GAIN: 0x01,
     COMPANDER: 0x02,
     EXCITER: 0x03,
     DYNAMIC_BASS: 0x04,
@@ -45,25 +46,28 @@ export const MODULE = {
     EQ_DSP_1: 0x06,
     EQ_DSP_2: 0x07,
     DRC: 0x08,
-    VOLUME: 0x09,
+    POST_GAIN: 0x09,
+    LEFTRIGHT_EQ: 0x0A,
     SYSTEM: 0xF0
 };
 
 export const MODULE_NAMES = {
+    [MODULE.PRE_GAIN]: 'Pre Gain',
     [MODULE.COMPANDER]: 'Compander',
     [MODULE.EXCITER]: 'Exciter',
     [MODULE.DYNAMIC_BASS]: 'Dynamic Bass',
     [MODULE.DYNAMIC_EQ]: 'Dynamic EQ',
     [MODULE.EQ_DSP_1]: 'Parmetric EQ 1',
     [MODULE.EQ_DSP_2]: 'Parmetric EQ 2',
+    [MODULE.LEFTRIGHT_EQ]: 'Left Right EQ',
     [MODULE.DRC]: 'Dynamic Range Compression',
-    [MODULE.VOLUME]: 'Volume',
+    [MODULE.POST_GAIN]: 'Post Gain',
 };
 
 export const MODULE_ORDER = [
-    MODULE.NOISE_GATE, MODULE.COMPANDER, MODULE.EXCITER,
+    MODULE.PRE_GAIN, MODULE.COMPANDER, MODULE.EXCITER,
     MODULE.DYNAMIC_BASS, MODULE.DYNAMIC_EQ, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2,
-    MODULE.DRC, MODULE.VOLUME, MODULE.SOFT_CLIP
+    MODULE.DRC, MODULE.POST_GAIN, MODULE.LEFTRIGHT_EQ
 ];
 
 export const EQ_FILTER_TYPES = [

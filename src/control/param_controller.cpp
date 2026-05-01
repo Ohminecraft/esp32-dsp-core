@@ -211,6 +211,22 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
     break;
   }
 
+  case MODULE_ID_PRE_GAIN: {
+    VolumeControl &vol = _pipeline->getPreGain();
+    switch (paramId) {
+    case 0:
+      vol.setGainDb((int16_t)value);
+      break;
+    case 1:
+      vol.setMute(value != 0);
+      break;
+    default:
+      _uart->sendError(0x04);
+      return;
+    }
+    break;
+  }
+
   case MODULE_ID_VOLUME: {
     VolumeControl &vol = _pipeline->getVolume();
     switch (paramId) {
@@ -283,16 +299,25 @@ void ParamController::handleSetEqBand(const UartCommand &cmd) {
   params.Q = extractInt16(&cmd.data[9]);
 
   ParametricEQ *eq = nullptr;
+  uint8_t realBand = band;
   if (cmd.moduleId == MODULE_ID_EQ_DSP_1) {
     eq = &_pipeline->getEqDsp_1();
     eq->setPregain(pregain_db);
   } else if (cmd.moduleId == MODULE_ID_EQ_DSP_2) {
     eq = &_pipeline->getEqDsp_2();
     eq->setPregain(pregain_db); // q8.8 format;
+  } else if (cmd.moduleId == MODULE_ID_LEFTRIGHT_EQ) {
+    if (band & 0x80) {
+      eq = &_pipeline->getLeftRightEq().getEqRight();
+      realBand = band & 0x7F;
+    } else {
+      eq = &_pipeline->getLeftRightEq().getEqLeft();
+    }
+    eq->setPregain(pregain_db);
   }
 
-  if (eq && band < MAX_EQ_BANDS) {
-    eq->setBand(band, params); // q8.8 format
+  if (eq && realBand < MAX_EQ_BANDS) {
+    eq->setBand(realBand, params); // q8.8 format
   } else {
     _uart->sendError(0x04);
   }
@@ -386,6 +411,7 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
 
   // Volume
   sendPkt(MODULE_ID_VOLUME, 0, _pipeline->getVolume()._gainDb);
+  sendPkt(MODULE_ID_PRE_GAIN, 0, _pipeline->getPreGain()._gainDb);
 
   // CP
   sendPkt(MODULE_ID_COMPANDER, 0, _pipeline->getCompander()._thresholdDbInt);
@@ -418,12 +444,12 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
   sendPkt(MODULE_ID_DRC, 4, _pipeline->getDrc()._bands[0].pregainQ412);
 
   // EQ bands
-  auto sendEq = [&](uint8_t cmdEq, uint8_t mid, ParametricEQ &eq) {
+  auto sendEq = [&](uint8_t cmdEq, uint8_t mid, ParametricEQ &eq, bool isRight = false) {
     int16_t pregain_db = eq.getPregain();
     for (uint8_t i = 0; i < MAX_EQ_BANDS; i++) {
       pkt[0] = pregain_db & 0xFF;
       pkt[1] = (pregain_db >> 8) & 0xFF;
-      pkt[2] = i;
+      pkt[2] = isRight ? (i | 0x80) : i;
       pkt[3] = eq._params[i].enabled ? 1 : 0;
       pkt[4] = eq._params[i].type;
       pkt[5] = eq._params[i].f0 & 0xFF;
@@ -437,6 +463,8 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
   };
   sendEq(CMD_SET_EQ_BAND, MODULE_ID_EQ_DSP_1, _pipeline->getEqDsp_1());
   sendEq(CMD_SET_EQ_BAND, MODULE_ID_EQ_DSP_2, _pipeline->getEqDsp_2());
+  sendEq(CMD_SET_EQ_BAND, MODULE_ID_LEFTRIGHT_EQ, _pipeline->getLeftRightEq().getEqLeft(), false);
+  sendEq(CMD_SET_EQ_BAND, MODULE_ID_LEFTRIGHT_EQ, _pipeline->getLeftRightEq().getEqRight(), true);
 
   // DynEQ
   uint8_t deqPkt[20];

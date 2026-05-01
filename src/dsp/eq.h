@@ -13,6 +13,7 @@
 class ParametricEQ : public DspModule {
     friend class PresetManager;
     friend class ParamController;
+    friend class LeftRightEQ;
 public:
     ParametricEQ() : _pregain(1.0f) {}
 

@@ -97,6 +97,7 @@ static void reinitPipeline(uint32_t newRateHz, bool clockPresent) {
             g_presetMgr.loadPreset(0, g_pipeline);
         } else {
             g_pipeline.getVolume().enable();
+            g_pipeline.getPreGain().enable();
         }
     }
 
@@ -328,6 +329,7 @@ void setup() {
     } else {
         LOG_INFO("INIT", "No saved preset. Enabling defaults...");
         g_pipeline.getVolume().enable();
+        g_pipeline.getPreGain().enable();
     }
 
     // 5. Init AudioSync — starts PCNT clock monitor on Core 0

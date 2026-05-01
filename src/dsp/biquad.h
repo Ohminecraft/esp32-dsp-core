@@ -37,7 +37,7 @@ public:
      * to overflow at link time ("dangerous relocation: l32r").
      * IRAM_ATTR alone keeps the hot path in fast RAM.
      */
-    void IRAM_ATTR process(float* __restrict samples, size_t numFrames) {
+    inline void IRAM_ATTR process(float* __restrict samples, size_t numFrames) {
         // Cache coeffs locally so the compiler keeps them in registers
         // across the loop instead of reloading from the struct each iteration.
         const float b0 = _coeffs[0], b1 = _coeffs[1], b2 = _coeffs[2];
@@ -63,9 +63,8 @@ public:
 
     /**
      * Process a single sample for a specific channel.
-     * Not marked always_inline — let the compiler decide to avoid l32r overflow.
      */
-    inline float IRAM_ATTR processSample(float in, int channel) {
+    __attribute__((always_inline)) inline float IRAM_ATTR processSample(float in, int channel) {
         float *s  = &_state[channel * 2];
         float out = _coeffs[0] * in + s[0];
         s[0]      = _coeffs[1] * in - _coeffs[3] * out + s[1];

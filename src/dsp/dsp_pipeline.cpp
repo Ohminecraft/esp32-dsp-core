@@ -8,24 +8,29 @@
 
 void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     // Build chain in exact processing order
-    _chain[0]  = &_compander;     // UNSTABLE
-    _chain[1]  = &_exciter;       // STABLE
-    _chain[2]  = &_dynamicBass;   // STABLE
-    _chain[3]  = &_dynamicEq;     // STABLE
-    _chain[4]  = &_eqDsp_1;       // STABLE
-    _chain[5]  = &_eqDsp_2;       // STABLE
-    _chain[6]  = &_drc;           // UNSTABLE
-    _chain[7]  = &_volume;        // STABLE
+    _chain[0]  = &_preGain;
+    _chain[1]  = &_compander;
+    _chain[2]  = &_exciter;
+    _chain[3]  = &_dynamicBass;
+    _chain[4]  = &_dynamicEq;
+    _chain[5]  = &_eqDsp_1;
+    _chain[6]  = &_eqDsp_2;
+    _chain[7]  = &_leftRightEq;
+    _chain[8]  = &_drc;
+    _chain[9]  = &_volume;
 
-    // Set module IDs for EQ instances
+    // Set module IDs for EQ and Volume instances
+    _preGain.setModuleId(MODULE_ID_PRE_GAIN);
     _eqDsp_1.setModuleId(MODULE_ID_EQ_DSP_1);
     _eqDsp_2.setModuleId(MODULE_ID_EQ_DSP_2);
+    _volume.setModuleId(MODULE_ID_VOLUME);
 
     // Initialize all modules
     for (size_t i = 0; i < CHAIN_LENGTH; i++) {
         _chain[i]->init(sampleRate, numChannels);
     }
     
+    _preGain.enable();
     _volume.enable();
 }
 

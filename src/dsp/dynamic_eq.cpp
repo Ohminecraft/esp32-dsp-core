@@ -1,6 +1,6 @@
 /**
  * @file dynamic_eq.cpp
- * @brief Dynamic EQ implementation — aligned with MVSilicon NDS32 binary
+ * @brief Dynamic EQ implementation
  *
  * Key differences from the previous version:
  *

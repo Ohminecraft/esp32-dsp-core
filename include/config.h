@@ -46,10 +46,10 @@
 // DSP Pipeline — Module Count
 // ============================================================================
 
-#define DSP_MODULE_COUNT        9      // Total modules in pipeline
+#define DSP_MODULE_COUNT        10      // Total modules in pipeline
 
 // Module IDs (UART protocol)
-#define MODULE_ID_NOISE_GATE    0x01
+#define MODULE_ID_PRE_GAIN      0x01
 #define MODULE_ID_COMPANDER     0x02
 #define MODULE_ID_EXCITER       0x03
 #define MODULE_ID_DYNAMIC_BASS  0x04
@@ -58,6 +58,7 @@
 #define MODULE_ID_EQ_DSP_2      0x07
 #define MODULE_ID_DRC           0x08
 #define MODULE_ID_VOLUME        0x09
+#define MODULE_ID_LEFTRIGHT_EQ  0x0A
 #define MODULE_ID_SYSTEM        0xF0
 
 // ============================================================================

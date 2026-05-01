@@ -112,12 +112,14 @@ size_t IRAM_ATTR AudioOutput::writeI2S(const float* __restrict buffer, size_t nu
     for (size_t i = 0; i < totalSamples; i++) {
         buf_to_write[i] = floatToI32Sat(buffer[i]);
     }
-    // Swap L/R channels
+    // Swap L/R channels for PCM1808
+    /*
     for (size_t i = 0; i < numSamples && _numChannels == 2; i++) {
         int32_t tmp              = buf_to_write[i * 2];
         buf_to_write[i * 2]     = buf_to_write[i * 2 + 1];
         buf_to_write[i * 2 + 1] = tmp;
     }
+    */
 
     esp_err_t err = i2s_channel_write(_txHandle, buf_to_write,
                                       totalSamples * sizeof(int32_t),

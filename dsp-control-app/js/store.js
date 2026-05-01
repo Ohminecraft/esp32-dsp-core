@@ -29,6 +29,7 @@ class Store extends EventEmitter {
 
         // ── EQ helper: create 10 pre-allocated disabled slots ──────────
         const makeEqState = () => ({
+            pregain: 0,
             bands: Array.from({ length: 10 }, () => ({
                 enabled: false, type: 0, freq: 1000, gain: 0, q: 0.707
             }))
@@ -37,6 +38,11 @@ class Store extends EventEmitter {
         // EQ1 / EQ2 — 10 fixed slots each
         this.eq1 = makeEqState();
         this.eq2 = makeEqState();
+
+        this.leftRightEq = {
+            eqLeft: makeEqState(),
+            eqRight: makeEqState()
+        };
 
         // Dynamic EQ
         this.dynamicEq = {
@@ -69,8 +75,11 @@ class Store extends EventEmitter {
             ]
         };
 
-        // Volume
-        this.volume = { gainDb: 0, mute: false };
+        // PreGain
+        this.preGain = { gainDb: 0, mute: false };
+
+        // PostGain
+        this.postGain = { gainDb: 0, mute: false };
 
 
         // System
@@ -119,6 +128,8 @@ class Store extends EventEmitter {
             case 'eq2': return this.eq2;
             case 'dynLow': return this.dynamicEq.eqLow;
             case 'dynHigh': return this.dynamicEq.eqHigh;
+            case 'eqLeft': return this.leftRightEq.eqLeft;
+            case 'eqRight': return this.leftRightEq.eqRight;
             default: return this.eq1;
         }
     }
@@ -129,6 +140,8 @@ class Store extends EventEmitter {
             case 'eq2': return MODULE.EQ_DSP_2;
             case 'dynLow': return MODULE.DYNAMIC_EQ;
             case 'dynHigh': return MODULE.DYNAMIC_EQ;
+            case 'eqLeft': return MODULE.LEFTRIGHT_EQ;
+            case 'eqRight': return MODULE.LEFTRIGHT_EQ;
             default: return MODULE.EQ_DSP_1;
         }
     }

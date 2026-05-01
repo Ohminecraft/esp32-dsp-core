@@ -14,6 +14,7 @@
 struct PresetData {
   uint16_t en_mask;
   int16_t vol_db;
+  int16_t pre_vol_db;
 
   // Compander
   int32_t cp_thresholdDb, cp_ratioBelow, cp_ratioAbove, cp_attackMs,
@@ -41,6 +42,12 @@ struct PresetData {
   int16_t deq_high_pregain_q88;
   EQFilterParams deq_high_bands[MAX_EQ_BANDS];
 
+  // Left Right EQ
+  int16_t eql_pregain_q88;
+  EQFilterParams eql_bands[MAX_EQ_BANDS];
+  int16_t eqr_pregain_q88;
+  EQFilterParams eqr_bands[MAX_EQ_BANDS];
+
   bool valid;
 };
 
@@ -59,7 +66,7 @@ void PresetManager::saveDefault(uint8_t slot) {
   memset(&pd, 0, sizeof(PresetData));
   pd.valid = true;
 
-  pd.en_mask = (1 << 7); // only volume turn on
+  pd.en_mask = (1 << 0) | (1 << 9); // only pre/post gain turn on
 
   pd.vol_db = 0;
 
@@ -90,6 +97,8 @@ void PresetManager::saveDefault(uint8_t slot) {
     pd.eq2_bands[b] = pd.eq1_bands[b];
     pd.deq_low_bands[b] = pd.eq1_bands[b];
     pd.deq_high_bands[b] = pd.eq1_bands[b];
+    pd.eql_bands[b] = pd.eq1_bands[b];
+    pd.eqr_bands[b] = pd.eq1_bands[b];
   }
 
   String key = getSlotKey(slot);
@@ -114,6 +123,7 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
   }
   pd.en_mask = enableMask;
   pd.vol_db = pipeline.getVolume()._gainDb;
+  pd.pre_vol_db = pipeline.getPreGain()._gainDb;
 
   // CP
   pd.cp_thresholdDb = pipeline.getCompander()._thresholdDb;
@@ -168,6 +178,15 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
   for (int i = 0; i < MAX_EQ_BANDS; i++)
     pd.deq_high_bands[i] = pipeline.getDynamicEq()._eqHigh._params[i];
 
+  // Left Right EQ
+  pd.eql_pregain_q88 = pipeline.getLeftRightEq().getEqLeft().getPregain();
+  for (int i = 0; i < MAX_EQ_BANDS; i++)
+    pd.eql_bands[i] = pipeline.getLeftRightEq().getEqLeft()._params[i];
+
+  pd.eqr_pregain_q88 = pipeline.getLeftRightEq().getEqRight().getPregain();
+  for (int i = 0; i < MAX_EQ_BANDS; i++)
+    pd.eqr_bands[i] = pipeline.getLeftRightEq().getEqRight()._params[i];
+
   // Write object
   String key = getSlotKey(slot);
   _prefs.begin(key.c_str(), false);
@@ -207,6 +226,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
   }
 
   pipeline.getVolume().setGainDb(pd.vol_db);
+  pipeline.getPreGain().setGainDb(pd.pre_vol_db);
 
   pipeline.getCompander().setThreshold(pd.cp_thresholdDb);
   pipeline.getCompander().setRatioBelow(pd.cp_ratioBelow);
@@ -261,6 +281,14 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
   pipeline.getDrc().setAttackTime(0, pd.drc_attackMs);
   pipeline.getDrc().setReleaseTime(0, pd.drc_releaseMs);
 
+  // Left Right EQ
+  pipeline.getLeftRightEq().getEqLeft().setPregain(pd.eql_pregain_q88);
+  for (int i = 0; i < MAX_EQ_BANDS; i++)
+    pipeline.getLeftRightEq().setEqLeft(i, pd.eql_bands[i]);
+
+  pipeline.getLeftRightEq().getEqRight().setPregain(pd.eqr_pregain_q88);
+  for (int i = 0; i < MAX_EQ_BANDS; i++)
+    pipeline.getLeftRightEq().setEqRight(i, pd.eqr_bands[i]);
 
   LOG_INFO(TAG, "Loaded preset from slot %d", slot);
   return true;

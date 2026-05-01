@@ -17,6 +17,7 @@
 #include "dynamic_eq.h"
 #include "drc.h"
 #include "volume.h"
+#include "leftrighteq.h"
 //#include "soft_clip.h"
 
 class DspPipeline {
@@ -42,8 +43,10 @@ public:
     DynamicEQ&       getDynamicEq()      { return _dynamicEq; }
     ParametricEQ&    getEqDsp_1()        { return _eqDsp_1; }
     ParametricEQ&    getEqDsp_2()        { return _eqDsp_2; }
+    LeftRightEQ&     getLeftRightEq()    { return _leftRightEq; }
     DRC&             getDrc()            { return _drc; }
     VolumeControl&   getVolume()         { return _volume; }
+    VolumeControl&   getPreGain()        { return _preGain; }
 
     /**
      * Get module by UART module ID.
@@ -58,16 +61,18 @@ public:
     size_t getChainLength() const { return CHAIN_LENGTH; }
 
 private:
-    static const size_t CHAIN_LENGTH = 8;
+    static const size_t CHAIN_LENGTH = DSP_MODULE_COUNT;
 
+    VolumeControl  _preGain;       // [00] Pre Gain
     Compander      _compander;     // [01] Compander
     Exciter        _exciter;       // [02] Harmonic Exciter
     DynamicBass    _dynamicBass;   // [03] Dynamic Bass
     DynamicEQ      _dynamicEq;     // [04] Dynamic EQ (dual-EQ system)
     ParametricEQ   _eqDsp_1;       // [05] EQ1 (main parametric EQ)
     ParametricEQ   _eqDsp_2;       // [06] EQ2 (post EQ / sound signature)
-    DRC            _drc;           // [07] DRC (dynamic range compression)
-    VolumeControl  _volume;        // [08] Master Volume
+    LeftRightEQ    _leftRightEq;   // [07] Left Right EQ
+    DRC            _drc;           // [08] DRC (dynamic range compression)
+    VolumeControl  _volume;        // [09] Master Volume
 
     DspModule* _chain[CHAIN_LENGTH];
 };

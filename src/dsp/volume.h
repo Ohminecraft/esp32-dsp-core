@@ -14,14 +14,15 @@ class VolumeControl : public DspModule {
     friend class ParamController;
 public:
     VolumeControl() : _gainLinear(1.0f), _targetGain(1.0f),
-                      _currentGain(1.0f), _muted(false), _gainDb(0) {}
+                      _currentGain(1.0f), _muted(false), _gainDb(0), _moduleId(MODULE_ID_VOLUME) {}
 
     void init(int32_t sampleRate, int32_t numChannels) override;
     void process(float* __restrict samples, size_t numSamples) override;
     void reset() override;
 
     const char* getName() const override { return "Volume"; }
-    uint8_t getModuleId() const override { return MODULE_ID_VOLUME; }
+    uint8_t getModuleId() const override { return _moduleId; }
+    void setModuleId(uint8_t id) { _moduleId = id; }
 
     // ---- Parameter API ----
 
@@ -46,6 +47,7 @@ private:
     float   _currentGain;   // Current ramped gain (smoothed)
     bool    _muted;
     int16_t _gainDb;        // Stored dB value
+    uint8_t _moduleId;
 
     void updateTargetGain();
 };
