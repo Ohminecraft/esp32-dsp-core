@@ -5,6 +5,7 @@
 
 #include "wifi_manager.h"
 #include <ESPmDNS.h>
+#include <esp_wifi.h>          // esp_wifi_set_ps()
 #include "../utils/debug_log.h"
 
 #define TAG "WIFI"
@@ -127,7 +128,10 @@ void WiFiManager::_startAP() {
     bool ok = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS);
     if (ok) {
         _ready  = true;
-        LOG_INFO(TAG, "AP started — SSID: %s  IP: %s", WIFI_AP_SSID,
+        // Disable modem sleep — eliminates interrupt bursts that could
+        // preempt the audio task on Core 1 during WiFi activity.
+        esp_wifi_set_ps(WIFI_PS_NONE);
+        LOG_INFO(TAG, "AP started — SSID: %s  IP: %s, or (esp32-dsp.local)", WIFI_AP_SSID,
                  WiFi.softAPIP().toString().c_str());
         if (MDNS.begin("esp32-dsp")) {
             MDNS.addService("http", "tcp", 80);
@@ -157,7 +161,7 @@ void WiFiManager::_startSTA() {
     }
 
     WiFi.begin(_staSsid, _staPass);
-    LOG_INFO(TAG, "Connecting to '%s'...", _staSsid);
+    LOG_INFO(TAG, "Connecting to '%s', Pass:'%s'...", _staSsid, _staPass);
 }
 
 void WiFiManager::loop() {
@@ -166,7 +170,10 @@ void WiFiManager::loop() {
             _apMode = false;
             _ready  = true;
             _isConnectingSTA = false;
-            LOG_INFO(TAG, "STA connected — IP: %s  RSSI: %d dBm",
+            // Disable modem sleep — eliminates interrupt bursts that could
+            // preempt the audio task on Core 1 during WiFi activity.
+            esp_wifi_set_ps(WIFI_PS_NONE);
+            LOG_INFO(TAG, "STA connected — IP: %s or (esp32-dsp.local)  RSSI: %d dBm",
                      WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
                      
             if (MDNS.begin("esp32-dsp")) {

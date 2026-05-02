@@ -1424,7 +1424,7 @@ function updateWifiUI() {
                         <div style="font-size: 14px; color: white;">Rebooting in <span style="color:var(--accent-red); font-size:18px;">${count}</span>s...</div>
                         <div style="margin-top: 10px; font-size: 12px; color: var(--text-dim);">
                             After reboot, connect your phone to <strong>${store.wifi.ssid}</strong> and access:<br/>
-                            <strong style="color: var(--accent-green); font-size: 14px;">http://${store.wifi.ip}</strong>
+                            <strong style="color: var(--accent-green); font-size: 14px;">http://esp32-dsp.local</strong>
                         </div>
                     </div>
                 `;

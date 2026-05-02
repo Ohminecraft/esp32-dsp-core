@@ -66,7 +66,7 @@
 // ============================================================================
 
 #define AUDIO_TASK_CORE         1
-#define AUDIO_TASK_PRIORITY     23
+#define AUDIO_TASK_PRIORITY     configMAX_PRIORITIES - 1
 #define AUDIO_TASK_STACK_SIZE   16384
 
 #define CONTROL_TASK_CORE       0
@@ -84,13 +84,6 @@
 #define UART_CONTROL_BAUD       115200
 #define UART_SYNC_BYTE_1        0xAA
 #define UART_SYNC_BYTE_2        0x55
-
-// ============================================================================
-// WiFi Configuration
-// ============================================================================
-
-#define WIFI_AP_SSID            "ESP32-DSP"
-#define WIFI_AP_PASS            "dsp12345"
 
 // ============================================================================
 // Preset Configuration
