@@ -127,12 +127,11 @@ void WiFiManager::_startAP() {
 
     bool ok = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS);
     if (ok) {
+        WiFi.setTxPower(WIFI_POWER_20dBm); // Max power for best range/reception
         _ready  = true;
-        // Disable modem sleep — eliminates interrupt bursts that could
-        // preempt the audio task on Core 1 during WiFi activity.
-        esp_wifi_set_ps(WIFI_PS_NONE);
         LOG_INFO(TAG, "AP started — SSID: %s  IP: %s, or (esp32-dsp.local)", WIFI_AP_SSID,
                  WiFi.softAPIP().toString().c_str());
+        MDNS.end(); // End any previous mDNS instance (e.g. from failed STA attempt) before starting a new one
         if (MDNS.begin("esp32-dsp")) {
             MDNS.addService("http", "tcp", 80);
         }
@@ -154,7 +153,6 @@ void WiFiManager::_startSTA() {
     } else {
         WiFi.mode(WIFI_STA);
     }
-
     // Static IP if configured
     if (_staStaticIP != INADDR_NONE) {
         WiFi.config(_staStaticIP, _staGateway, _staSubnet);
@@ -170,12 +168,10 @@ void WiFiManager::loop() {
             _apMode = false;
             _ready  = true;
             _isConnectingSTA = false;
-            // Disable modem sleep — eliminates interrupt bursts that could
-            // preempt the audio task on Core 1 during WiFi activity.
-            esp_wifi_set_ps(WIFI_PS_NONE);
+            WiFi.setTxPower(WIFI_POWER_20dBm); // Max power for best range/reception
             LOG_INFO(TAG, "STA connected — IP: %s or (esp32-dsp.local)  RSSI: %d dBm",
                      WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
-                     
+            MDNS.end();
             if (MDNS.begin("esp32-dsp")) {
                 MDNS.addService("http", "tcp", 80);
             }

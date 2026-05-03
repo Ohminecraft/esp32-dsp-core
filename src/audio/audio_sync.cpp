@@ -167,9 +167,6 @@ void AudioSync::monitorTask(void* arg) {
             float sampleHz  = bckHz / 64.0f;
             newRate  = (uint32_t)(sampleHz + 0.5f); // round to nearest
             newState = classifyRate(newRate);
-
-            ESP_LOGD(TAG, "BCK=%.1f Hz → fs=%.1f Hz (overflows=%lu residual=%d elapsed=%.4fs)",
-                     bckHz, sampleHz, (unsigned long)overflows, residual, elapsedSec);
         }
 
         if (newState != lastState) {

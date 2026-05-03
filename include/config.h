@@ -92,6 +92,14 @@
 #define MAX_PRESET_SLOTS        8
 
 // ============================================================================
+// Misc Configs
+// ============================================================================
+
+#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
+#define AUTO_SHUTDONW_TIMER 1800000 // 30min
+#define MUTE_PIN_LOGIC LOW
+
+// ============================================================================
 // Feature Flags
 // ============================================================================
 

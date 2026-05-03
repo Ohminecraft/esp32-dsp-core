@@ -114,4 +114,16 @@
 #define I2S_OUTPUT_PORT         I2S_NUM_0   // Output (PCM5102A) — ESP32/S3 MASTER
 #define I2S_INPUT_PORT          I2S_NUM_1   // Input  (QCC5125)  — ESP32/S3 SLAVE
 
+
+// ============================================================================
+// Misc Pin 
+// ============================================================================
+
+#ifdef SOFT_LATCH_SHUTDOWN
+#define POWER_PIN_OUT 4
+#define POWER_PIN_OFF 5
+#endif
+
+#define MUTE_PIN 3
+
 #endif // PIN_CONFIG_H

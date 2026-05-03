@@ -123,7 +123,7 @@ size_t IRAM_ATTR AudioOutput::writeI2S(const float* __restrict buffer, size_t nu
 
     esp_err_t err = i2s_channel_write(_txHandle, buf_to_write,
                                       totalSamples * sizeof(int32_t),
-                                      &bytesWritten, pdMS_TO_TICKS(20));
+                                      &bytesWritten, pdMS_TO_TICKS(45));
     if (err != ESP_OK) return 0;
 
     return bytesWritten / (sizeof(int32_t) * _numChannels);

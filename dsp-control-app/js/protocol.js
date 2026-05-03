@@ -24,9 +24,9 @@ export const CMD = {
     SET_DYNEQ_THRESH: 0x14,
     SAVE_PRESET: 0x20,
     LOAD_PRESET: 0x21,
-    SET_INPUT_SOURCE: 0x30,
-    SET_OUTPUT_SOURCE: 0x31,
-    GET_SYSTEM_ALIVE: 0x32, // Note: keeping numeric IDs consistent with ESP32
+    //SET_INPUT_SOURCE: 0x30,
+    //SET_OUTPUT_SOURCE: 0x31,
+    //GET_SYSTEM_ALIVE: 0x32,
     GET_ALL_STATE: 0x33,
     REPORT_CPU_USAGE: 0x40,
     WIFI_SCAN: 0x50,
@@ -102,7 +102,7 @@ export function buildFrame(cmd, moduleId, data = []) {
 export function buildEnableModule(moduleId) { return buildFrame(CMD.ENABLE_MODULE, moduleId); }
 export function buildDisableModule(moduleId) { return buildFrame(CMD.DISABLE_MODULE, moduleId); }
 export function buildGetModuleStatus(moduleId) { return buildFrame(CMD.GET_MODULE_STATUS, moduleId); }
-export function buildGetSystemAlive() { return buildFrame(CMD.GET_SYSTEM_ALIVE, MODULE.SYSTEM); }
+//export function buildGetSystemAlive() { return buildFrame(CMD.GET_SYSTEM_ALIVE, MODULE.SYSTEM); }
 
 export function buildSetParam(moduleId, paramId, value) {
     // Data: paramId(1B) + value(4B LE)

@@ -33,13 +33,11 @@ void DspWebServer::init(WiFiManager* wifi, UartProtocol* uart, ParamController* 
 }
 
 void DspWebServer::broadcastFrame(const uint8_t* data, size_t len) {
-    if (_ws.count() > 0) {
-        _ws.binaryAll(data, len);
-    }
+    if (_ws.count() == 0) return;
+    _ws.binaryAll(data, len);
 }
 
 void DspWebServer::loop() {
-    // Cleanup disconnected clients periodically (ESPAsyncWebServer recommends this)
     _ws.cleanupClients();
 }
 
@@ -244,7 +242,8 @@ void DspWebServer::_setupRoutes() {
 
     // SPA catch-all: serve UI for any GET that isn't /api/* or /ws
     _server.onNotFound([serveUI](AsyncWebServerRequest* req) {
-        if (req->method() == HTTP_GET && !req->url().startsWith("/api")) {
+        if (req->method() == HTTP_GET 
+            && !req->url().startsWith("/api")) {
             serveUI(req);
         } else {
             req->send(404, "application/json", "{\"error\":\"not found\"}");

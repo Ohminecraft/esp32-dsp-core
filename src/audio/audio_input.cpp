@@ -96,12 +96,9 @@ size_t IRAM_ATTR AudioInput::readI2S(float* __restrict buffer, size_t numSamples
     size_t bytesRead = 0;
 
     int32_t buf_to_read[DSP_FRAME_SAMPLES];
-    // Use finite timeout so audioTask doesn't block forever when BCK disappears.
-    // At 44.1kHz, one frame (256 samples) takes ~5.8ms — 20ms gives plenty of margin.
-    // On timeout, returns 0 → audioTask loops back and checks g_pipelineReady.
     esp_err_t err = i2s_channel_read(_rxHandle, buf_to_read,
                                      totalSamples * sizeof(int32_t),
-                                     &bytesRead, pdMS_TO_TICKS(20));
+                                     &bytesRead, pdMS_TO_TICKS(45));
     if (err != ESP_OK) return 0;
 
     const size_t samplesRead = bytesRead / sizeof(int32_t);

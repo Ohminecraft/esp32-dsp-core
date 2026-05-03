@@ -248,7 +248,7 @@ def _write_header(compressed: bytes, original_len: int):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def embed_ui(source, target, env):
+def embed_ui():
     print("\n[WebUI-Embed] Starting...")
 
     html_path = _find_ui_file()
@@ -284,5 +284,5 @@ def embed_ui(source, target, env):
 
 
 # Run immediately so embedded_ui.h exists before web_server.cpp compiles
-embed_ui(None, None, env)
-env.AddPreAction("upload", embed_ui)
+embed_ui()
+#env.AddPreAction("upload", embed_ui)

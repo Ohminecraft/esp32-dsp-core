@@ -17,7 +17,7 @@
     "electron-builder": "^26.8.1",
     "electron-packager": "^17.1.2"
   },
-  "author": "ESP32 DSP Core",
+  "author": "Ohminecraft",
   "license": "MIT",
   "build": {
     "appId": "com.esp32.dspcontrol",

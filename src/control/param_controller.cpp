@@ -51,9 +51,9 @@ void ParamController::handleCommand(const UartCommand &cmd) {
   case CMD_SET_DYNEQ_THRESH:
     handleSetDynEqThresholds(cmd);
     break;
-  case CMD_GET_SYSTEM_ALIVE:
-    handleIsAlive(cmd);
-    break;
+  //case CMD_GET_SYSTEM_ALIVE:
+  //  handleIsAlive(cmd);
+  //  break;
 
   case CMD_SAVE_PRESET:
     if (cmd.dataLen > 0)
@@ -370,10 +370,10 @@ void ParamController::handleSetDynEqThresholds(const UartCommand &cmd) {
   _uart->sendAck(cmd.moduleId, 0);
 }
 
-void ParamController::handleIsAlive(const UartCommand &cmd) {
+//void ParamController::handleIsAlive(const UartCommand &cmd) {
   // Dummy handler for heartbeat
-  _uart->sendAck(MODULE_ID_SYSTEM, 0);
-}
+//  _uart->sendAck(MODULE_ID_SYSTEM, 0);
+//}
 
 int32_t ParamController::extractInt32(const uint8_t *data) {
   return (int32_t)data[0] | ((int32_t)data[1] << 8) | ((int32_t)data[2] << 16) |
