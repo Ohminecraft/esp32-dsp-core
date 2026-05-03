@@ -79,7 +79,7 @@ static volatile uint32_t g_shutdownCountdown = 0;
 
 static void reinitPipeline(uint32_t newRateHz) {
     g_pipelineReady = false;
-    vTaskDelay(pdMS_TO_TICKS(30));
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     if (g_audioTaskHandle) {
         vTaskSuspend(g_audioTaskHandle);

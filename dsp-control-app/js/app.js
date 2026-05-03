@@ -72,7 +72,6 @@ let manualMode = false;
 let isFetchingState = false;
 let isPendingStaReboot = false; // Tracks if we expect a reboot after submitting WiFi config
 let isProbing = false;       // true while a single port probe is in-flight
-let isScanning = false;      // true while tryConnect loop is running (re-entrancy guard)
 let probeResolver = null;
 let probeAborted = false;    // set true to cancel an in-flight probe immediately
 
@@ -1497,16 +1496,7 @@ function renderWifiList() {
 function buildBottomBar() {
 
 
-    /*
-    document.getElementById('input-source').addEventListener('change', (e) => {
-        store.system.inputSource = parseInt(e.target.value);
-        sendFrame(buildSetInputSource(store.system.inputSource));
-    });
-    document.getElementById('output-source').addEventListener('change', (e) => {
-        store.system.outputSource = parseInt(e.target.value);
-        sendFrame(buildSetOutputSource(store.system.outputSource));
-    });
-    */
+
 
     for (let i = 0; i < 8; i++) {
         const btn = document.getElementById(`preset-${i}`);

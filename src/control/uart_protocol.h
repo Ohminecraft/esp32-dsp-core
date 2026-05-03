@@ -19,28 +19,23 @@ class AsyncWebSocketClient;
 
 // UART Command IDs
 #define CMD_SET_PARAM 0x01
-#define CMD_GET_PARAM 0x02
-#define CMD_ENABLE_MODULE 0x03
-#define CMD_DISABLE_MODULE 0x04
-#define CMD_GET_MODULE_STATUS 0x05
-#define CMD_SET_EQ_BAND 0x10
-#define CMD_GET_EQ_BAND 0x11
-#define CMD_SET_DYNEQ_LOW_BAND 0x12
-#define CMD_SET_DYNEQ_HIGH_BAND 0x13
-#define CMD_SET_DYNEQ_THRESH 0x14
-#define CMD_SAVE_PRESET 0x20
-#define CMD_LOAD_PRESET 0x21
-#define CMD_SET_INPUT_SOURCE 0x30
-#define CMD_SET_OUTPUT_SOURCE 0x31
-#define CMD_GET_SYSTEM_ALIVE 0x32
-#define CMD_GET_ALL_STATE 0x33
-#define CMD_REPORT_CPU_USAGE 0x40
+#define CMD_ENABLE_MODULE 0x02
+#define CMD_DISABLE_MODULE 0x03
+#define CMD_SET_EQ_BAND 0x04
+#define CMD_SET_DYNEQ_LOW_BAND 0x05
+#define CMD_SET_DYNEQ_HIGH_BAND 0x06
+#define CMD_SET_DYNEQ_THRESH 0x07
+#define CMD_SAVE_PRESET 0x08
+#define CMD_LOAD_PRESET 0x09
+#define CMD_GET_ALL_STATE 0x0A
 
-// WiFi configuration commands (0x50–0x5F)
-#define CMD_WIFI_SCAN       0x50  // ESP32 scans WiFi, returns SSID list via ACK frames
-#define CMD_WIFI_SET_STA    0x51  // Data: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) + ip(4B opt)
-#define CMD_WIFI_SET_AP     0x52  // No data — switch back to AP mode
-#define CMD_WIFI_GET_STATUS 0x53  // No data — reply with mode/IP/SSID/RSSI
+// WiFi configuration commands
+#define CMD_WIFI_SCAN       0x10  // ESP32 scans WiFi, returns SSID list via ACK frames
+#define CMD_WIFI_SET_STA    0x11  // Data: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) + ip(4B opt)
+#define CMD_WIFI_SET_AP     0x12  // No data — switch back to AP mode
+#define CMD_WIFI_GET_STATUS 0x13  // No data — reply with mode/IP/SSID/RSSI
+
+#define CMD_REPORT_CPU_USAGE 0x40
 
 #define CMD_ACK_RESPONSE 0xFE
 #define CMD_ERROR 0xFF

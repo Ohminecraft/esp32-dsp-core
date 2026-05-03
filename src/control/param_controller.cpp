@@ -51,9 +51,6 @@ void ParamController::handleCommand(const UartCommand &cmd) {
   case CMD_SET_DYNEQ_THRESH:
     handleSetDynEqThresholds(cmd);
     break;
-  //case CMD_GET_SYSTEM_ALIVE:
-  //  handleIsAlive(cmd);
-  //  break;
 
   case CMD_SAVE_PRESET:
     if (cmd.dataLen > 0)
@@ -92,18 +89,8 @@ void ParamController::handleCommand(const UartCommand &cmd) {
     handleWifiGetStatus(cmd);
     break;
 
-  case CMD_GET_MODULE_STATUS: {
-    DspModule *mod = _pipeline->getModuleById(cmd.moduleId);
-    if (mod) {
-      uint8_t status = mod->isEnabled() ? 1 : 0;
-      _uart->sendAck(cmd.moduleId, 0, &status, 1);
-    } else {
-      _uart->sendError(0x01); // Module not found
-    }
-    break;
-  }
-
   default:
+    LOG_ERROR(TAG, "Unknown command ID: 0x%02X from module: 0x%02X", cmd.cmd, cmd.moduleId);
     _uart->sendError(0x02); // Unknown command
     break;
   }
