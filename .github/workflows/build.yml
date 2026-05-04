@@ -38,12 +38,12 @@ jobs:
           pip install platformio
 
       # ─── Build env:esp32dev, esp32s3 ───────────────────────────────────────────────────
-      - name: Build [esp32dev, esp32s3]
-        run: pio run -e esp32dev -e esp32s3
+      - name: Build [esp32, esp32s3]
+        run: pio run -e esp32 -e esp32s3
 
-      - name: Rename esp32dev, esp32s3 firmware
+      - name: Rename esp32, esp32s3 firmware
         run: |
-          mv .pio/build/esp32dev/firmware.bin firmware_esp32dev.bin
+          mv .pio/build/esp32/firmware.bin firmware_esp32.bin
           mv .pio/build/esp32s3/firmware.bin firmware_esp32s3.bin
 
       # ─── Upload artifacts (both branches) ────────────────────────────────────
