@@ -83,8 +83,11 @@ class SerialPortManager {
         if (!this._port || !this._port.isOpen) return false;
         return new Promise((resolve, reject) => {
             this._port.write(buffer, (err) => {
-                if (err) reject(err.message);
-                else resolve(true);
+                if (err) { reject(err.message); return; }
+                this._port.drain((err2) => {
+                    if (err2) reject(err2.message);
+                    else resolve(true);
+                });
             });
         });
     }

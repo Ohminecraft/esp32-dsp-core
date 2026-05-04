@@ -191,7 +191,7 @@ void controlTask(void* param) {
             if (!g_shutdownButtonIsHolding) {
             g_shutdownButtonIsHolding = true;
             g_shutdownCountdown = millis();
-            } else if (millis() - g_shutdownButtonIsHolding >= 5000) g_userShutdownRequest = true;
+            } else if (millis() - g_shutdownCountdown >= 5000) g_userShutdownRequest = true;
         } else {
             g_shutdownButtonIsHolding = false;
             g_shutdownCountdown = 0;
@@ -315,9 +315,11 @@ void controlTask(void* param) {
 void setup() {
     #ifdef SOFT_LATCH_SHUTDOWN
         pinMode(POWER_PIN_OUT, OUTPUT);
+        delay(70); // Short delay to ensure stable power before latching on
+        digitalWrite(POWER_PIN_OUT, HIGH);  // Latch power on (2N3904 gate closed)
         pinMode(POWER_PIN_OFF, INPUT_PULLUP);
-        digitalWrite(POWER_PIN_OUT, HIGH);
     #endif
+    esp_log_level_set("*", ESP_LOG_NONE);
     pinMode(MUTE_PIN, OUTPUT);
     digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
     DBG_INIT(115200);

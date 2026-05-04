@@ -1,0 +1,133 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - dev
+      - release
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed to get full commit history for changelog
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-platformio-
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+
+      # ─── Build env:esp32dev, esp32s3 ───────────────────────────────────────────────────
+      - name: Build [esp32dev, esp32s3]
+        run: pio run -e esp32dev -e esp32s3
+
+      - name: Rename esp32dev, esp32s3 firmware
+        run: |
+          mv .pio/build/esp32dev/firmware.bin firmware_esp32dev.bin
+          mv .pio/build/esp32s3/firmware.bin firmware_esp32s3.bin
+
+      # ─── Upload artifacts (both branches) ────────────────────────────────────
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ github.sha }}
+          path: |
+            firmware_esp32dev.bin
+            firmware_esp32s3.bin
+
+      # ─── Pre-release on dev push ──────────────────────────────────────────────
+      - name: Generate pre-release tag
+        if: github.ref == 'refs/heads/dev'
+        id: pre_tag
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "tag=pre-${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Create Pre-Release
+        if: github.ref == 'refs/heads/dev'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.pre_tag.outputs.tag }}
+          name: "Pre-Release ${{ steps.pre_tag.outputs.tag }}"
+          prerelease: true
+          draft: false
+          body: |
+            > ⚠️ This is an **automated pre-release** built from the latest commit on the `dev` branch.
+
+            **Commit:** `${{ github.sha }}`
+            **Author:** ${{ github.actor }}
+            **Message:** ${{ github.event.head_commit.message }}
+          files: |
+            firmware_esp32dev.bin
+            firmware_esp32s3.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─── Release on release branch merge ─────────────────────────────────────
+      - name: Generate release tag
+        if: github.ref == 'refs/heads/release'
+        id: rel_tag
+        run: |
+          echo "tag=v1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog from dev commits
+        if: github.ref == 'refs/heads/release'
+        id: changelog
+        run: |
+          # Get the last release tag (or fall back to the beginning of history)
+          LAST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || git rev-list --max-parents=0 HEAD)
+          echo "Last tag/base: $LAST_TAG"
+
+          # Collect all commits on dev branch since last release
+          CHANGELOG=$(git log origin/dev --pretty=format:"- %s (%h)" --no-merges $LAST_TAG..HEAD 2>/dev/null || git log origin/dev --pretty=format:"- %s (%h)" --no-merges)
+
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="- No individual commits listed."
+          fi
+
+          # Store multi-line string safely in GITHUB_OUTPUT
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "## What's Changed"
+            echo ""
+            echo "$CHANGELOG"
+            echo ""
+            echo "---"
+            echo "_Built from \`dev\` branch merged into \`release\` — ${{ github.sha }}_"
+            echo "CHANGELOG_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        if: github.ref == 'refs/heads/release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.rel_tag.outputs.tag }}
+          name: "Release ${{ steps.rel_tag.outputs.tag }}"
+          prerelease: false
+          draft: false
+          body: ${{ steps.changelog.outputs.notes }}
+          files: |
+            firmware_esp32dev.bin
+            firmware_esp32s3.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

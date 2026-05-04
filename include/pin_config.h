@@ -120,10 +120,10 @@
 // ============================================================================
 
 #ifdef SOFT_LATCH_SHUTDOWN
-#define POWER_PIN_OUT 4
-#define POWER_PIN_OFF 5
+#define POWER_PIN_OUT 39
+#define POWER_PIN_OFF 40
 #endif
 
-#define MUTE_PIN 3
+#define MUTE_PIN 1
 
 #endif // PIN_CONFIG_H
