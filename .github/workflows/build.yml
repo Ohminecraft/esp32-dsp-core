@@ -78,7 +78,7 @@ jobs:
             **Author:** ${{ github.actor }}
             **Message:** ${{ github.event.head_commit.message }}
           files: |
-            firmware_esp32dev.bin
+            firmware_esp32.bin
             firmware_esp32s3.bin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -127,7 +127,7 @@ jobs:
           draft: false
           body: ${{ steps.changelog.outputs.notes }}
           files: |
-            firmware_esp32dev.bin
+            firmware_esp32.bin
             firmware_esp32s3.bin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
