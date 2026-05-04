@@ -9,7 +9,6 @@ import {
     buildFrame, buildEnableModule, buildDisableModule,
     buildSetParam, buildSetEqBand, buildSetDynEqBand,
     buildSetDynEqThresholds, buildSavePreset, buildLoadPreset,
-    buildGetSystemAlive,
     buildGetAllState, buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
     dbToQ88, dbToQ31, qToQ610,
     leToInt16, leToInt32
@@ -73,7 +72,6 @@ let manualMode = false;
 let isFetchingState = false;
 let isPendingStaReboot = false; // Tracks if we expect a reboot after submitting WiFi config
 let isProbing = false;       // true while a single port probe is in-flight
-let isScanning = false;      // true while tryConnect loop is running (re-entrancy guard)
 let probeResolver = null;
 let probeAborted = false;    // set true to cancel an in-flight probe immediately
 
@@ -107,8 +105,14 @@ async function connectSerial() {
     if (!port) return;
     await abortScanAndWait();   // release any port held by probe before connecting
     try {
-        await window.serialAPI.connect(port, 115200);
-        onConnected(port);
+        const isValid = await probePort(port);
+        if (isValid) {
+            await window.serialAPI.connect(port, 115200);
+            onConnected(port);
+        } else {
+            showStatus(`Error: Device at ${port} is not recognized as a DSP Core.`, 'error');
+            alert(`Device at ${port} is not recognized as a DSP Core.`);
+        }
     } catch (e) { showStatus(`Error: ${e}`, 'error'); }
 }
 
@@ -215,16 +219,6 @@ function onConnectedWS(url) {
     sendFrame(buildWifiGetStatus());
     showStatus(`Connected via WiFi (${url}) — Fetching DSP State...`, 'ok');
     switchLobbyScreen('scan-wifi-connected');
-
-    // Heartbeat to prevent idle disconnects
-    if (window.wsHeartbeat) clearInterval(window.wsHeartbeat);
-    window.wsHeartbeat = setInterval(() => {
-        if (store.system.connected && store.system.transport === 'websocket') {
-            sendFrame(buildGetSystemAlive());
-        } else {
-            clearInterval(window.wsHeartbeat);
-        }
-    }, 6000);
 }
 
 async function disconnectWebSocket() {
@@ -269,7 +263,7 @@ async function startAutoScan() {
 async function probePort(path, portsLabel) {
     isProbing = true;
     probeAborted = false;
-    portsLabel.textContent = `Probing ${path}...`;
+    if (portsLabel) portsLabel.textContent = `Probing ${path}...`;
     try {
         await window.serialAPI.connect(path, 115200);
 
@@ -277,7 +271,7 @@ async function probePort(path, portsLabel) {
 
         // Short settle then send probe packet
         await new Promise(r => setTimeout(r, 150));
-        await window.serialAPI.send(buildGetSystemInfo());
+        await window.serialAPI.send(buildGetAllState());
 
         // Wait up to 800 ms for any valid frame back
         const success = await new Promise(resolve => {
@@ -295,6 +289,7 @@ async function probePort(path, portsLabel) {
             }
             return false;
         }
+        await window.serialAPI.disconnect();
         return true;
     } catch (e) {
         // Access denied or port busy — add full cooldown
@@ -1424,7 +1419,7 @@ function updateWifiUI() {
                         <div style="font-size: 14px; color: white;">Rebooting in <span style="color:var(--accent-red); font-size:18px;">${count}</span>s...</div>
                         <div style="margin-top: 10px; font-size: 12px; color: var(--text-dim);">
                             After reboot, connect your phone to <strong>${store.wifi.ssid}</strong> and access:<br/>
-                            <strong style="color: var(--accent-green); font-size: 14px;">http://${store.wifi.ip}</strong>
+                            <strong style="color: var(--accent-green); font-size: 14px;">http://esp32-dsp.local</strong>
                         </div>
                     </div>
                 `;
@@ -1501,16 +1496,7 @@ function renderWifiList() {
 function buildBottomBar() {
 
 
-    /*
-    document.getElementById('input-source').addEventListener('change', (e) => {
-        store.system.inputSource = parseInt(e.target.value);
-        sendFrame(buildSetInputSource(store.system.inputSource));
-    });
-    document.getElementById('output-source').addEventListener('change', (e) => {
-        store.system.outputSource = parseInt(e.target.value);
-        sendFrame(buildSetOutputSource(store.system.outputSource));
-    });
-    */
+
 
     for (let i = 0; i < 8; i++) {
         const btn = document.getElementById(`preset-${i}`);

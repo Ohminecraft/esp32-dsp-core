@@ -2,7 +2,9 @@
  * @file web_server.h
  * @brief AsyncWebServer + WebSocket bridge for ESP32 DSP Core
  *
- * - Serves mobile web UI from SPIFFS (/, /style.css, /app.js)
+ * - Serves web UI embedded in firmware as gzip PROGMEM (include/embedded_ui.h).
+ *   Generated automatically by sync_web_ui.py before each build/upload.
+ *   Zero SPI flash bus usage during serving — no audio glitches on fetch.
  * - WebSocket endpoint /ws speaks the same binary frame protocol as UART
  * - REST API:
  *     GET  /api/info         — device info JSON
@@ -17,7 +19,6 @@
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
-#include <SPIFFS.h>
 #include "wifi_manager.h"
 #include "uart_protocol.h"
 #include "param_controller.h"

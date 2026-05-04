@@ -6,6 +6,7 @@
 #include "web_server.h"
 #include "../utils/debug_log.h"
 #include <ArduinoJson.h>
+#include <embedded_ui.h>  // Auto-generated gzip HTML blob (sync_web_ui.py)
 
 #define TAG "WEB"
 
@@ -15,13 +16,6 @@ void DspWebServer::init(WiFiManager* wifi, UartProtocol* uart, ParamController* 
     _wifi      = wifi;
     _uart      = uart;
     _paramCtrl = paramCtrl;
-
-    // Mount SPIFFS
-    if (!SPIFFS.begin(true)) {
-        LOG_INFO(TAG, "SPIFFS mount FAILED — web UI unavailable");
-    } else {
-        LOG_INFO(TAG, "SPIFFS mounted OK");
-    }
 
     // Register WebSocket with server and set up event handler
     _setupWebSocket();
@@ -39,13 +33,11 @@ void DspWebServer::init(WiFiManager* wifi, UartProtocol* uart, ParamController* 
 }
 
 void DspWebServer::broadcastFrame(const uint8_t* data, size_t len) {
-    if (_ws.count() > 0) {
-        _ws.binaryAll(data, len);
-    }
+    if (_ws.count() == 0) return;
+    _ws.binaryAll(data, len);
 }
 
 void DspWebServer::loop() {
-    // Cleanup disconnected clients periodically (ESPAsyncWebServer recommends this)
     _ws.cleanupClients();
 }
 
@@ -232,12 +224,29 @@ void DspWebServer::_setupRoutes() {
         }
     );
 
-    // ── Static files from SPIFFS ──────────────────────────────────────────────
-    // Serve index.html for root + any unknown path (SPA fallback)
-    _server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
+    // ── Serve embedded UI (gzip from PROGMEM — zero SPI bus usage) ───────────
+    // Single handler used for / and SPA fallback.
+    // Browser decompresses gzip automatically via Content-Encoding header.
+    auto serveUI = [](AsyncWebServerRequest* req) {
+        AsyncWebServerResponse* res = req->beginResponse(
+            200, "text/html",
+            UI_HTML_GZ,
+            UI_HTML_GZ_LEN
+        );
+        res->addHeader("Content-Encoding", "gzip");
+        res->addHeader("Cache-Control", "public, max-age=604800");
+        req->send(res);
+    };
 
-    // Catch-all: serve index.html for any unmatched route (SPA support)
-    _server.onNotFound([](AsyncWebServerRequest* req) {
-        req->send(SPIFFS, "/index.html", "text/html");
+    _server.on("/", HTTP_GET, serveUI);
+
+    // SPA catch-all: serve UI for any GET that isn't /api/* or /ws
+    _server.onNotFound([serveUI](AsyncWebServerRequest* req) {
+        if (req->method() == HTTP_GET 
+            && !req->url().startsWith("/api")) {
+            serveUI(req);
+        } else {
+            req->send(404, "application/json", "{\"error\":\"not found\"}");
+        }
     });
 }

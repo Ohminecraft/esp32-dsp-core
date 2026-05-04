@@ -5,6 +5,7 @@
 
 #include "wifi_manager.h"
 #include <ESPmDNS.h>
+#include <esp_wifi.h>          // esp_wifi_set_ps()
 #include "../utils/debug_log.h"
 
 #define TAG "WIFI"
@@ -126,9 +127,11 @@ void WiFiManager::_startAP() {
 
     bool ok = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS);
     if (ok) {
+        WiFi.setTxPower(WIFI_POWER_20dBm); // Max power for best range/reception
         _ready  = true;
-        LOG_INFO(TAG, "AP started — SSID: %s  IP: %s", WIFI_AP_SSID,
+        LOG_INFO(TAG, "AP started — SSID: %s  IP: %s, or (esp32-dsp.local)", WIFI_AP_SSID,
                  WiFi.softAPIP().toString().c_str());
+        MDNS.end(); // End any previous mDNS instance (e.g. from failed STA attempt) before starting a new one
         if (MDNS.begin("esp32-dsp")) {
             MDNS.addService("http", "tcp", 80);
         }
@@ -150,14 +153,13 @@ void WiFiManager::_startSTA() {
     } else {
         WiFi.mode(WIFI_STA);
     }
-
     // Static IP if configured
     if (_staStaticIP != INADDR_NONE) {
         WiFi.config(_staStaticIP, _staGateway, _staSubnet);
     }
 
     WiFi.begin(_staSsid, _staPass);
-    LOG_INFO(TAG, "Connecting to '%s'...", _staSsid);
+    LOG_INFO(TAG, "Connecting to '%s', Pass:'%s'...", _staSsid, _staPass);
 }
 
 void WiFiManager::loop() {
@@ -166,9 +168,10 @@ void WiFiManager::loop() {
             _apMode = false;
             _ready  = true;
             _isConnectingSTA = false;
-            LOG_INFO(TAG, "STA connected — IP: %s  RSSI: %d dBm",
+            WiFi.setTxPower(WIFI_POWER_20dBm); // Max power for best range/reception
+            LOG_INFO(TAG, "STA connected — IP: %s or (esp32-dsp.local)  RSSI: %d dBm",
                      WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
-                     
+            MDNS.end();
             if (MDNS.begin("esp32-dsp")) {
                 MDNS.addService("http", "tcp", 80);
             }

@@ -66,7 +66,7 @@
 // ============================================================================
 
 #define AUDIO_TASK_CORE         1
-#define AUDIO_TASK_PRIORITY     23
+#define AUDIO_TASK_PRIORITY     configMAX_PRIORITIES - 1
 #define AUDIO_TASK_STACK_SIZE   16384
 
 #define CONTROL_TASK_CORE       0
@@ -86,17 +86,18 @@
 #define UART_SYNC_BYTE_2        0x55
 
 // ============================================================================
-// WiFi Configuration
-// ============================================================================
-
-#define WIFI_AP_SSID            "ESP32-DSP"
-#define WIFI_AP_PASS            "dsp12345"
-
-// ============================================================================
 // Preset Configuration
 // ============================================================================
 
 #define MAX_PRESET_SLOTS        8
+
+// ============================================================================
+// Misc Configs
+// ============================================================================
+
+#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
+#define AUTO_SHUTDONW_TIMER 1800000 // 30min
+#define MUTE_PIN_LOGIC LOW
 
 // ============================================================================
 // Feature Flags

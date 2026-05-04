@@ -3,13 +3,13 @@
  * @brief ESP32 DSP Core - Main entry point
  *
  * System architecture:
- *   Core 1 (Priority 23): Audio Task   — I2S read → DSP pipeline → I2S write
+ *   Core 1 (Priority 24): Audio Task   — I2S read → DSP pipeline → I2S write
  *   Core 0 (Priority  5): Sync Task    — PCNT clock monitor (AudioSync)
  *   Core 0 (Priority  5): Control Task — UART command parsing → parameter updates
  *   Serial (USB):          Debug output
  *
  * Pipeline order:
- *   INPUT → Compander → Exciter → DynamicEQ → EQ1 → EQ2 → DRC → Volume → OUTPUT
+ *   INPUT → Compander → Exciter → DynamicEQ → EQ1 → EQ2 → LeftRightEQ → DRC → Volume → OUTPUT
  */
 
 #include <Arduino.h>
@@ -51,6 +51,7 @@ static TaskHandle_t g_controlTaskHandle = NULL;
 
 // Current sample rate — updated by AudioSync callback, read by controlTask
 static volatile uint32_t g_currentSampleRate = DSP_SAMPLE_RATE_DEFAULT;
+static volatile uint32_t g_lastReinitSampleRate = 0;
 
 // Pipeline state — audioTask checks this each iteration
 // Use a simple flag + suspend/resume rather than a mutex to avoid
@@ -64,57 +65,50 @@ static volatile bool g_isclockabsent = false;
 static volatile uint32_t g_lastFrameUs = 0;
 static volatile uint32_t g_maxFrameUs  = 0;
 
+// Shutdown Mechanism
+#ifdef SOFT_LATCH_SHUTDOWN
+static volatile uint32_t g_autoShutdownTimer = 0;
+static volatile bool     g_userShutdownRequest = false;
+static bool              g_shutdownButtonIsHolding = false;
+static volatile uint32_t g_shutdownCountdown = 0;
+#endif
+
 // ============================================================================
 // Pipeline Reinit — called from AudioSync callback (sync task context, Core 0)
 // ============================================================================
 
-static void reinitPipeline(uint32_t newRateHz, bool clockPresent) {
-    // 1. Signal audio task to stop — it checks g_pipelineReady each loop iteration.
+static void reinitPipeline(uint32_t newRateHz) {
     g_pipelineReady = false;
+    vTaskDelay(pdMS_TO_TICKS(50));
 
-    // 2. Wait for audioTask to finish any in-progress I2S read/write (max 20ms timeout)
-    //    and enter its idle spin loop. audioTask (priority 23) preempts us (priority 5)
-    //    during this delay, exits I2S, sees g_pipelineReady=false, enters vTaskDelay(1).
-    //    Without this, vTaskSuspend catches it inside i2s_channel_read with a handle
-    //    that we're about to delete → use-after-free on resume.
-    vTaskDelay(pdMS_TO_TICKS(30));
-
-    // 3. Now audioTask is safely in vTaskDelay(1) spin — suspend it.
     if (g_audioTaskHandle) {
         vTaskSuspend(g_audioTaskHandle);
     }
 
-    // 2. Reinit I2S ports at new rate
-    g_audioInput.reinit(newRateHz);
-    g_audioOutput.reinit((int32_t)newRateHz);
-
-    // 3. Reinit DSP pipeline (recomputes filter coefficients for new Fs)
-    if (newRateHz > 0) {
+    if (newRateHz > 0 && newRateHz != g_lastReinitSampleRate) {
+        g_lastReinitSampleRate = newRateHz;
+        g_audioInput.reinit(newRateHz);
+        g_audioOutput.reinit((int32_t)newRateHz);
         g_pipeline.init((int32_t)newRateHz, DSP_NUM_CHANNELS);
-
-        // Reload preset so filter coefficients are recalculated at new rate
-        if (g_presetMgr.hasPreset(0)) {
-            g_presetMgr.loadPreset(0, g_pipeline);
-        } else {
-            g_pipeline.getVolume().enable();
-            g_pipeline.getPreGain().enable();
-        }
+        g_presetMgr.loadPreset(0, g_pipeline);
     }
 
-    // 4. Update global rate for controlTask budget calculation
     g_currentSampleRate = (newRateHz > 0) ? newRateHz : g_currentSampleRate;
 
-    // 5. Resume audio task only if clock is present
-    if (clockPresent && newRateHz > 0) {
+    if (newRateHz > 0) {
         g_pipelineReady = true;
         g_isclockabsent = false;
+        digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC ? LOW : HIGH);
         if (g_audioTaskHandle) {
             vTaskResume(g_audioTaskHandle);
         }
-    } else if (!clockPresent) g_isclockabsent = true;
-
-    LOG_INFO("SYNC", "Pipeline reinit done: %lu Hz, clock=%d",
-             (unsigned long)newRateHz, (int)clockPresent);
+        LOG_INFO("SYNC", "Pipeline reinit done: %lu Hz", (unsigned long)newRateHz);
+    } else {
+        g_isclockabsent = true;
+        digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
+        // audioTask stays suspended
+        LOG_INFO("SYNC", "Pipeline stopped: clock absent");
+    }
 }
 
 // ============================================================================
@@ -128,13 +122,13 @@ static void onRateChange(ClockState state, uint32_t rateHz) {
     switch (state) {
 
     case ClockState::ABSENT:
-        reinitPipeline(0, /*clockPresent=*/false);
+        reinitPipeline(0);
         break;
 
     case ClockState::RATE_44100:
     case ClockState::RATE_48000:
     case ClockState::RATE_96000:
-        reinitPipeline(rateHz, /*clockPresent=*/true);
+        reinitPipeline(rateHz);
         break;
 
     case ClockState::RATE_UNKNOWN:
@@ -145,7 +139,7 @@ static void onRateChange(ClockState state, uint32_t rateHz) {
 }
 
 // ============================================================================
-// Audio Task (Core 1, Priority 23)
+// Audio Task (Core 1, Priority 24)
 // ============================================================================
 
 void IRAM_ATTR audioTask(void* param) {
@@ -190,6 +184,20 @@ void controlTask(void* param) {
     uint32_t lastStatusMs = millis();
 
     while (true) {
+        #ifdef SOFT_LATCH_SHUTDOWN
+        bool userShutdownRequest = (digitalRead(POWER_PIN_OFF) == LOW);
+
+        if (userShutdownRequest) {
+            if (!g_shutdownButtonIsHolding) {
+            g_shutdownButtonIsHolding = true;
+            g_shutdownCountdown = millis();
+            } else if (millis() - g_shutdownButtonIsHolding >= 5000) g_userShutdownRequest = true;
+        } else {
+            g_shutdownButtonIsHolding = false;
+            g_shutdownCountdown = 0;
+        }
+        #endif
+
         // Poll UART for incoming commands
         if (g_uart.poll()) {
             g_paramCtrl.handleCommand(g_uart.getCommand());
@@ -230,6 +238,23 @@ void controlTask(void* param) {
             ESP.restart();
         }
 
+        #ifdef SOFT_LATCH_SHUTDOWN
+        if ((g_isclockabsent && millis() - g_autoShutdownTimer >= AUTO_SHUTDONW_TIMER) || g_userShutdownRequest) {
+            vTaskDelete(g_audioTaskHandle);
+            digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
+            g_audioInput.deinit();
+            g_audioOutput.deinit();
+            AudioSync::stop();
+            WiFi.disconnect(true);
+            StatusLED::off();
+            delay(300);
+            digitalWrite(POWER_PIN_OUT, LOW); // Shutdown system
+            vTaskDelete(NULL); // Should never reach here
+        } else {
+            g_autoShutdownTimer = millis();
+        }
+        #endif
+
         // Periodic status report (every 2s)
         uint32_t nowMs = millis();
 
@@ -269,9 +294,9 @@ void controlTask(void* param) {
             };
             g_uart.sendFrame(CMD_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, 7);
 
-            //OG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%)",
-            //    g_lastFrameUs, s_usage, (unsigned long)s_fs,
-            //    g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct);
+            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%)",
+                g_lastFrameUs, s_usage, (unsigned long)s_fs,
+                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct);
 
             g_maxFrameUs = 0;
         }
@@ -288,6 +313,13 @@ void controlTask(void* param) {
 // ============================================================================
 
 void setup() {
+    #ifdef SOFT_LATCH_SHUTDOWN
+        pinMode(POWER_PIN_OUT, OUTPUT);
+        pinMode(POWER_PIN_OFF, INPUT_PULLUP);
+        digitalWrite(POWER_PIN_OUT, HIGH);
+    #endif
+    pinMode(MUTE_PIN, OUTPUT);
+    digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
     DBG_INIT(115200);
     DBG_PRINTLN();
     DBG_PRINTLN("=================================");

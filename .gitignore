@@ -4,7 +4,7 @@
 .vscode/launch.json
 .vscode/ipch
 node_modules/
+include/embedded_ui.h
 dist/
-data/
 *.exe
 .last_web_ui_hash
