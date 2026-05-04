@@ -52,7 +52,7 @@ jobs:
         with:
           name: firmware-${{ github.sha }}
           path: |
-            firmware_esp32dev.bin
+            firmware_esp32.bin
             firmware_esp32s3.bin
 
       # ─── Pre-release on dev push ──────────────────────────────────────────────
