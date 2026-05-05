@@ -183,6 +183,9 @@ void controlTask(void* param) {
 
     uint32_t lastStatusMs = millis();
 
+    pinMode(MUTE_PIN, OUTPUT);
+    digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
+
     while (true) {
         #ifdef SOFT_LATCH_SHUTDOWN
         bool userShutdownRequest = (digitalRead(POWER_PIN_OFF) == LOW);
@@ -321,9 +324,6 @@ void setup() {
         digitalWrite(POWER_PIN_OUT, HIGH);  // Latch power on (2N3904 gate closed)
         pinMode(POWER_PIN_OFF, INPUT_PULLUP);
     #endif
-    esp_log_level_set("*", ESP_LOG_NONE);
-    pinMode(MUTE_PIN, OUTPUT);
-    digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
     DBG_INIT(115200);
     DBG_PRINTLN();
     DBG_PRINTLN("=================================");

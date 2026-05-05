@@ -14,11 +14,11 @@ A high-performance real-time audio digital signal processing (DSP) framework for
 
 ESP32 DSP Core is a professional audio platform featuring:
 - **Dual-Core Processing**: Core 1 handles the 96kHz audio pipeline; Core 0 handles system control and networking.
-- **Advanced DSP Pipeline**: 11+ modules including Pre Gain, Compander, Exciter, Dynamic Bass, Dynamic EQ, Dual Parametric EQ, Left/Right Independent EQ, DRC, and Post Gain.
+- **Advanced DSP Pipeline**: 11+ modules including Pre Gain, Compander, Exciter, Dynamic Bass, Dynamic EQ, Dual Parametric EQ, Left/Right Independent EQ, Multi-band DRC, and Post Gain.
 - **Hybrid Connectivity**: Seamlessly switch between **High-speed UART** (USB) and **Low-latency WebSocket** (WiFi).
 - **Sub-500ms Sync**: Proprietary frame batching protocol for near-instant state synchronization over WiFi.
 - **Auto Clock Sync**: Built-in PCNT-based frequency monitor for real-time sample rate tracking and I2S re-initialization.
-- **Static Memory Architecture**: Zero heap allocations in the audio path for rock-solid stability.
+- **Static Memory Architecture**: Zero heap allocations in the audio path for rock-solid stability. Hardened math utilities with NaN/Inf protection.
 
 ---
 
@@ -46,7 +46,7 @@ ESP32 DSP Core is a professional audio platform featuring:
 ```
 
 ### Signal Chain
-`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → Left/Right EQ → DRC → Post Gain → OUTPUT`
+`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → Left/Right EQ → Multi-band DRC → Post Gain → OUTPUT`
 
 ---
 
@@ -87,7 +87,7 @@ Serve the control interface directly from the ESP32 SPIFFS.
 
 ESP32 DSP Core là một framework xử lý âm thanh kỹ thuật số (DSP) hiệu năng cao, chạy real-time trên dòng chip ESP32/ESP32-S3. Dự án cung cấp chuỗi xử lý modular, các thuật toán âm thanh chuyên nghiệp và giao diện điều khiển kép (USB Serial & WiFi WebSocket).
 
-**Trạng thái**: ✅ Ổn định & Hiệu năng cao | **Tần số mẫu**: 96 kHz (Tự động đồng bộ) | **Độ trễ**: 2.67ms | **Kết nối**: UART + WebSocket
+**Trạng thái**: ✅ Hoàn thiện & Hiệu năng cao | **Tần số mẫu**: 96 kHz (Tự động đồng bộ) | **Độ trễ**: 2.67ms | **Kết nối**: UART + WebSocket
 
 ### 🎯 Điểm nổi bật
 - **Xử lý Song nhân**: Core 1 dành riêng cho audio; Core 0 xử lý kết nối và hệ thống.
@@ -97,9 +97,9 @@ ESP32 DSP Core là một framework xử lý âm thanh kỹ thuật số (DSP) hi
 - **Giao diện hiện đại**: UI Glassmorphism, tối ưu cho cả máy tính (Electron) và điện thoại (Browser).
 
 ### 🏗️ Chuỗi xử lý (Signal Chain)
-`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → Left/Right EQ → DRC → Post Gain → OUTPUT`
+`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → Left/Right EQ → Multi-band DRC → Post Gain → OUTPUT`
 
 ---
 
-**Last Updated**: April 30, 2026  
+**Last Updated**: May 5, 2026  
 **Status**: Production Ready ✅

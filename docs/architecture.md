@@ -43,12 +43,14 @@ The ESP32 DSP Core is designed as a **deterministic real-time system**. It lever
 ```
 
 ### 2. Signal Chain Logic
-The DSP pipeline operates in **Core 1** with a strict frame-based approach (256 samples per frame).
+The DSP pipeline operates in **Core 1** with a strict frame-based approach (256 samples per frame @ 96kHz).
 
-`INPUT → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → DRC → Volume → OUTPUT`
+`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → Left/Right EQ → Multi-band DRC → Post Gain → OUTPUT`
 
-- **In-place Processing**: To save RAM and reduce latency, each module modifies the global audio buffer directly.
-- **Zero-Heap Policy**: No memory is allocated or freed during audio processing to prevent non-deterministic behavior (glitches).
+- **In-place Processing**: Each module modifies the global audio buffer directly to minimize latency and memory footprint.
+- **Stateful Processing**: Modules like Compander and DRC persist their envelope and gain states between frames for smooth tracking.
+- **Math Safety**: Uses hardened assembly-optimized fast math (FastLog2/FastExp2) with built-in protection against NaN and Infinite values to prevent audio crashes.
+- **Zero-Heap Policy**: No dynamic memory allocation in the audio path.
 
 ### 3. Control & Sync Mechanism
 - **Hybrid Control**: The system accepts commands via UART (USB) and WebSocket (WiFi) simultaneously.
@@ -73,9 +75,10 @@ Dự án hỗ trợ chuyển đổi mượt mà giữa 2 phương thức:
 - **WebSocket (WiFi)**: Dành cho điều khiển không dây qua điện thoại hoặc máy tính từ xa.
 
 ### 3. Đặc tính Kỹ thuật Audio
-- **Tần số mẫu**: 96.000 Hz.
-- **Độ trễ hệ thống**: 2.67 ms (Cực thấp, đáp ứng tiêu chuẩn biểu diễn chuyên nghiệp).
-- **Bộ nhớ tĩnh**: 100% bộ đệm âm thanh được cấp phát tĩnh ngay khi khởi động, tránh lỗi phân mảnh RAM (Heap fragmentation).
+- **Tần số mẫu**: 96.000 Hz (Đồng bộ hóa tự động qua PCNT).
+- **Độ trễ hệ thống**: 2.67 ms.
+- **An toàn toán học**: Tích hợp các hàm toán học nhanh (Q31/Float) có khả năng chống tràn và khử nhiễu NaN/Inf, đảm bảo hệ thống không bao giờ bị "treo" âm thanh (Mute).
+- **Bộ nhớ tĩnh**: 100% bộ đệm âm thanh được cấp phát tĩnh ngay khi khởi động.
 
 ---
-**Last Updated**: April 30, 2026
+**Last Updated**: May 5, 2026
