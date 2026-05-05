@@ -14,8 +14,10 @@ import {
     leToInt16, leToInt32
 } from './protocol.js';
 import { EQGraph } from './eq-graph.js';
+import { DRCGraph } from './drc-graph.js';
 
 let eqGraph = null;
+let drcGraph = null;
 let parser = new FrameParser();
 
 // ─── Browser Polyfill for Web UI ──────────────────────────────────────
@@ -372,6 +374,7 @@ parser.onFrame((frame) => {
                 else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val);
                 else if (pIndex === 3) store.updateParam('compander', 'attackMs', val);
                 else if (pIndex === 4) store.updateParam('compander', 'releaseMs', val);
+                else if (pIndex === 5) store.updateParam('compander', 'pregain', val);
                 break;
             case MODULE.EXCITER:
                 if (pIndex === 0) store.updateParam('exciter', 'cutoffFreq', val);
@@ -389,17 +392,22 @@ parser.onFrame((frame) => {
                 else if (pIndex === 7) store.updateParam('dynamicBass', 'cliprelease', val);
                 break;
             case MODULE.DRC: {
-                // pIndex encodes band in upper nibble, param in lower nibble
-                // handleGetAllState sends pIndex 0-3 for band 0 (no nibble encoding)
-                const drcBandIdx = (pIndex >> 4) & 0x0F;
-                const drcParam = pIndex & 0x0F;
-                const drcBand = store.drc.bands[drcBandIdx];
-                if (drcBand) {
-                    if (drcParam === 0) drcBand.threshold = val;
-                    else if (drcParam === 1) drcBand.ratio = val;
-                    else if (drcParam === 2) drcBand.attackMs = val;
-                    else if (drcParam === 3) drcBand.releaseMs = val;
-                    else if (drcParam === 4) drcBand.pregain = val;
+                // New encoding:
+                //   pIndex 0x10 = mode
+                //   pIndex 0x20-0x3F = per-band: band=(pIndex-0x20)>>3, param=(pIndex-0x20)&7
+                if (pIndex === 0x10) {
+                    store.drc.mode = val;
+                } else if (pIndex >= 0x20 && pIndex <= 0x3F) {
+                    const bandIdx = (pIndex - 0x20) >> 3;   // 0-3
+                    const param   = (pIndex - 0x20) & 0x07; // 0-4
+                    const drcBand = store.drc.bands[bandIdx];
+                    if (drcBand) {
+                        if (param === 0) drcBand.threshold = val;
+                        else if (param === 1) drcBand.ratio = val;
+                        else if (param === 2) drcBand.attackMs = val;
+                        else if (param === 3) drcBand.releaseMs = val;
+                        else if (param === 4) drcBand.pregain = val;
+                    }
                 }
                 break;
             }
@@ -806,20 +814,7 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.DRC:
-            addSlider(body, 'Threshold', -6000, 0, 100, 'dB',
-                () => store.drc.bands[3].threshold,
-                (v) => { store.drc.bands[3].threshold = v; sendFrame(buildSetParam(MODULE.DRC, 0x30, v)); },
-                null, 0.01);
-            addSlider(body, 'Ratio', 100, 1000, 10, ':1',
-                () => store.drc.bands[3].ratio,
-                (v) => { store.drc.bands[3].ratio = v; sendFrame(buildSetParam(MODULE.DRC, 0x31, v)); },
-                null, 0.01);
-            addSlider(body, 'Attack', 1, 2000, 1, 'ms',
-                () => store.drc.bands[3].attackMs,
-                (v) => { store.drc.bands[3].attackMs = v; sendFrame(buildSetParam(MODULE.DRC, 0x32, v)); });
-            addSlider(body, 'Release', 10, 2000, 1, 'ms',
-                () => store.drc.bands[3].releaseMs,
-                (v) => { store.drc.bands[3].releaseMs = v; sendFrame(buildSetParam(MODULE.DRC, 0x33, v)); });
+            buildDrcPanel(body);
             break;
 
         case MODULE.PRE_GAIN:
@@ -836,6 +831,273 @@ function buildModuleBody(body, mod) {
                 null, 0.01);
             break;
     }
+}
+
+// ─── DRC Panel ───────────────────────────────────────────────────────
+
+function buildDrcPanel(container) {
+    const d = store.drc;
+
+    // ── Layout: left = graph, right = controls ─────────────────────────
+    const layout = document.createElement('div');
+    layout.className = 'drc-layout';
+    container.appendChild(layout);
+
+    // ── LEFT: Compression Curve Canvas ───────────────────────────────
+    const graphWrap = document.createElement('div');
+    graphWrap.className = 'drc-graph-wrap';
+    layout.appendChild(graphWrap);
+
+    const canvas = document.createElement('canvas');
+    graphWrap.appendChild(canvas);
+
+    if (drcGraph) drcGraph.destroy();
+    drcGraph = new DRCGraph(canvas);
+
+    const refreshGraph = () => {
+        const band = d.bands[d.activeBand];
+        const thDb = band.threshold / 100;
+        const ratio = band.ratio / 100;
+        drcGraph.draw(thDb, ratio);
+    };
+    refreshGraph();
+
+    // ── RIGHT: Controls ───────────────────────────────────────────────
+    const controls = document.createElement('div');
+    controls.className = 'drc-controls';
+    layout.appendChild(controls);
+
+    // ── Mode selector ────────────────────────────────────────────────
+    const modeRow = document.createElement('div');
+    modeRow.className = 'drc-row';
+    const modeLabel = document.createElement('label');
+    modeLabel.textContent = 'Mode';
+    const modeSelect = document.createElement('select');
+    modeSelect.className = 'drc-select';
+    [
+        [0, 'Full Band'],
+        [1, '2 Band'],
+        [2, '2 Band + Full'],
+        [3, '3 Band'],
+        [4, '3 Band + Full'],
+    ].forEach(([val, name]) => {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = name;
+        if (d.mode === val) opt.selected = true;
+        modeSelect.appendChild(opt);
+    });
+    modeSelect.addEventListener('change', () => {
+        d.mode = parseInt(modeSelect.value);
+        sendFrame(buildSetParam(MODULE.DRC, 0x10, d.mode));
+        updateCrossoverVisibility();
+        updateBandTabs();
+    });
+    modeRow.appendChild(modeLabel);
+    modeRow.appendChild(modeSelect);
+    controls.appendChild(modeRow);
+
+    // ── Crossover Filter type ─────────────────────────────────────────
+    const cfRow = document.createElement('div');
+    cfRow.className = 'drc-row';
+    const cfLabel = document.createElement('label');
+    cfLabel.textContent = 'Crossover Filter';
+    const cfSelect = document.createElement('select');
+    cfSelect.className = 'drc-select';
+    [
+        [1, 'Butterworth, order=1'],
+        [2, 'Linkwitz-Riley, order=2'],
+        [3, 'Linkwitz-Riley, order=4'],
+        [4, 'Q-controlled, order=4'],
+    ].forEach(([val, name]) => {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = name;
+        if (d.cfType === val) opt.selected = true;
+        cfSelect.appendChild(opt);
+    });
+    cfSelect.addEventListener('change', () => {
+        d.cfType = parseInt(cfSelect.value);
+        sendFrame(buildSetParam(MODULE.DRC, 0x11, d.cfType));
+        updateCrossoverVisibility();
+    });
+    cfRow.appendChild(cfLabel);
+    cfRow.appendChild(cfSelect);
+    controls.appendChild(cfRow);
+
+    // ── Crossover Freq 1 + Q LP ───────────────────────────────────────
+    const cf1Row = document.createElement('div');
+    cf1Row.className = 'drc-row drc-cf-row';
+    cf1Row.innerHTML = '<label>Crossover Freq1</label>';
+    const fc1Inp = document.createElement('input');
+    fc1Inp.type = 'number'; fc1Inp.className = 'drc-num'; fc1Inp.min = 20; fc1Inp.max = 20000; fc1Inp.step = 10;
+    fc1Inp.value = d.fc1;
+    fc1Inp.addEventListener('change', () => {
+        d.fc1 = Math.max(20, Math.min(20000, parseInt(fc1Inp.value) || d.fc1));
+        fc1Inp.value = d.fc1;
+        sendFrame(buildSetParam(MODULE.DRC, 0x12, d.fc1));
+    });
+    const qLpLabel = document.createElement('span'); qLpLabel.textContent = 'Q(LP)'; qLpLabel.className = 'drc-qlabel';
+    const qLpInp = document.createElement('input');
+    qLpInp.type = 'number'; qLpInp.className = 'drc-num drc-q'; qLpInp.min = 0.1; qLpInp.max = 4; qLpInp.step = 0.01;
+    qLpInp.value = (d.qLp / 1024).toFixed(2);
+    qLpInp.addEventListener('change', () => {
+        d.qLp = Math.round(parseFloat(qLpInp.value) * 1024);
+        sendFrame(buildSetParam(MODULE.DRC, 0x14, d.qLp));
+    });
+    cf1Row.appendChild(fc1Inp);
+    cf1Row.appendChild(qLpLabel);
+    cf1Row.appendChild(qLpInp);
+    controls.appendChild(cf1Row);
+
+    // ── Crossover Freq 2 + Q HP ───────────────────────────────────────
+    const cf2Row = document.createElement('div');
+    cf2Row.className = 'drc-row drc-cf-row';
+    cf2Row.innerHTML = '<label>Crossover Freq2</label>';
+    const fc2Inp = document.createElement('input');
+    fc2Inp.type = 'number'; fc2Inp.className = 'drc-num'; fc2Inp.min = 20; fc2Inp.max = 20000; fc2Inp.step = 10;
+    fc2Inp.value = d.fc2;
+    fc2Inp.addEventListener('change', () => {
+        d.fc2 = Math.max(20, Math.min(20000, parseInt(fc2Inp.value) || d.fc2));
+        fc2Inp.value = d.fc2;
+        sendFrame(buildSetParam(MODULE.DRC, 0x13, d.fc2));
+    });
+    const qHpLabel = document.createElement('span'); qHpLabel.textContent = 'Q(HP)'; qHpLabel.className = 'drc-qlabel';
+    const qHpInp = document.createElement('input');
+    qHpInp.type = 'number'; qHpInp.className = 'drc-num drc-q'; qHpInp.min = 0.1; qHpInp.max = 4; qHpInp.step = 0.01;
+    qHpInp.value = (d.qHp / 1024).toFixed(2);
+    qHpInp.addEventListener('change', () => {
+        d.qHp = Math.round(parseFloat(qHpInp.value) * 1024);
+        sendFrame(buildSetParam(MODULE.DRC, 0x15, d.qHp));
+    });
+    cf2Row.appendChild(fc2Inp);
+    cf2Row.appendChild(qHpLabel);
+    cf2Row.appendChild(qHpInp);
+    controls.appendChild(cf2Row);
+
+    // ── Band selector tabs ────────────────────────────────────────────
+    const tabsRow = document.createElement('div');
+    tabsRow.className = 'drc-tabs';
+    controls.appendChild(tabsRow);
+
+    // ── Per-band sliders ──────────────────────────────────────────────
+    const bandControls = document.createElement('div');
+    bandControls.className = 'drc-band-controls';
+    controls.appendChild(bandControls);
+
+    // Map band index → param base offset
+    // Firmware encoding: paramId = 0x20 + band*8 + param  (band 0-3)
+    const BAND_PARAM = [0x20, 0x28, 0x30, 0x38];
+
+    const buildBandControls = (bandIdx) => {
+        bandControls.innerHTML = '';
+        const band = d.bands[bandIdx];
+        const pBase = BAND_PARAM[bandIdx];
+
+        addSlider(bandControls, 'Pregain', -7200, 1800, 25, 'dB',
+            () => Math.round((Math.log10(band.pregain / 4096) * 20) * 100),
+            (v) => {
+                band.pregain = Math.round(Math.pow(10, v / 2000) * 4096);
+                sendFrame(buildSetParam(MODULE.DRC, pBase + 4, band.pregain));
+            }, null, 0.01);
+
+        addSlider(bandControls, 'Threshold', -9000, 0, 50, 'dB',
+            () => band.threshold,
+            (v) => {
+                band.threshold = v;
+                sendFrame(buildSetParam(MODULE.DRC, pBase + 0, v));
+                refreshGraph();
+            }, null, 0.01);
+
+        addSlider(bandControls, 'Ratio', 100, 10000, 100, ':1',
+            () => band.ratio,
+            (v) => {
+                band.ratio = v;
+                sendFrame(buildSetParam(MODULE.DRC, pBase + 1, v));
+                refreshGraph();
+            }, null, 0.01);
+
+        addSlider(bandControls, 'Attack', 1, 2000, 1, 'ms',
+            () => band.attackMs,
+            (v) => { band.attackMs = v; sendFrame(buildSetParam(MODULE.DRC, pBase + 2, v)); });
+
+        addSlider(bandControls, 'Release', 10, 2000, 1, 'ms',
+            () => band.releaseMs,
+            (v) => { band.releaseMs = v; sendFrame(buildSetParam(MODULE.DRC, pBase + 3, v)); });
+    };
+
+    const renderTabs = () => {
+        tabsRow.innerHTML = '';
+        const visibleBands = getBandCount(d.mode);
+
+        for (let tabPos = 0; tabPos < visibleBands; tabPos++) {
+            const bandIdx = tabToBandIdx(tabPos, d.mode);
+            const isFullband = (bandIdx === 3);
+            const label = isFullband ? '● Full' : `Band ${tabPos + 1}`;
+            const tab = document.createElement('button');
+            tab.className = 'drc-tab' + (d.activeBand === bandIdx ? ' active' : '');
+            tab.textContent = label;
+            tab.addEventListener('click', () => {
+                d.activeBand = bandIdx;
+                refreshGraph();
+                buildBandControls(bandIdx);
+                tabsRow.querySelectorAll('.drc-tab').forEach((t, idx) => {
+                    t.classList.toggle('active', tabToBandIdx(idx, d.mode) === bandIdx);
+                });
+            });
+            tabsRow.appendChild(tab);
+        }
+    };
+
+    // For fullband-only mode, show fullband = bands[3]
+    const getBandCount = (mode) => {
+        switch (mode) {
+            case 0: return 1;  // fullband only → show index 3
+            case 1: return 2;
+            case 2: return 3;  // band1, band2, fullband
+            case 3: return 3;
+            case 4: return 4;
+            default: return 1;
+        }
+    };
+
+    // Map tab position → band index
+    const tabToBandIdx = (tabPos, mode) => {
+        if (mode === 0) return 3;   // fullband
+        if (mode === 2 && tabPos === 2) return 3;   // 2band+full → tab2=fullband
+        if (mode === 4 && tabPos === 3) return 3;   // 3band+full → tab3=fullband
+        return tabPos;
+    };
+
+    const updateBandTabs = () => {
+        // Always resolve activeBand to correct band index
+        if (d.mode === 0) {
+            d.activeBand = 3;  // fullband mode → always show band[3]
+        } else {
+            const count = getBandCount(d.mode);
+            // If current activeBand is out of range, reset to first visible
+            const validBandIdx = tabToBandIdx(0, d.mode);
+            const validBands = Array.from({length: count}, (_, i) => tabToBandIdx(i, d.mode));
+            if (!validBands.includes(d.activeBand)) d.activeBand = validBandIdx;
+        }
+        renderTabs();
+        buildBandControls(d.activeBand);
+        refreshGraph();
+    };
+
+    const updateCrossoverVisibility = () => {
+        const needCf = d.mode !== 0;
+        const need2Cf = d.mode === 3 || d.mode === 4;
+        const needQ = d.cfType === 4;
+        cfRow.style.display  = needCf ? '' : 'none';
+        cf1Row.style.display = needCf ? '' : 'none';
+        cf2Row.style.display = need2Cf ? '' : 'none';
+        qLpLabel.style.display = qLpInp.style.display = needQ ? '' : 'none';
+        qHpLabel.style.display = qHpInp.style.display = needQ ? '' : 'none';
+    };
+
+    updateCrossoverVisibility();
+    updateBandTabs();
 }
 
 // ─── EQ Band Panel ───────────────────────────────────────────────────
@@ -1859,7 +2121,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const rebuildStructural = () => {
         unmountGraph();
 
-        const rebuildIds = [MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT'];
+        const rebuildIds = [MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
         let activeAcc = null;
 
         rebuildIds.forEach(id => {
@@ -1873,7 +2135,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        if (activeAcc) mountGraphToAccordion(activeAcc);
+        if (activeAcc && activeAcc.dataset.moduleId !== String(MODULE.DRC)) {
+            mountGraphToAccordion(activeAcc);
+        }
     };
 
     store.on('state:loaded', rebuildStructural);

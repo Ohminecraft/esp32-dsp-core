@@ -232,33 +232,36 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
 
   case MODULE_ID_DRC: {
     DRC &drc = _pipeline->getDrc();
-    // paramId encodes: upper nibble = band (0-3), lower nibble = param
-    uint8_t band = (paramId >> 4) & 0x0F;
-    uint8_t param = paramId & 0x0F;
-    switch (param) {
-    case 0:
-      drc.setThreshold(band, value);
+
+    // ── Global params (paramId 0x10 - 0x1F) ────────────────────────
+    if (paramId == 0x10) { drc.setMode((DRCMode)value);             break; }
+    if (paramId == 0x11) { drc.setCrossoverType((DRCCrossoverType)value); break; }
+    if (paramId == 0x12) { drc.setCrossoverFreq(0, value);          break; }
+    if (paramId == 0x13) { drc.setCrossoverFreq(1, value);          break; }
+    if (paramId == 0x14) { drc.setCrossoverQ(0, value);             break; }
+    if (paramId == 0x15) { drc.setCrossoverQ(1, value);             break; }
+
+    // ── Per-band params (paramId 0x20 - 0x3F) ──────────────────────
+    // Encoding: paramId = 0x20 + band*8 + param
+    //   band 0 → 0x20-0x27, band 1 → 0x28-0x2F
+    //   band 2 → 0x30-0x37, band 3 (fullband) → 0x38-0x3F
+    // param: 0=threshold, 1=ratio, 2=attack, 3=release, 4=pregain
+    if (paramId >= 0x20 && paramId <= 0x3F) {
+      uint8_t band  = (paramId - 0x20) >> 3;  // 0-3
+      uint8_t param = (paramId - 0x20) & 0x07; // 0-4
+      switch (param) {
+        case 0: drc.setThreshold(band, value);   break;
+        case 1: drc.setRatio(band, value);        break;
+        case 2: drc.setAttackTime(band, value);   break;
+        case 3: drc.setReleaseTime(band, value);  break;
+        case 4: drc.setPregain(band, value);      break;
+        default: _uart->sendError(0x04); return;
+      }
       break;
-    case 1:
-      drc.setRatio(band, value);
-      break;
-    case 2:
-      drc.setAttackTime(band, value);
-      break;
-    case 3:
-      drc.setReleaseTime(band, value);
-      break;
-    case 4:
-      drc.setPregain(band, value);
-      break;
-    case 5:
-      drc.setMode((DRCMode)value);
-      break;
-    default:
-      _uart->sendError(0x04);
-      return;
     }
-    break;
+
+    _uart->sendError(0x04);
+    return;
   }
 
   default:
@@ -423,12 +426,17 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
   sendPkt(MODULE_ID_DYNAMIC_BASS, 6, _pipeline->getDynamicBass().getClipAttack());
   sendPkt(MODULE_ID_DYNAMIC_BASS, 7, _pipeline->getDynamicBass().getClipRelease());
 
-  // DRC
-  sendPkt(MODULE_ID_DRC, 0, _pipeline->getDrc()._bands[0].thresholdDbInt);
-  sendPkt(MODULE_ID_DRC, 1, _pipeline->getDrc()._bands[0].ratioQ88);
-  sendPkt(MODULE_ID_DRC, 2, _pipeline->getDrc()._bands[0].attackMs);
-  sendPkt(MODULE_ID_DRC, 3, _pipeline->getDrc()._bands[0].releaseMs);
-  sendPkt(MODULE_ID_DRC, 4, _pipeline->getDrc()._bands[0].pregainQ412);
+  // DRC — send mode + fullband (band[3]) params using new encoding
+  {
+    DRC &drc = _pipeline->getDrc();
+    sendPkt(MODULE_ID_DRC, 0x10, (int32_t)drc._mode);
+    // Fullband band[3]: paramId = 0x20 + 3*8 + param = 0x38 + param
+    sendPkt(MODULE_ID_DRC, 0x38 + 0, drc._bands[3].thresholdDbInt);
+    sendPkt(MODULE_ID_DRC, 0x38 + 1, drc._bands[3].ratioX100);
+    sendPkt(MODULE_ID_DRC, 0x38 + 2, drc._bands[3].attackMs);
+    sendPkt(MODULE_ID_DRC, 0x38 + 3, drc._bands[3].releaseMs);
+    sendPkt(MODULE_ID_DRC, 0x38 + 4, drc._bands[3].pregainQ412);
+  }
 
   // EQ bands
   auto sendEq = [&](uint8_t cmdEq, uint8_t mid, ParametricEQ &eq, bool isRight = false) {

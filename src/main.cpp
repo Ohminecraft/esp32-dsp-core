@@ -239,7 +239,8 @@ void controlTask(void* param) {
         }
 
         #ifdef SOFT_LATCH_SHUTDOWN
-        if ((g_isclockabsent && millis() - g_autoShutdownTimer >= AUTO_SHUTDONW_TIMER) || g_userShutdownRequest) {
+        if ((g_isclockabsent && (millis() - g_autoShutdownTimer >= AUTO_SHUTDONW_TIMER)) || g_userShutdownRequest) {
+            LOG_INFO("SYS", "Initiating shutdown sequence...");
             vTaskDelete(g_audioTaskHandle);
             digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
             g_audioInput.deinit();
@@ -248,6 +249,7 @@ void controlTask(void* param) {
             WiFi.disconnect(true);
             StatusLED::off();
             delay(300);
+            LOG_INFO("SYS", "System halted.");
             digitalWrite(POWER_PIN_OUT, LOW); // Shutdown system
             vTaskDelete(NULL); // Should never reach here
         } else {
