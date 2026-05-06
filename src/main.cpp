@@ -244,17 +244,23 @@ void controlTask(void* param) {
         #ifdef SOFT_LATCH_SHUTDOWN
         if ((g_isclockabsent && (millis() - g_autoShutdownTimer >= AUTO_SHUTDONW_TIMER)) || g_userShutdownRequest) {
             LOG_INFO("SYS", "Initiating shutdown sequence...");
-            vTaskDelete(g_audioTaskHandle);
-            digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
             g_audioInput.deinit();
             g_audioOutput.deinit();
+            LOG_INFO("SYS", "Audio interfaces deinitialized.");
+            vTaskDelete(g_audioTaskHandle);
+            LOG_INFO("SYS", "Audio task stopped.");
+            digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
+            LOG_INFO("SYS", "Mute pin set.");
             AudioSync::stop();
-            WiFi.disconnect(true);
+            LOG_INFO("SYS", "Audio synchronization stopped.");
+            WiFi.status() == WL_CONNECTED ? WiFi.disconnect(true) : WiFi.softAPdisconnect(true);
+            LOG_INFO("SYS", "WiFi disconnected.");
             StatusLED::off();
+            LOG_INFO("SYS", "Status LED turned off.");
             delay(300);
             LOG_INFO("SYS", "System halted.");
             digitalWrite(POWER_PIN_OUT, LOW); // Shutdown system
-            vTaskDelete(NULL); // Should never reach here
+            vTaskDelete(NULL); // Ensure task is deleted preventing auto restart
         } else {
             g_autoShutdownTimer = millis();
         }
@@ -320,7 +326,7 @@ void controlTask(void* param) {
 void setup() {
     #ifdef SOFT_LATCH_SHUTDOWN
         pinMode(POWER_PIN_OUT, OUTPUT);
-        delay(70); // Short delay to ensure stable power before latching on
+        //delay(70); // Short delay to ensure stable power before latching on
         digitalWrite(POWER_PIN_OUT, HIGH);  // Latch power on (2N3904 gate closed)
         pinMode(POWER_PIN_OFF, INPUT_PULLUP);
     #endif
