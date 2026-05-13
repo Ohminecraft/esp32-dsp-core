@@ -9,3 +9,4 @@ dist/
 todoeffect/
 *.exe
 .last_web_ui_hash
+.agents/

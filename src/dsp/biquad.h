@@ -8,6 +8,7 @@
 
 #include "dsp_types.h"
 #include "../utils/debug_log.h"
+#include <dsps_biquad.h>
 #include <string.h>
 
 class Biquad {
@@ -29,17 +30,11 @@ public:
 
     /**
      * Process a block of stereo interleaved samples.
-     * @param samples Pointer to L,R,L,R... buffer (MUST be 16-byte aligned)
+     * @param samples Pointer to L,R,L,R... buffer
      * @param numFrames Number of frames (L/R pairs)
-     *
-     * Note: NOT marked inline — Xtensa l32r can only reach literals within
-     * 256 KB. Forcing inline on a float-heavy loop causes the literal pool
-     * to overflow at link time ("dangerous relocation: l32r").
-     * IRAM_ATTR alone keeps the hot path in fast RAM.
      */
     inline void IRAM_ATTR process(float* __restrict samples, size_t numFrames) {
-        // Cache coeffs locally so the compiler keeps them in registers
-        // across the loop instead of reloading from the struct each iteration.
+        // Fallback for interleaved samples (standard C++)
         const float b0 = _coeffs[0], b1 = _coeffs[1], b2 = _coeffs[2];
         const float a1 = _coeffs[3], a2 = _coeffs[4];
         float *sL = &_state[0], *sR = &_state[2];
@@ -59,6 +54,27 @@ public:
             sR[1]      = b2 * inR - a2 * outR;
             samples[idx + 1] = outR;
         }
+    }
+
+    /**
+     * Process two planar arrays (L and R separated) using ESP-DSP SIMD.
+     * @param inOutL Left channel buffer (in-place)
+     * @param inOutR Right channel buffer (in-place)
+     * @param numFrames Number of samples per channel
+     */
+    inline void IRAM_ATTR processPlanar(float* __restrict inOutL, float* __restrict inOutR, size_t numFrames) {
+        dsps_biquad_f32_ae32(inOutL, inOutL, numFrames, _coeffs, &_state[0]);
+        dsps_biquad_f32_ae32(inOutR, inOutR, numFrames, _coeffs, &_state[2]);
+    }
+
+    /**
+     * Process a single planar array (e.g. just Left or just Right).
+     * @param inOut Buffer to process
+     * @param numFrames Number of samples
+     * @param channel 0 for Left state, 1 for Right state
+     */
+    inline void IRAM_ATTR processPlanarChannel(float* __restrict inOut, size_t numFrames, int channel) {
+        dsps_biquad_f32_ae32(inOut, inOut, numFrames, _coeffs, &_state[channel * 2]);
     }
 
     /**

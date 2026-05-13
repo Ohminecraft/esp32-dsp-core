@@ -32,8 +32,8 @@ void Compander::init(int32_t sampleRate, int32_t numChannels) {
 void IRAM_ATTR Compander::process(float* __restrict samples, size_t numSamples) {
     if (!_enabled) return;
 
-    float envelope   = _envelope;
-    float gainLinear = _gainLinear;
+    float envelope   = _state.envelope;
+    float gainLinear = _state.gainLinear;
 
     const float pregain      = _pregain;
     const float thresholdDb  = _thresholdDb;
@@ -58,8 +58,8 @@ void IRAM_ATTR Compander::process(float* __restrict samples, size_t numSamples) 
         envelope = envelope_follow(envelope, peak, coeff);
 
         // ── 3. Decimated gain computation ──
-        if (++_decimCount >= COMP_DECIM) {
-            _decimCount = 0;
+        if (++_state.decimCount >= COMP_DECIM) {
+            _state.decimCount = 0;
             const float envDb = fast_linear_to_db(envelope);
             float gainDb = 0.0f;
 
@@ -80,14 +80,12 @@ void IRAM_ATTR Compander::process(float* __restrict samples, size_t numSamples) 
     }
 
     // ── 5. Persist state ──
-    _envelope = envelope;
-    _gainLinear = gainLinear;
+    _state.envelope = envelope;
+    _state.gainLinear = gainLinear;
 }
 
 void Compander::reset() {
-    _envelope   = 0.0f;
-    _gainLinear = 1.0f;
-    _decimCount = 0;
+    _state.reset();
 }
 
 void Compander::recalcCoeffs() {
@@ -95,15 +93,8 @@ void Compander::recalcCoeffs() {
 
     // Ratio format matches the control UI and SDK-style storage:
     // 100 = 1.00:1, 400 = 4.00:1.
-    const float rAbove = (float)_ratioAboveQ88 / 100.0f;
-    const float rBelow = (float)_ratioBelowQ88 / 100.0f;
-
-    // Pre-compute slopes per SDK: slope = (1 - 1/R)
-    // - rAbove > 1 → compression above threshold → slopeAbove ∈ [0, 1)
-    // - rBelow > 1 → expansion below threshold → slopeBelow ∈ [0, 1)
-    // - rBelow < 1 → upward compression below threshold → slopeBelow < 0
-    _slopeAbove = (rAbove > 0.0f) ? (1.0f - 1.0f / rAbove) : 0.0f;
-    _slopeBelow = (rBelow > 0.0f) ? (1.0f - 1.0f / rBelow) : 0.0f;
+    _slopeAbove = DynamicsProcessor::ratioToSlope(_ratioAboveQ88);
+    _slopeBelow = DynamicsProcessor::ratioToSlope(_ratioBelowQ88);
 
     _pregain = (float)_pregainQ412 / 4096.0f;
     _attackCoeff  = calc_envelope_coeff(_sampleRate, _attackMs);

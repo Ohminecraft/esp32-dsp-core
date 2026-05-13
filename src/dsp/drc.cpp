@@ -16,6 +16,7 @@
  */
 
 #include "drc.h"
+#include "dsp_pipeline.h"
 #include <math.h>
 #include <string.h>
 
@@ -41,9 +42,9 @@ void DRC::init(int32_t sampleRate, int32_t numChannels) {
         _bands[i].attackMs       = 10;
         _bands[i].releaseMs      = 100;
         _bands[i].pregainQ412    = 4096;    // 0 dB
-        _bands[i].envelope       = 0.0f;
-        _bands[i].gainLinear     = 1.0f;
-        _bands[i].decimCount     = 0;
+        _bands[i].state.envelope   = 0.0f;
+        _bands[i].state.gainLinear = 1.0f;
+        _bands[i].state.decimCount = 0;
         recalcBand(i);
     }
 
@@ -60,9 +61,7 @@ void DRC::init(int32_t sampleRate, int32_t numChannels) {
 // ============================================================================
 void DRC::reset() {
     for (int i = 0; i < MAX_BANDS; i++) {
-        _bands[i].envelope   = 0.0f;
-        _bands[i].gainLinear = 1.0f;
-        _bands[i].decimCount = 0;
+        _bands[i].state.reset();
     }
     for (int c = 0; c < DRC_MAX_CROSSOVERS; c++) {
         for (int s = 0; s < 2; s++) {
@@ -70,7 +69,12 @@ void DRC::reset() {
             _xoverHp[c][s].reset();
         }
     }
-    memset(_subBand, 0, sizeof(_subBand));
+    // Zero sub-band buffers if mapped
+    if (_subBandPtr[0]) {
+        for (int b = 0; b < DRC_MAX_BANDS; b++) {
+            if (_subBandPtr[b]) memset(_subBandPtr[b], 0, DSP_FRAME_SAMPLES * sizeof(float));
+        }
+    }
 }
 
 // ============================================================================
@@ -83,12 +87,11 @@ void DRC::recalcBand(uint8_t band) {
     b.thresholdDb = (float)b.thresholdDbInt / 100.0f;
 
     // slope = (1 - 1/R), same as compander SDK pattern
-    const float ratio = (float)b.ratioX100 / 100.0f;
-    b.slopeAbove  = (ratio > 0.0f) ? (1.0f - 1.0f / ratio) : 0.0f;
+    b.slopeAbove  = DynamicsProcessor::ratioToSlope(b.ratioX100);
 
     b.pregain      = (float)b.pregainQ412 / 4096.0f;
-    b.attackCoeff  = calc_envelope_coeff(_sampleRate, b.attackMs);
-    b.releaseCoeff = calc_envelope_coeff(_sampleRate, b.releaseMs);
+    b.attackCoeff  = DynamicsProcessor::calcCoeff(_sampleRate, b.attackMs);
+    b.releaseCoeff = DynamicsProcessor::calcCoeff(_sampleRate, b.releaseMs);
 }
 
 // ============================================================================
@@ -145,8 +148,8 @@ int DRC::getNumBands() const {
 //   numSamples: number of FRAMES (pairs)
 // ============================================================================
 void IRAM_ATTR DRC::applyBandDRC(DRCBand& b, float* buf, size_t numSamples) {
-    float envelope   = b.envelope;
-    float gainLinear = b.gainLinear;
+    float envelope   = b.state.envelope;
+    float gainLinear = b.state.gainLinear;
 
     const float pregain      = b.pregain;
     const float thresholdDb  = b.thresholdDb;
@@ -170,8 +173,8 @@ void IRAM_ATTR DRC::applyBandDRC(DRCBand& b, float* buf, size_t numSamples) {
         envelope = envelope_follow(envelope, peak, coeff);
 
         // ── Decimated gain computation ──
-        if (++b.decimCount >= DRC_DECIM) {
-            b.decimCount = 0;
+        if (++b.state.decimCount >= DRC_DECIM) {
+            b.state.decimCount = 0;
             const float envDb = fast_linear_to_db(envelope);
             float gainDb = 0.0f;
             if (envDb > thresholdDb) {
@@ -187,8 +190,8 @@ void IRAM_ATTR DRC::applyBandDRC(DRCBand& b, float* buf, size_t numSamples) {
         }
     }
 
-    b.envelope   = envelope;
-    b.gainLinear = gainLinear;
+    b.state.envelope   = envelope;
+    b.state.gainLinear = gainLinear;
 }
 
 // ============================================================================
@@ -207,34 +210,40 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
 
     const size_t frameStereo = numSamples * _numChannels;
 
+    // ── Map sub-band buffers from scratchpad ──────────────────────────
+    // DRC runs at chain slot 8, after all EQ modules, so buf1-3 are free.
+    _subBandPtr[0] = _scratchpad->buf1;
+    _subBandPtr[1] = _scratchpad->buf2;
+    _subBandPtr[2] = _scratchpad->buf3;
+
     // ── Copy input into sub-band buffers for crossover processing ─────
     // Band 0: LP1 → low sub-band
     // Band 1: HP1→LP2 (if 3-band) → mid sub-band  /  HP1 (if 2-band) → high sub-band
     // Band 2: HP1→HP2 (if 3-band) → high sub-band
 
     // Copy input to band0 buffer
-    memcpy(_subBand[0], samples, frameStereo * sizeof(float));
+    memcpy(_subBandPtr[0], samples, frameStereo * sizeof(float));
 
     // ── 1st crossover: LP → band0, HP → band1 (and band2 if 3-band) ──
     {
         // LP path for band0
         for (size_t i = 0; i < numSamples; i++) {
             for (int ch = 0; ch < _numChannels; ch++) {
-                float s = _subBand[0][i * _numChannels + ch];
+                float s = _subBandPtr[0][i * _numChannels + ch];
                 s = _xoverLp[0][0].processSample(s, ch);
                 if (_cfType == DRC_CF_LR4) s = _xoverLp[0][1].processSample(s, ch);
-                _subBand[0][i * _numChannels + ch] = s;
+                _subBandPtr[0][i * _numChannels + ch] = s;
             }
         }
 
         // HP path for band1 (start from original input)
-        memcpy(_subBand[1], samples, frameStereo * sizeof(float));
+        memcpy(_subBandPtr[1], samples, frameStereo * sizeof(float));
         for (size_t i = 0; i < numSamples; i++) {
             for (int ch = 0; ch < _numChannels; ch++) {
-                float s = _subBand[1][i * _numChannels + ch];
+                float s = _subBandPtr[1][i * _numChannels + ch];
                 s = _xoverHp[0][0].processSample(s, ch);
                 if (_cfType == DRC_CF_LR4) s = _xoverHp[0][1].processSample(s, ch);
-                _subBand[1][i * _numChannels + ch] = s;
+                _subBandPtr[1][i * _numChannels + ch] = s;
             }
         }
     }
@@ -242,35 +251,35 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
     // ── 2nd crossover (only for 3-band modes) ─────────────────────────
     if (numBands == 3 && _numCf >= 2) {
         // band2 = HP of band1
-        memcpy(_subBand[2], _subBand[1], frameStereo * sizeof(float));
+        memcpy(_subBandPtr[2], _subBandPtr[1], frameStereo * sizeof(float));
 
         // band1 = LP of what was band1
         for (size_t i = 0; i < numSamples; i++) {
             for (int ch = 0; ch < _numChannels; ch++) {
                 // Mid band (LP of HP)
-                float sMid = _subBand[1][i * _numChannels + ch];
+                float sMid = _subBandPtr[1][i * _numChannels + ch];
                 sMid = _xoverLp[1][0].processSample(sMid, ch);
                 if (_cfType == DRC_CF_LR4) sMid = _xoverLp[1][1].processSample(sMid, ch);
-                _subBand[1][i * _numChannels + ch] = sMid;
+                _subBandPtr[1][i * _numChannels + ch] = sMid;
 
                 // High band (HP of HP)
-                float sHi = _subBand[2][i * _numChannels + ch];
+                float sHi = _subBandPtr[2][i * _numChannels + ch];
                 sHi = _xoverHp[1][0].processSample(sHi, ch);
                 if (_cfType == DRC_CF_LR4) sHi = _xoverHp[1][1].processSample(sHi, ch);
-                _subBand[2][i * _numChannels + ch] = sHi;
+                _subBandPtr[2][i * _numChannels + ch] = sHi;
             }
         }
     }
 
     // ── Per-band compression ──────────────────────────────────────────
     for (int b = 0; b < numBands; b++) {
-        applyBandDRC(_bands[b], _subBand[b], numSamples);
+        applyBandDRC(_bands[b], _subBandPtr[b], numSamples);
     }
 
     // ── Sum all sub-bands back to output ──────────────────────────────
     for (size_t s = 0; s < frameStereo; s++) {
         float sum = 0.0f;
-        for (int b = 0; b < numBands; b++) sum += _subBand[b][s];
+        for (int b = 0; b < numBands; b++) sum += _subBandPtr[b][s];
         samples[s] = sum;
     }
 

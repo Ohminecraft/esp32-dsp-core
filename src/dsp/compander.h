@@ -8,6 +8,7 @@
 
 #include "dsp_module.h"
 #include "../utils/fixed_math.h"
+#include "../utils/dynamics_processor.h"
 
 class Compander : public DspModule {
     friend class PresetManager;
@@ -46,9 +47,7 @@ private:
     float _releaseCoeff;    // envelope release coefficient
 
     // ── Run-time state ──
-    float _envelope;        // peak envelope follower state
-    float _gainLinear;      // cached gain (updated every DECIM samples)
-    int _decimCount;        // decimation counter
+    EnvelopeState _state;
 
     void recalcCoeffs();
 };

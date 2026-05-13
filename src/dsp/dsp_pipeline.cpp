@@ -25,8 +25,9 @@ void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     _eqDsp_2.setModuleId(MODULE_ID_EQ_DSP_2);
     _volume.setModuleId(MODULE_ID_VOLUME);
 
-    // Initialize all modules
+    // Initialize all modules and assign scratchpad
     for (size_t i = 0; i < CHAIN_LENGTH; i++) {
+        _chain[i]->setScratchpad(&scratchpad);
         _chain[i]->init(sampleRate, numChannels);
     }
     

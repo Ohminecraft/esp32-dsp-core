@@ -32,14 +32,12 @@
  */
 
 #include "dynamic_eq.h"
+#include "dsp_pipeline.h"
 #include <string.h>
 
 // ---------------------------------------------------------------------------
-// Static buffer definitions (declared static in header, defined once here)
+// Static buffer definitions removed — now using SharedScratchpad.
 // ---------------------------------------------------------------------------
-float DynamicEQ::_dryBuf [DSP_FRAME_SAMPLES];
-float DynamicEQ::_wetLow [DSP_FRAME_SAMPLES];
-float DynamicEQ::_wetHigh[DSP_FRAME_SAMPLES];
 
 // ---------------------------------------------------------------------------
 // init
@@ -220,24 +218,28 @@ void IRAM_ATTR DynamicEQ::process(float* __restrict samples, size_t numSamples) 
     // ------------------------------------------------------------------
     // 6. Copy input to static dry buffer (never stack-allocate here)
     // ------------------------------------------------------------------
-    memcpy(_dryBuf, samples, totalSamples * sizeof(float));
+    float* dryBuf  = _scratchpad->buf1;
+    float* wetLow  = _scratchpad->buf2;
+    float* wetHigh = _scratchpad->buf3;
+    
+    memcpy(dryBuf, samples, totalSamples * sizeof(float));
 
     // ------------------------------------------------------------------
     // 7. Scale dry signal in-place
     // ------------------------------------------------------------------
     for (size_t i = 0; i < totalSamples; i++) {
-        samples[i] = _dryBuf[i] * alphaFlat;
+        samples[i] = dryBuf[i] * alphaFlat;
     }
 
     // ------------------------------------------------------------------
     // 8. Mix LOW EQ path
     // ------------------------------------------------------------------
     if (needLow) {
-        memcpy(_wetLow, _dryBuf, totalSamples * sizeof(float));
-        _eqLow.processInternal(_wetLow, numSamples);
+        memcpy(wetLow, dryBuf, totalSamples * sizeof(float));
+        _eqLow.processInternal(wetLow, numSamples);
         float a = _alphaLow;
         for (size_t i = 0; i < totalSamples; i++) {
-            samples[i] += _wetLow[i] * a;
+            samples[i] += wetLow[i] * a;
         }
     }
 
@@ -245,11 +247,11 @@ void IRAM_ATTR DynamicEQ::process(float* __restrict samples, size_t numSamples) 
     // 9. Mix HIGH EQ path
     // ------------------------------------------------------------------
     if (needHigh) {
-        memcpy(_wetHigh, _dryBuf, totalSamples * sizeof(float));
-        _eqHigh.processInternal(_wetHigh, numSamples);
+        memcpy(wetHigh, dryBuf, totalSamples * sizeof(float));
+        _eqHigh.processInternal(wetHigh, numSamples);
         float a = _alphaHigh;
         for (size_t i = 0; i < totalSamples; i++) {
-            samples[i] += _wetHigh[i] * a;
+            samples[i] += wetHigh[i] * a;
         }
     }
 }

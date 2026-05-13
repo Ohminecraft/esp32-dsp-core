@@ -47,7 +47,7 @@ jobs:
 
       # ─── Build env:esp32, esp32s3 ───────────────────────────────────────────
       - name: Build [esp32, esp32s3]
-        run: pio run -e esp32 -e esp32s3
+        run: pio run
 
       - name: Rename firmware binaries
         run: |

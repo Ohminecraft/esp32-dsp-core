@@ -20,8 +20,19 @@
 #include "leftrighteq.h"
 //#include "soft_clip.h"
 
+struct SharedScratchpad {
+    float __attribute__((aligned(16))) buf1[DSP_FRAME_SAMPLES];
+    float __attribute__((aligned(16))) buf2[DSP_FRAME_SAMPLES];
+    float __attribute__((aligned(16))) buf3[DSP_FRAME_SAMPLES];
+    float __attribute__((aligned(16))) buf4[DSP_FRAME_SAMPLES];
+    float __attribute__((aligned(16))) buf5[DSP_FRAME_SAMPLES];
+    float __attribute__((aligned(16))) buf6[DSP_FRAME_SAMPLES];
+};
+
 class DspPipeline {
 public:
+    SharedScratchpad scratchpad;
+
     /**
      * Initialize all modules with given audio parameters.
      */

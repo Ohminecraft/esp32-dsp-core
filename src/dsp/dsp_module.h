@@ -23,9 +23,14 @@
 #include "dsp_types.h"
 #include "../utils/debug_log.h"
 
+struct SharedScratchpad;
+
 class DspModule {
 public:
     virtual ~DspModule() = default;
+
+    SharedScratchpad* _scratchpad = nullptr;
+    void setScratchpad(SharedScratchpad* pad) { _scratchpad = pad; }
 
     /**
      * Initialize the module with sample rate and channel count.

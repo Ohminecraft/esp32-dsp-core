@@ -55,11 +55,11 @@ public:
      */
     static void init(RateChangeCallback cb);
 
-    /** @brief Start the monitor task. Call after I2S channels are enabled. */
-    static void start();
+    /** @brief Monitor task function. */
+    static void monitorTask(void* arg);
 
-    /** @brief Stop the monitor task and deinit PCNT. */
-    static void stop();
+    /** @brief Stop monitoring and deinit PCNT. */
+    static void clearHandle();
 
     /** @brief Returns last detected clock state (thread-safe read). */
     static ClockState currentState();
@@ -68,12 +68,10 @@ public:
     static uint32_t currentRateHz();
 
 private:
-    static void monitorTask(void* arg);
     static ClockState classifyRate(uint32_t measuredHz);
     static uint32_t   nominalRateHz(ClockState state);
 
     static RateChangeCallback _cb;
     static ClockState         _state;
     static uint32_t           _rateHz;
-    static TaskHandle_t       _taskHandle;
 };

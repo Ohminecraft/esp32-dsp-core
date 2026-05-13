@@ -23,6 +23,7 @@
 #include "dsp_module.h"
 #include "biquad.h"
 #include "../utils/fixed_math.h"
+#include "../utils/dynamics_processor.h"
 #include "config.h"
 
 // Max sub-band frame buffer: 3 bands × frameSize × channels
@@ -47,9 +48,7 @@ struct DRCBand {
     float releaseCoeff;
 
     // ── Run-time state ──────────────────────────────────────────────
-    float envelope;
-    float gainLinear;       // cached gain (updated every DRC_DECIM samples)
-    int decimCount;         // decimation counter
+    EnvelopeState state;
 };
 
 class DRC : public DspModule {
@@ -95,9 +94,10 @@ private:
     Biquad _xoverLp[DRC_MAX_CROSSOVERS][2];  // LP stages [crossover][stage]
     Biquad _xoverHp[DRC_MAX_CROSSOVERS][2];  // HP stages [crossover][stage]
 
-    // ── Sub-band buffers (static, max frame size) ────────────────────
-    // [band][sample] — max 3 sub-bands, stereo interleaved
-    float _subBand[DRC_MAX_BANDS][DSP_FRAME_SIZE * DSP_NUM_CHANNELS];
+    // ── Sub-band buffer pointers (mapped from SharedScratchpad) ────────
+    // DRC runs at chain slot 8 (after all EQ modules), so buf1/buf2/buf3
+    // are safe to reuse here. Only needed in multi-band mode.
+    float* _subBandPtr[DRC_MAX_BANDS] = {nullptr, nullptr, nullptr};
 
     void recalcBand(uint8_t band);
     void designCrossover(uint8_t idx);

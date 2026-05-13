@@ -12,7 +12,8 @@
  *   INPUT → Compander → Exciter → DynamicEQ → EQ1 → EQ2 → LeftRightEQ → DRC → Volume → OUTPUT
  */
 
-#include <Arduino.h>
+#include <Arduino.h>    
+
 #include "config.h"
 #include "pin_config.h"
 #include "dsp_types.h"
@@ -36,18 +37,21 @@
 static DspPipeline     g_pipeline;
 static AudioInput      g_audioInput;
 static AudioOutput     g_audioOutput;
+static AudioSync       g_audioSync;
 static UartProtocol    g_uart;
 static ParamController g_paramCtrl;
 static PresetManager   g_presetMgr;
 static WiFiManager     g_wifiMgr;
 static DspWebServer    g_webServer;
+static StatusLED       g_statusLED;
 
-// Audio processing buffer
-static float g_audioBuf[DSP_FRAME_SAMPLES];
+// Audio processing buffer (16-byte aligned for SIMD)
+static float __attribute__((aligned(16))) g_audioBuf[DSP_FRAME_SAMPLES];
 
 // Task handles
 static TaskHandle_t g_audioTaskHandle   = NULL;
 static TaskHandle_t g_controlTaskHandle = NULL;
+static TaskHandle_t g_syncTaskHandle    = NULL;
 
 // Current sample rate — updated by AudioSync callback, read by controlTask
 static volatile uint32_t g_currentSampleRate = DSP_SAMPLE_RATE_DEFAULT;
@@ -251,11 +255,12 @@ void controlTask(void* param) {
             LOG_INFO("SYS", "Audio task stopped.");
             digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
             LOG_INFO("SYS", "Mute pin set.");
-            AudioSync::stop();
+            vTaskDelete(g_syncTaskHandle);
+            g_audioSync.clearHandle();
             LOG_INFO("SYS", "Audio synchronization stopped.");
             WiFi.status() == WL_CONNECTED ? WiFi.disconnect(true) : WiFi.softAPdisconnect(true);
             LOG_INFO("SYS", "WiFi disconnected.");
-            StatusLED::off();
+            g_statusLED.fadeOff();
             LOG_INFO("SYS", "Status LED turned off.");
             delay(300);
             LOG_INFO("SYS", "System halted.");
@@ -313,7 +318,7 @@ void controlTask(void* param) {
         }
 
         // Smooth RGB LED update (Core 0)
-        StatusLED::update(s_usage, s_heapPct, g_currentSampleRate, g_isclockabsent);
+        g_statusLED.update(s_usage, s_heapPct, g_currentSampleRate, g_isclockabsent);
 
         vTaskDelay(1);
     }
@@ -324,12 +329,15 @@ void controlTask(void* param) {
 // ============================================================================
 
 void setup() {
+    //WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
     #ifdef SOFT_LATCH_SHUTDOWN
         pinMode(POWER_PIN_OUT, OUTPUT);
-        //delay(70); // Short delay to ensure stable power before latching on
+        delay(10); // Short delay to ensure stable power before latching on
         digitalWrite(POWER_PIN_OUT, HIGH);  // Latch power on (2N3904 gate closed)
-        pinMode(POWER_PIN_OFF, INPUT_PULLUP);
+        g_statusLED.off();
     #endif
+    delay(200); // Allow time for power to stabilize before initializing components
+    pinMode(POWER_PIN_OFF, INPUT_PULLUP);
     DBG_INIT(115200);
     DBG_PRINTLN();
     DBG_PRINTLN("=================================");
@@ -374,12 +382,22 @@ void setup() {
         g_pipeline.getPreGain().enable();
     }
 
-    // 5. Init AudioSync — starts PCNT clock monitor on Core 0
+    // 5.1. Init AudioSync — starts PCNT clock monitor on Core 0
     //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)
-    LOG_INFO("INIT", "Starting AudioSync clock monitor...");
-    AudioSync::init(onRateChange);
-    AudioSync::start();
+    LOG_INFO("INIT", "Initializing AudioSync clock monitor...");
+    g_audioSync.init(onRateChange);
     g_isclockabsent = true;
+
+    // 5.2. Create AudioSync monitor task (Core 0, Priority 5)
+    xTaskCreatePinnedToCore(
+        g_audioSync.monitorTask,
+        "SyncTask",
+        SYNC_TASK_STACK_SIZE,
+        NULL,
+        SYNC_TASK_PRIORITY,
+        &g_syncTaskHandle,
+        SYNC_TASK_CORE
+    );
 
     // 6. Create control task (Core 0)
     xTaskCreatePinnedToCore(
