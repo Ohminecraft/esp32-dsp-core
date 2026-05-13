@@ -13,23 +13,25 @@
 
 class StatusLED {
 public:
+    uint8_t r = 0, g = 0, b = 0;
+    float phase = 0.0f;
     /**
      * Update LED color based on system metrics.
      * @param cpuUsage Percentage (0.0 - 100.0)
      * @param heapPct Percentage (0 - 100)
      * @param sampleRate Current sample rate in Hz (0 if absent)
      */
-    static void update(float cpuUsage, uint8_t heapPct, uint32_t sampleRate, bool is_absent) {
-        uint8_t r = 0, g = 0, b = 0;
-
+    void update(float cpuUsage, uint8_t heapPct, uint32_t sampleRate, bool is_absent) {
         // 1. Clock Presence / Sample Rate Base Color
         if (sampleRate == 0 || is_absent) {
             // No clock: Breathing Red
-            float phase = sin(millis() * 0.003f);
+            phase = sin(millis() * 0.003f);
             r = (uint8_t)(60 + 60 * phase); 
             g = 0;
             b = 0;
         } else {
+            r = 0;
+
             // Playing: Color based on rate
             if (sampleRate <= 44100) {
                 b = 150; g = 20;  // Blueish (CD Quality)
@@ -65,11 +67,53 @@ public:
     /**
      * Turn off LED
      */
-    static void off() {
+    void off() {
+        r = 0;
+        g = 0;
+        b = 0;
+
         #if CONFIG_IDF_TARGET_ESP32S3
         rgbLedWrite(RGB_LED_PIN, 0, 0, 0);
         #endif
     }
+
+    /**
+     * Fade off LED over time (e.g. on shutdown)
+     */
+    void fadeOff() {
+        if (r == 0 && g == 0 && b == 0) {
+            off();
+            return;
+        }
+
+        const uint8_t startR = r;
+        const uint8_t startG = g;
+        const uint8_t startB = b;
+        const uint16_t durationMs = 700;
+        const uint32_t startMs = millis();
+
+        while (true) {
+            const uint32_t elapsedMs = millis() - startMs;
+            if (elapsedMs >= durationMs) {
+                break;
+            }
+
+            const float level = 1.0f - ((float)elapsedMs / (float)durationMs);
+            r = (uint8_t)((float)startR * level);
+            g = (uint8_t)((float)startG * level);
+            b = (uint8_t)((float)startB * level);
+
+            #if CONFIG_IDF_TARGET_ESP32S3
+            rgbLedWrite(RGB_LED_PIN, r, g, b);
+            #endif
+
+            vTaskDelay(pdMS_TO_TICKS(12));
+        }
+
+        off();
+    }
 };
+
+
 
 #endif // STATUS_LED_H

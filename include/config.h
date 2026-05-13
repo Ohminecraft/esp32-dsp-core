@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-#define FIRMWARE_VERSION "1.2"
+#define FIRMWARE_VERSION "1.3"
 
 // ============================================================================
 // Audio Configuration
@@ -37,10 +37,10 @@
 #define MAX_EQ_BANDS            10      // Maximum EQ bands per module
 
 // ============================================================================
-// Ring Buffer Configuration
+// Ring Buffer Configuration (Unused)
 // ============================================================================
 
-#define RING_BUFFER_SIZE        2048    // Samples (must be power of 2)
+//#define RING_BUFFER_SIZE        2048    // Samples (must be power of 2)
 
 // ============================================================================
 // DSP Pipeline — Module Count
@@ -73,9 +73,10 @@
 #define CONTROL_TASK_PRIORITY   5
 #define CONTROL_TASK_STACK_SIZE 4096
 
-// AudioSync monitor task — Core 1, lower priority than audio task
-#define SYNC_TASK_CORE          1
-#define SYNC_TASK_PRIORITY      5
+// AudioSync monitor task — Core 0, lower priority than audio task
+#define SYNC_TASK_CORE          0
+#define SYNC_TASK_PRIORITY      CONTROL_TASK_PRIORITY
+#define SYNC_TASK_STACK_SIZE    CONTROL_TASK_STACK_SIZE // Same as Control Task
 
 // ============================================================================
 // UART Control Protocol
@@ -97,57 +98,8 @@
 
 #define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
 #define AUTO_SHUTDONW_TIMER 1800000 // 30min
+#define SHUTDOWN_COUNTDOWN_MS 5000 // 5s
+
 #define MUTE_PIN_LOGIC LOW
-
-// ============================================================================
-// Feature Flags
-// ============================================================================
-
-#define FEATURE_NOISE_GATE      1
-#define FEATURE_STEREO_WIDENER  1
-#define FEATURE_SOFT_CLIPPER    1
-
-// ============================================================================
-// Debug Logging Configuration
-// ============================================================================
-
-#ifndef CORE_DEBUG_LEVEL
-#define CORE_DEBUG_LEVEL 0
-#endif
-
-#include <esp_log.h>
-
-#define DSP_LOG_TAG "ESP32_DSP"
-
-#if CORE_DEBUG_LEVEL >= 4
-    #define DEBUG_LOG(fmt, ...) ESP_LOGD(DSP_LOG_TAG, fmt, ##__VA_ARGS__)
-    #define DEBUG_LOG_ARRAY(arr, len) { \
-        ESP_LOGD(DSP_LOG_TAG, "Array[%d]: ", len); \
-        for (int i = 0; i < len; i++) { \
-            ESP_LOGD(DSP_LOG_TAG, "%f ", arr[i]); \
-        } \
-    }
-#else
-    #define DEBUG_LOG(fmt, ...) do { } while(0)
-    #define DEBUG_LOG_ARRAY(arr, len) do { } while(0)
-#endif
-
-#if CORE_DEBUG_LEVEL >= 3
-    #define INFO_LOG(fmt, ...) ESP_LOGI(DSP_LOG_TAG, fmt, ##__VA_ARGS__)
-#else
-    #define INFO_LOG(fmt, ...) do { } while(0)
-#endif
-
-#if CORE_DEBUG_LEVEL >= 2
-    #define WARN_LOG(fmt, ...) ESP_LOGW(DSP_LOG_TAG, fmt, ##__VA_ARGS__)
-#else
-    #define WARN_LOG(fmt, ...) do { } while(0)
-#endif
-
-#if CORE_DEBUG_LEVEL >= 1
-    #define ERROR_LOG(fmt, ...) ESP_LOGE(DSP_LOG_TAG, fmt, ##__VA_ARGS__)
-#else
-    #define ERROR_LOG(fmt, ...) do { } while(0)
-#endif
 
 #endif // CONFIG_H

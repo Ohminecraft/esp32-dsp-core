@@ -24,15 +24,16 @@ Complete reference for all parameters across 11 DSP modules.
 
 ### [2] Compander
 
-**Purpose**: Dynamic compression/expansion with separate ratios above/below threshold
+**Purpose**: High-fidelity dynamic processor with separate compression (above threshold) and expansion (below threshold) ratios. Features stateful envelope tracking for smooth transitions.
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Threshold | -60 to 0 | -20 | dB | Split point for compression/expansion |
-| Ratio Above | 1 to 10 | 1 | :1 | Compression ratio above threshold |
-| Ratio Below | 0.5 to 10 | 1 | :1 | Expansion ratio below threshold |
-| Attack Time | 1 to 2000 | 10 | ms | Compression attack speed |
-| Release Time | 10 to 2000 | 100 | ms | Compression release speed |
+| Threshold | -60 to 0 | -20.00 | dB | Split point for compression/expansion |
+| Ratio Above | 1.00 to 10 | 1.00 | :1 | Compression ratio (1.00 = No compression) |
+| Ratio Below | 0.10 to 10 | 1.00 | :1 | Expansion ratio (<1.00 = Expansion, 1.00 = No expansion) |
+| Attack Time | 1 to 2000 | 10 | ms | Smoothing for volume increases |
+| Release Time | 10 to 2000 | 100 | ms | Smoothing for volume decreases |
+| Pregain | -72 to 18 | 0 | dB | Level adjustment before the envelope follower |
 
 ---
 
@@ -105,16 +106,28 @@ Same parameters as EQ1. Typically used for room and speaker acoustics compensati
 
 ---
 
-### [9] DRC (Dynamic Range Compressor)
+### [9] Multi-band DRC
 
-**Purpose**: Multi-band dynamic range compression/limiting
+**Purpose**: Professional-grade multi-band dynamic range compressor with selectable crossovers. Prevents "pumping" artifacts by processing frequency bands independently.
 
+**Global Controls**
+- **Mode**: 
+    - `Full Band`: Single band processing (legacy mode).
+    - `2 Band`: Splits signal into Low/High.
+    - `2 Band + Full`: Low/High processing followed by a global compressor.
+    - `3 Band`: Low/Mid/High processing.
+    - `3 Band + Full`: 3-band processing followed by a global compressor.
+- **Crossover Filter**: Select between `Butterworth 6dB`, `Linkwitz-Riley 12dB`, `Linkwitz-Riley 24dB`, or `Q-Controlled 24dB` (Parametric).
+- **Crossover Frequencies**: 20Hz - 20kHz range for splitting bands.
+
+**Per-Band Parameters**
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Band Threshold | -60 to 0 | -20 | dB | Compression starts above this |
-| Band Ratio | 1 to 20 | 4 | :1 | Compression ratio |
-| Band Attack | 1 to 100 | 5 | ms | Attack speed |
-| Band Release | 10 to 1000 | 50 | ms | Release speed |
+| Threshold | -90 to 0 | -15.00 | dB | Compression starts above this level |
+| Ratio | 1.00 to 20 | 4.00 | :1 | Ratio of reduction (1.00 to 20.00) |
+| Attack | 1 to 500 | 5 | ms | Time to apply gain reduction |
+| Release | 10 to 2000 | 160 | ms | Time to recover gain |
+| Pregain | -72 to 18 | 0 | dB | Gain applied before detection |
 
 ---
 
@@ -148,7 +161,7 @@ Tham chiếu đầy đủ cho 11 module DSP.
 
 ### [2] Compander
 
-**Mục đích**: Nén/mở rộng động với tỷ lệ riêng biệt.
+**Mục đích**: Bộ xử xử lý động cao cấp với tỷ lệ nén (trên ngưỡng) và mở rộng (dưới ngưỡng) riêng biệt. Sử dụng thuật toán envelope tracking bền vững giúp chuyển đổi âm lượng mượt mà.
 
 ---
 
@@ -182,9 +195,24 @@ Tham chiếu đầy đủ cho 11 module DSP.
 
 ---
 
-### [9] DRC (Bộ Nén Tầm Động)
+### [9] Multi-band DRC (Nén Đa Băng Tần)
 
-**Mục đích**: Nén/giới hạn tầm động tín hiệu.
+**Mục đích**: Bộ nén động đa băng tần chuyên nghiệp. Giúp kiểm soát âm lượng các dải tần độc lập (Bass/Mid/Treble), tránh hiện tượng "pumping" khi có tiếng bass mạnh.
+
+**Chế độ hoạt động (Mode)**:
+- `Full Band`: Nén toàn dải (1 băng tần).
+- `2 Band / 3 Band`: Chia tín hiệu thành các dải Bass/High hoặc Bass/Mid/High để xử lý riêng.
+- `Mode + Full`: Kết hợp nén từng dải sau đó nén tổng thể (Series Compression).
+
+**Bộ lọc phân tần (Crossover)**:
+- Hỗ trợ các kiểu lọc chuyên dụng: `Linkwitz-Riley` (đặc tuyến phẳng tại điểm cắt) và `Butterworth`.
+- Độ dốc lọc lên đến 24dB/octave giúp tách dải cực kỳ sạch sẽ.
+
+**Tham số từng băng tần**:
+- **Threshold**: Ngưỡng bắt đầu nén (dB).
+- **Ratio**: Tỷ lệ nén (ví dụ 4.00:1).
+- **Attack/Release**: Tốc độ phản ứng của bộ nén (ms).
+- **Pregain**: Bù/giảm âm lượng trước khi nén.
 
 ---
 

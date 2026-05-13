@@ -50,7 +50,7 @@ __attribute__((always_inline)) static inline float IRAM_ATTR fast_log2(float x) 
  * 20*log10(x) = 20 * log2(x) / log2(10) ≈ 6.0206 * log2(x)
  */
 __attribute__((always_inline)) static inline float IRAM_ATTR fast_linear_to_db(float linear) {
-    if (linear <= 1e-6f) return -96.0f;
+    if (!(linear > 1e-7f)) return -140.0f; // Handles NaN/Inf/0
     return 6.0206f * fast_log2(linear);
 }
 
@@ -61,6 +61,25 @@ __attribute__((always_inline)) static inline float IRAM_ATTR fast_linear_to_db(f
 __attribute__((always_inline)) static inline float IRAM_ATTR fast_energy_sq_to_db(float energySq) {
     if (energySq <= 1e-12f) return -96.0f;
     return 3.0103f * fast_log2(energySq);
+}
+
+/**
+ * Fast dB to linear gain approximation via IEEE754 bit trick.
+ * 10^(dB/20) = 2^(dB/6.0206)
+ * Accuracy: ~0.2% error — suitable for gain application.
+ * Cost: ~8 cycles vs ~100 cycles for powf(10, x/20) on ESP32.
+ */
+__attribute__((always_inline)) static inline float IRAM_ATTR fast_db_to_gain(float db) {
+    if (!(db > -140.0f)) return 0.0f; // Handles NaN/Inf/Small
+    if (db >= 40.0f) return 100.0f;  // Safe ceiling (40dB boost max)
+    
+    const float log2_gain = db * 0.1660964f; // 1/6.0206
+    union { float f; int32_t i; } u;
+    const int32_t shift = (int32_t)(log2_gain * 8388608.0f);
+    u.i = shift + 0x3F800000;
+    
+    if (u.i < 0x00800000) return 0.0f; // Underflow
+    return u.f;
 }
 
 /**

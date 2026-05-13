@@ -98,6 +98,133 @@ npm start
 
 ---
 
+## Flashing Pre-built Firmware
+
+If you downloaded a release from GitHub and want to flash without building from source, choose one of the methods below.
+
+> ⚠️ **Important**: Never mix binary files between variants.  
+> `bootloader_esp32.bin` ≠ `bootloader_esp32s3.bin` — wrong bootloader = bricked device.
+
+---
+
+### Method A — esptool (Recommended, all platforms)
+
+#### 1. Install esptool
+
+```bash
+pip install esptool
+```
+
+#### 2. Download release files
+
+From the GitHub Release page, download the full set for your board variant:
+
+| Variant | Files needed |
+|---------|-------------|
+| ESP32 | `bootloader_esp32.bin`, `partitions_esp32.bin`, `boot_app0_esp32.bin`, `firmware_esp32.bin` |
+| ESP32-S3 | `bootloader_esp32s3.bin`, `partitions_esp32s3.bin`, `boot_app0_esp32s3.bin`, `firmware_esp32s3.bin` |
+
+#### 3. Put device into flash mode
+
+- Hold **BOOT** button → press **EN/RST** → release **BOOT**
+- Or use auto-reset if your board supports it (most DevKit boards do)
+
+#### 4. Flash
+
+**ESP32:**
+```bash
+esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 \
+  write_flash --flash_mode dio --flash_freq 40m --flash_size detect \
+  0x1000  bootloader_esp32.bin \
+  0x8000  partitions_esp32.bin \
+  0xe000  boot_app0_esp32.bin \
+  0x10000 firmware_esp32.bin
+```
+
+**ESP32-S3:**
+```bash
+esptool.py --chip esp32s3 --port /dev/ttyUSB0 --baud 460800 \
+  write_flash --flash_mode dio --flash_freq 80m --flash_size detect \
+  0x0000  bootloader_esp32s3.bin \
+  0x8000  partitions_esp32s3.bin \
+  0xe000  boot_app0_esp32s3.bin \
+  0x10000 firmware_esp32s3.bin
+```
+
+> 💡 **Windows**: replace `/dev/ttyUSB0` with `COM3` (or whatever port Device Manager shows)  
+> 💡 **macOS**: replace with `/dev/cu.usbserial-xxxx`
+
+#### 5. Using the included flash_args file (shortcut)
+
+Each release includes a `flash_args_<variant>.txt` with the correct addresses pre-filled.  
+You can pass it directly to esptool:
+
+```bash
+# ESP32
+esptool.py --port /dev/ttyUSB0 $(cat flash_args_esp32.txt)
+
+# ESP32-S3
+esptool.py --port /dev/ttyUSB0 $(cat flash_args_esp32s3.txt)
+```
+
+#### 6. Erase flash first (optional, clean install)
+
+```bash
+esptool.py --chip esp32 --port /dev/ttyUSB0 erase_flash
+```
+
+---
+
+### Method B — ESP Web Tool (Browser, no install required)
+
+> ✅ Works on Chrome / Edge (desktop). Requires WebSerial support — Firefox is not supported.
+
+1. Open **[https://espressif.github.io/esptool-js/](https://espressif.github.io/esptool-js/)** in Chrome or Edge
+
+2. Click **Connect** → select your device's COM/serial port
+
+3. Set baud rate to `460800`
+
+4. Add flash entries manually using the **"+"** button for each file:
+
+   **ESP32:**
+
+   | Flash Address | File |
+   |--------------|------|
+   | `0x1000` | `bootloader_esp32.bin` |
+   | `0x8000` | `partitions_esp32.bin` |
+   | `0xe000` | `boot_app0_esp32.bin` |
+   | `0x10000` | `firmware_esp32.bin` |
+
+   **ESP32-S3:**
+
+   | Flash Address | File |
+   |--------------|------|
+   | `0x0000` | `bootloader_esp32s3.bin` |
+   | `0x8000` | `partitions_esp32s3.bin` |
+   | `0xe000` | `boot_app0_esp32s3.bin` |
+   | `0x10000` | `firmware_esp32s3.bin` |
+
+5. Click **Program** and wait for all 4 files to finish flashing
+
+6. Press **EN/RST** on your board to reboot
+
+> ⚠️ The ESP Web Tool does **not** automatically erase flash. If you're re-flashing over an old build, check "Erase Flash" before programming.
+
+---
+
+### Troubleshooting Flash Issues
+
+| Symptom | Fix |
+|---------|-----|
+| `Failed to connect` | Hold BOOT while clicking Connect / starting flash |
+| `Wrong boot mode` | Check BOOT button wiring; try lower baud (`115200`) |
+| Stuck in bootloop after flash | Wrong variant flashed — erase flash and retry with correct files |
+| `MD5 mismatch` | Download the files again; archive may be corrupted |
+| No serial port visible | Install CH340 or CP210x driver for your OS |
+
+---
+
 ### Troubleshooting
 
 #### Q: "Board not found" error
@@ -233,6 +360,132 @@ npm start
 4. Bật từng module
 5. Điều chỉnh tham số
 6. Nghe đầu ra từ PCM5102A
+
+---
+
+## Flash Firmware Từ Bản Release
+
+Nếu bạn tải firmware từ GitHub Release và muốn flash mà không cần build lại từ source, hãy chọn một trong các cách dưới đây.
+
+> ⚠️ **Lưu ý quan trọng**: Không dùng chéo file binary giữa các variant.  
+> `bootloader_esp32.bin` ≠ `bootloader_esp32s3.bin` — flash sai bootloader = brick thiết bị.
+
+---
+
+### Cách A — esptool (Khuyến nghị, mọi nền tảng)
+
+#### 1. Cài esptool
+
+```bash
+pip install esptool
+```
+
+#### 2. Tải file từ GitHub Release
+
+Tải về đầy đủ bộ file cho đúng variant:
+
+| Variant | File cần tải |
+|---------|-------------|
+| ESP32 | `bootloader_esp32.bin`, `partitions_esp32.bin`, `boot_app0_esp32.bin`, `firmware_esp32.bin` |
+| ESP32-S3 | `bootloader_esp32s3.bin`, `partitions_esp32s3.bin`, `boot_app0_esp32s3.bin`, `firmware_esp32s3.bin` |
+
+#### 3. Đưa thiết bị vào chế độ flash
+
+- Giữ nút **BOOT** → nhấn **EN/RST** → thả **BOOT**
+- Hoặc dùng auto-reset nếu board hỗ trợ (hầu hết DevKit đều hỗ trợ)
+
+#### 4. Flash
+
+**ESP32:**
+```bash
+esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 \
+  write_flash --flash_mode dio --flash_freq 40m --flash_size detect \
+  0x1000  bootloader_esp32.bin \
+  0x8000  partitions_esp32.bin \
+  0xe000  boot_app0_esp32.bin \
+  0x10000 firmware_esp32.bin
+```
+
+**ESP32-S3:**
+```bash
+esptool.py --chip esp32s3 --port /dev/ttyUSB0 --baud 460800 \
+  write_flash --flash_mode dio --flash_freq 80m --flash_size detect \
+  0x0000  bootloader_esp32s3.bin \
+  0x8000  partitions_esp32s3.bin \
+  0xe000  boot_app0_esp32s3.bin \
+  0x10000 firmware_esp32s3.bin
+```
+
+> 💡 **Windows**: thay `/dev/ttyUSB0` bằng `COM3` (hoặc cổng hiển thị trong Device Manager)  
+> 💡 **macOS**: thay bằng `/dev/cu.usbserial-xxxx`
+
+#### 5. Dùng file flash_args có sẵn (nhanh hơn)
+
+Mỗi bản release đều kèm file `flash_args_<variant>.txt` với địa chỉ flash đã điền sẵn:
+
+```bash
+# ESP32
+esptool.py --port /dev/ttyUSB0 $(cat flash_args_esp32.txt)
+
+# ESP32-S3
+esptool.py --port /dev/ttyUSB0 $(cat flash_args_esp32s3.txt)
+```
+
+#### 6. Xóa flash trước khi flash (tùy chọn, cài mới hoàn toàn)
+
+```bash
+esptool.py --chip esp32 --port /dev/ttyUSB0 erase_flash
+```
+
+---
+
+### Cách B — ESP Web Tool (Trình duyệt, không cần cài đặt)
+
+> ✅ Hoạt động trên Chrome / Edge (desktop). Cần WebSerial — Firefox không được hỗ trợ.
+
+1. Mở **[https://espressif.github.io/esptool-js/](https://espressif.github.io/esptool-js/)** trên Chrome hoặc Edge
+
+2. Nhấn **Connect** → chọn cổng serial của thiết bị
+
+3. Đặt baud rate là `460800`
+
+4. Thêm từng file bằng nút **"+"**:
+
+   **ESP32:**
+
+   | Địa chỉ Flash | File |
+   |--------------|------|
+   | `0x1000` | `bootloader_esp32.bin` |
+   | `0x8000` | `partitions_esp32.bin` |
+   | `0xe000` | `boot_app0_esp32.bin` |
+   | `0x10000` | `firmware_esp32.bin` |
+
+   **ESP32-S3:**
+
+   | Địa chỉ Flash | File |
+   |--------------|------|
+   | `0x0000` | `bootloader_esp32s3.bin` |
+   | `0x8000` | `partitions_esp32s3.bin` |
+   | `0xe000` | `boot_app0_esp32s3.bin` |
+   | `0x10000` | `firmware_esp32s3.bin` |
+
+5. Nhấn **Program** và chờ cả 4 file flash xong
+
+6. Nhấn **EN/RST** để reboot board
+
+> ⚠️ ESP Web Tool **không tự động xóa flash**. Nếu đang flash đè lên bản cũ, hãy tick vào "Erase Flash" trước khi nhấn Program.
+
+---
+
+### Xử Lý Lỗi Khi Flash
+
+| Triệu chứng | Cách khắc phục |
+|-------------|----------------|
+| `Failed to connect` | Giữ nút BOOT trong khi nhấn Connect / bắt đầu flash |
+| `Wrong boot mode` | Kiểm tra nút BOOT; thử giảm baud xuống `115200` |
+| Bootloop sau khi flash | Sai variant — xóa flash và flash lại đúng file |
+| `MD5 mismatch` | Tải lại file; archive có thể bị lỗi khi download |
+| Không thấy cổng serial | Cài driver CH340 hoặc CP210x cho hệ điều hành của bạn |
 
 ---
 

@@ -51,7 +51,6 @@ static constexpr float RATE_TOLERANCE = 0.05f;
 RateChangeCallback        AudioSync::_cb;
 ClockState                AudioSync::_state      = ClockState::ABSENT;
 uint32_t                  AudioSync::_rateHz     = 0;
-TaskHandle_t              AudioSync::_taskHandle  = nullptr;
 
 static pcnt_unit_handle_t    s_pcnt_unit = nullptr;
 static pcnt_channel_handle_t s_pcnt_ch   = nullptr;
@@ -124,6 +123,7 @@ void AudioSync::init(RateChangeCallback cb) {
 // ---------------------------------------------------------------------------
 
 void AudioSync::monitorTask(void* arg) {
+    LOG_INFO(TAG, "Monitor task running on Core %d", xPortGetCoreID());
     ESP_ERROR_CHECK(pcnt_unit_start(s_pcnt_unit));
 
     ClockState lastState = ClockState::ABSENT;
@@ -222,24 +222,7 @@ uint32_t AudioSync::nominalRateHz(ClockState state) {
 // Public API
 // ---------------------------------------------------------------------------
 
-void AudioSync::start() {
-    xTaskCreatePinnedToCore(
-        monitorTask,
-        "audio_sync",
-        4096,
-        nullptr,
-        5,          // Priority — higher than idle, lower than audio tasks
-        &_taskHandle,
-        CONTROL_TASK_CORE
-    );
-    LOG_INFO(TAG, "Monitor task started");
-}
-
-void AudioSync::stop() {
-    if (_taskHandle) {
-        vTaskDelete(_taskHandle);
-        _taskHandle = nullptr;
-    }
+void AudioSync::clearHandle() {
     pcnt_unit_stop(s_pcnt_unit);
     pcnt_unit_disable(s_pcnt_unit);
     pcnt_del_channel(s_pcnt_ch);

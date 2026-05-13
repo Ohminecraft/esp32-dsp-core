@@ -920,3 +920,145 @@ body {
     border-color: var(--accent);
     color: var(--accent);
 }
+
+/* ─── DRC Panel ──────────────────────────────────────────────────────── */
+
+.drc-layout {
+    display: flex;
+    gap: 12px;
+    min-height: 360px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.drc-graph-wrap {
+    flex: 1;
+    min-width: 0;
+    background: #0e1015;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.07);
+    overflow: hidden;
+    position: relative;
+}
+
+.drc-graph-wrap canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.drc-controls {
+    flex: 0 0 340px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow-y: auto;
+}
+
+.drc-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+}
+
+.drc-row label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    min-width: 96px;
+    flex-shrink: 0;
+}
+
+.drc-select {
+    flex: 1;
+    background: var(--bg-input);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 11px;
+    padding: 4px 6px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--transition);
+}
+
+.drc-select:focus {
+    border-color: var(--accent);
+}
+
+.drc-cf-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.drc-cf-row label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    min-width: 96px;
+    flex-shrink: 0;
+}
+
+.drc-num {
+    width: 72px;
+    background: var(--bg-input);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 11px;
+    padding: 4px 6px;
+    text-align: right;
+    outline: none;
+    transition: border-color var(--transition);
+}
+
+.drc-num:focus { border-color: var(--accent); }
+
+.drc-q {
+    width: 52px;
+}
+
+.drc-qlabel {
+    font-size: 10px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.drc-tabs {
+    display: flex;
+    gap: 4px;
+    margin: 6px 0 2px;
+    flex-wrap: wrap;
+}
+
+.drc-tab {
+    padding: 4px 10px;
+    background: var(--bg-input);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.drc-tab:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.drc-tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+.drc-band-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 0;
+    flex: 1;
+}

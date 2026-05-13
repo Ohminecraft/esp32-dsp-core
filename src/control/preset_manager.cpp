@@ -23,8 +23,9 @@ struct PresetData {
   int32_t ex_cutoffFreq, ex_dry, ex_wet;
   // Dynamic Bass
   int32_t db_cutoffFreq, db_gainBoost, db_enhanced, db_boostfullthreshold, db_neutralthreshold, db_clipfullthreshold, db_clipattack, db_cliprelease;
-  // DRC
-  int32_t drc_thresholdDb, drc_ratio, drc_attackMs, drc_releaseMs;
+  // DRC — fullband (band[3]) settings only in preset
+  int32_t drc_thresholdDb, drc_ratio, drc_attackMs, drc_releaseMs, drc_pregainQ412;
+  int32_t drc_mode;
 
   // EQ1 & EQ2
   int16_t eq1_pregain_q88;
@@ -69,11 +70,14 @@ void PresetManager::saveDefault(uint8_t slot) {
   pd.en_mask = (1 << 0) | (1 << 9); // only pre/post gain turn on
 
   pd.vol_db = 0;
+  pd.pre_vol_db = 0;
 
-  pd.cp_ratioBelow = 100; // 1.0
-  pd.cp_ratioAbove = 100; // 2.0
+  pd.cp_thresholdDb = -2000;
+  pd.cp_ratioBelow = 100; // 1.00:1
+  pd.cp_ratioAbove = 400; // 4.00:1
   pd.cp_attackMs = 10;
   pd.cp_releaseMs = 200;
+  pd.cp_pregainQ412 = 4096;
 
   pd.ex_cutoffFreq = 3000;
   pd.db_cutoffFreq = 60;
@@ -83,6 +87,13 @@ void PresetManager::saveDefault(uint8_t slot) {
   pd.db_clipfullthreshold = -800;
   pd.db_neutralthreshold = -1600;
   pd.db_boostfullthreshold = -2400;
+
+  pd.drc_thresholdDb = -1500;
+  pd.drc_ratio = 400;
+  pd.drc_attackMs = 5;
+  pd.drc_releaseMs = 160;
+  pd.drc_pregainQ412 = 4096;
+  pd.drc_mode = DRC_MODE_FULLBAND;
 
   pd.deq_lowThresh = -4000;
   pd.deq_normThresh = -2000;
@@ -126,9 +137,9 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
   pd.pre_vol_db = pipeline.getPreGain()._gainDb;
 
   // CP
-  pd.cp_thresholdDb = pipeline.getCompander()._thresholdDb;
-  pd.cp_ratioBelow = pipeline.getCompander()._ratioBelow;
-  pd.cp_ratioAbove = pipeline.getCompander()._ratioAbove;
+  pd.cp_thresholdDb = pipeline.getCompander()._thresholdDbInt;
+  pd.cp_ratioBelow = pipeline.getCompander()._ratioBelowQ88;
+  pd.cp_ratioAbove = pipeline.getCompander()._ratioAboveQ88;
   pd.cp_attackMs = pipeline.getCompander()._attackMs;
   pd.cp_releaseMs = pipeline.getCompander()._releaseMs;
   pd.cp_pregainQ412 = pipeline.getCompander()._pregainQ412;
@@ -148,11 +159,13 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
   pd.db_clipattack = pipeline.getDynamicBass().getClipAttack();
   pd.db_cliprelease = pipeline.getDynamicBass().getClipRelease();
 
-  // DRC
-  pd.drc_thresholdDb = pipeline.getDrc()._bands[0].thresholdDb;
-  pd.drc_ratio = pipeline.getDrc()._bands[0].ratio;
-  pd.drc_attackMs = pipeline.getDrc()._bands[0].attackMs;
-  pd.drc_releaseMs = pipeline.getDrc()._bands[0].releaseMs;
+  // DRC — save fullband (band[3]) settings
+  pd.drc_thresholdDb  = pipeline.getDrc()._bands[3].thresholdDbInt;
+  pd.drc_ratio        = pipeline.getDrc()._bands[3].ratioX100;
+  pd.drc_attackMs     = pipeline.getDrc()._bands[3].attackMs;
+  pd.drc_releaseMs    = pipeline.getDrc()._bands[3].releaseMs;
+  pd.drc_pregainQ412  = pipeline.getDrc()._bands[3].pregainQ412;
+  pd.drc_mode         = (int32_t)pipeline.getDrc()._mode;
 
   // EQs
   pd.eq1_pregain_q88 = pipeline.getEqDsp_1().getPregain();
@@ -220,6 +233,28 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
     return false;
   }
 
+  if (pd.cp_pregainQ412 <= 0) pd.cp_pregainQ412 = 4096;
+  if (pd.cp_ratioBelow < 10) pd.cp_ratioBelow = 100;
+  if (pd.cp_ratioAbove < 100) pd.cp_ratioAbove = 400;
+  if (pd.cp_attackMs <= 0) pd.cp_attackMs = 10;
+  if (pd.cp_releaseMs <= 0) pd.cp_releaseMs = 100;
+
+  if (pd.drc_thresholdDb > 0 && pd.drc_ratio < 100) {
+    pd.drc_thresholdDb = -1500;
+    pd.drc_ratio = 400;
+    pd.drc_attackMs = 5;
+    pd.drc_releaseMs = 160;
+    pd.drc_pregainQ412 = 4096;
+    pd.drc_mode = DRC_MODE_FULLBAND;
+  }
+  if (pd.drc_pregainQ412 <= 0) pd.drc_pregainQ412 = 4096;
+  if (pd.drc_ratio < 100) pd.drc_ratio = 400;
+  if (pd.drc_attackMs <= 0) pd.drc_attackMs = 5;
+  if (pd.drc_releaseMs <= 0) pd.drc_releaseMs = 160;
+  if (pd.drc_mode < DRC_MODE_FULLBAND || pd.drc_mode > DRC_MODE_3BAND_FULLBAND) {
+    pd.drc_mode = DRC_MODE_FULLBAND;
+  }
+
   DspModule **chain = pipeline.getChain();
   for (size_t i = 0; i < pipeline.getChainLength(); i++) {
     chain[i]->setEnabled((pd.en_mask >> i) & 1);
@@ -275,11 +310,13 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
   for (int i = 0; i < MAX_EQ_BANDS; i++)
     pipeline.getDynamicEq().setEqHighBand(i, pd.deq_high_bands[i]);
 
-  // Drc
-  pipeline.getDrc().setThreshold(0, pd.drc_thresholdDb);
-  pipeline.getDrc().setRatio(0, pd.drc_ratio);
-  pipeline.getDrc().setAttackTime(0, pd.drc_attackMs);
-  pipeline.getDrc().setReleaseTime(0, pd.drc_releaseMs);
+  // DRC — restore fullband (band[3]) settings
+  pipeline.getDrc().setThreshold(3, pd.drc_thresholdDb);
+  pipeline.getDrc().setRatio(3, pd.drc_ratio);
+  pipeline.getDrc().setAttackTime(3, pd.drc_attackMs);
+  pipeline.getDrc().setReleaseTime(3, pd.drc_releaseMs);
+  pipeline.getDrc().setPregain(3, pd.drc_pregainQ412);
+  pipeline.getDrc().setMode((DRCMode)pd.drc_mode);
 
   // Left Right EQ
   pipeline.getLeftRightEq().getEqLeft().setPregain(pd.eql_pregain_q88);

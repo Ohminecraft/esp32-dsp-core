@@ -133,12 +133,7 @@ private:
     int32_t _normalThreshDb = -2000;
     int32_t _highThreshDb   =  -600;
 
-    // ---- Static processing buffers (IRAM, avoids stack pressure) ---------
-    // Declared static so they live in DRAM and are never stack-allocated
-    // inside the ISR-adjacent audio task.
-    static float _dryBuf [DSP_FRAME_SAMPLES];   // copy of input
-    static float _wetLow [DSP_FRAME_SAMPLES];   // eqLow output
-    static float _wetHigh[DSP_FRAME_SAMPLES];   // eqHigh output
+    // ---- Processing buffers (mapped dynamically from _scratchpad) ---------
 
     // ---- Internal helpers ------------------------------------------------
     void  recalcCoeffs();
