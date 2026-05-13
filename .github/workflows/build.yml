@@ -49,10 +49,43 @@ jobs:
       - name: Build [esp32, esp32s3]
         run: pio run
 
-      - name: Rename firmware binaries
+      # ─── Rename & collect all flash binaries ──────────────────────────────────
+      - name: Rename and collect firmware binaries
         run: |
-          mv .pio/build/esp32/firmware.bin firmware_esp32.bin
-          mv .pio/build/esp32s3/firmware.bin firmware_esp32s3.bin
+          # ── ESP32 ──
+          mv .pio/build/esp32/firmware.bin              firmware_esp32.bin
+          mv .pio/build/esp32/bootloader.bin            bootloader_esp32.bin
+          mv .pio/build/esp32/partitions.bin            partitions_esp32.bin
+          cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+             boot_app0_esp32.bin
+
+          # ── ESP32-S3 ──
+          mv .pio/build/esp32s3/firmware.bin            firmware_esp32s3.bin
+          mv .pio/build/esp32s3/bootloader.bin          bootloader_esp32s3.bin
+          mv .pio/build/esp32s3/partitions.bin          partitions_esp32s3.bin
+          cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+             boot_app0_esp32s3.bin
+
+      # ─── Generate flash_args for esptool (one per variant) ───────────────────
+      - name: Generate flash_args files
+        run: |
+          # ESP32  — bootloader at 0x1000
+          cat > flash_args_esp32.txt << 'EOF'
+          --chip esp32 --baud 460800 write_flash --flash_mode dio --flash_freq 40m --flash_size detect
+          0x1000   bootloader_esp32.bin
+          0x8000   partitions_esp32.bin
+          0xe000   boot_app0_esp32.bin
+          0x10000  firmware_esp32.bin
+          EOF
+
+          # ESP32-S3 — bootloader at 0x0000
+          cat > flash_args_esp32s3.txt << 'EOF'
+          --chip esp32s3 --baud 460800 write_flash --flash_mode dio --flash_freq 80m --flash_size detect
+          0x0000   bootloader_esp32s3.bin
+          0x8000   partitions_esp32s3.bin
+          0xe000   boot_app0_esp32s3.bin
+          0x10000  firmware_esp32s3.bin
+          EOF
 
       # ─── Upload artifacts (both branches) ────────────────────────────────────
       - name: Upload firmware artifacts
@@ -61,7 +94,15 @@ jobs:
           name: firmware-${{ github.sha }}
           path: |
             firmware_esp32.bin
+            bootloader_esp32.bin
+            partitions_esp32.bin
+            boot_app0_esp32.bin
+            flash_args_esp32.txt
             firmware_esp32s3.bin
+            bootloader_esp32s3.bin
+            partitions_esp32s3.bin
+            boot_app0_esp32s3.bin
+            flash_args_esp32s3.txt
 
       # ─── Pre-release on dev push ──────────────────────────────────────────────
       - name: Create Pre-Release
@@ -79,9 +120,36 @@ jobs:
             **Commit:** `${{ github.sha }}`
             **Author:** ${{ github.actor }}
             **Message:** ${{ github.event.head_commit.message }}
+
+            ---
+
+            ## 📦 Included Files
+
+            | File | Description |
+            |------|-------------|
+            | `firmware_esp32.bin` | Application firmware — ESP32 |
+            | `bootloader_esp32.bin` | Bootloader — ESP32 (flash @ `0x1000`) |
+            | `partitions_esp32.bin` | Partition table — ESP32 (flash @ `0x8000`) |
+            | `boot_app0_esp32.bin` | OTA data initial — ESP32 (flash @ `0xe000`) |
+            | `flash_args_esp32.txt` | esptool arguments — ESP32 |
+            | `firmware_esp32s3.bin` | Application firmware — ESP32-S3 |
+            | `bootloader_esp32s3.bin` | Bootloader — ESP32-S3 (flash @ `0x0000`) |
+            | `partitions_esp32s3.bin` | Partition table — ESP32-S3 (flash @ `0x8000`) |
+            | `boot_app0_esp32s3.bin` | OTA data initial — ESP32-S3 (flash @ `0xe000`) |
+            | `flash_args_esp32s3.txt` | esptool arguments — ESP32-S3 |
+
+            > 💡 Xem hướng dẫn flash tại [Getting Started](./getting-started.md)
           files: |
             firmware_esp32.bin
+            bootloader_esp32.bin
+            partitions_esp32.bin
+            boot_app0_esp32.bin
+            flash_args_esp32.txt
             firmware_esp32s3.bin
+            bootloader_esp32s3.bin
+            partitions_esp32s3.bin
+            boot_app0_esp32s3.bin
+            flash_args_esp32s3.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -107,6 +175,25 @@ jobs:
             echo "$CHANGELOG"
             echo ""
             echo "---"
+            echo ""
+            echo "## 📦 Included Files"
+            echo ""
+            echo "| File | Description |"
+            echo "|------|-------------|"
+            echo "| \`firmware_esp32.bin\` | Application firmware — ESP32 |"
+            echo "| \`bootloader_esp32.bin\` | Bootloader — ESP32 (flash @ \`0x1000\`) |"
+            echo "| \`partitions_esp32.bin\` | Partition table — ESP32 (flash @ \`0x8000\`) |"
+            echo "| \`boot_app0_esp32.bin\` | OTA data initial — ESP32 (flash @ \`0xe000\`) |"
+            echo "| \`flash_args_esp32.txt\` | esptool arguments — ESP32 |"
+            echo "| \`firmware_esp32s3.bin\` | Application firmware — ESP32-S3 |"
+            echo "| \`bootloader_esp32s3.bin\` | Bootloader — ESP32-S3 (flash @ \`0x0000\`) |"
+            echo "| \`partitions_esp32s3.bin\` | Partition table — ESP32-S3 (flash @ \`0x8000\`) |"
+            echo "| \`boot_app0_esp32s3.bin\` | OTA data initial — ESP32-S3 (flash @ \`0xe000\`) |"
+            echo "| \`flash_args_esp32s3.txt\` | esptool arguments — ESP32-S3 |"
+            echo ""
+            echo "> 💡 Xem hướng dẫn flash tại [Getting Started](./getting-started.md)"
+            echo ""
+            echo "---"
             echo "_Built from \`dev\` merged into \`release\` — commit \`${{ github.sha }}\`_"
             echo "CHANGELOG_EOF"
           } >> $GITHUB_OUTPUT
@@ -122,6 +209,14 @@ jobs:
           body: ${{ steps.changelog.outputs.notes }}
           files: |
             firmware_esp32.bin
+            bootloader_esp32.bin
+            partitions_esp32.bin
+            boot_app0_esp32.bin
+            flash_args_esp32.txt
             firmware_esp32s3.bin
+            bootloader_esp32s3.bin
+            partitions_esp32s3.bin
+            boot_app0_esp32s3.bin
+            flash_args_esp32s3.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
