@@ -11,6 +11,8 @@
 #include <Arduino.h>
 #include "pin_config.h"
 
+extern volatile bool g_wifiShutdownActive;
+
 class StatusLED {
 public:
     uint8_t r = 0, g = 0, b = 0;
@@ -22,8 +24,14 @@ public:
      * @param sampleRate Current sample rate in Hz (0 if absent)
      */
     void update(float cpuUsage, uint8_t heapPct, uint32_t sampleRate, bool is_absent) {
-        // 1. Clock Presence / Sample Rate Base Color
-        if (sampleRate == 0 || is_absent) {
+        // 1. WiFi Shutdown state check
+        if (g_wifiShutdownActive && is_absent) {
+            // WiFi is OFF: Breathing Purple/Magenta
+            phase = sin(millis() * 0.002f);
+            r = (uint8_t)(40 + 40 * phase);
+            g = 0;
+            b = (uint8_t)(60 + 60 * phase);
+        } else if (sampleRate == 0 || is_absent) {
             // No clock: Breathing Red
             phase = sin(millis() * 0.003f);
             r = (uint8_t)(60 + 60 * phase); 

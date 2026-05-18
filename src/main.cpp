@@ -12,7 +12,7 @@
  *   INPUT → Compander → Exciter → DynamicEQ → EQ1 → EQ2 → LeftRightEQ → DRC → Volume → OUTPUT
  */
 
-#include <Arduino.h>    
+#include <Arduino.h>
 
 #include "config.h"
 #include "pin_config.h"
@@ -137,7 +137,7 @@ static void onRateChange(ClockState state, uint32_t rateHz) {
 
     case ClockState::RATE_UNKNOWN:
         // Transient during codec switch — AudioSync will re-detect in 100ms
-        LOG_INFO("SYNC", "Unknown rate (%lu Hz) — waiting for stable clock", (unsigned long)rateHz);
+        LOG_WARN("SYNC", "Unknown rate (%lu Hz) — waiting for stable clock", (unsigned long)rateHz);
         break;
     }
 }
@@ -177,6 +177,40 @@ void IRAM_ATTR audioTask(void* param) {
 }
 
 // ============================================================================
+// WiFi Toggle State and Control
+// ============================================================================
+
+volatile bool g_wifiShutdownActive = false;
+
+static void toggleWifiShutdown() {
+    g_wifiShutdownActive = !g_wifiShutdownActive;
+
+    // Save to NVS
+    Preferences prefs;
+    prefs.begin("sys_state", false);
+    prefs.putBool("wifi_off", g_wifiShutdownActive);
+    prefs.end();
+
+    if (g_wifiShutdownActive) {
+        LOG_INFO("SYS", "Double-press: Initiating WiFi Shutdown...");
+        
+        // 1. Save Preset 0 first
+        LOG_INFO("SYS", "Saving current DSP settings to Preset 0...");
+        g_presetMgr.savePreset(0, g_pipeline);
+        
+        // 2. Shut down WiFi completely
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        LOG_INFO("SYS", "WiFi Transceiver is now fully OFF.");
+    } else {
+        LOG_INFO("SYS", "Double-press: Resuming WiFi...");
+        // Re-initialize WiFi from NVS
+        g_wifiMgr.init();
+        LOG_INFO("SYS", "WiFi Transceiver is now ON.");
+    }
+}
+
+// ============================================================================
 // Control Task (Core 0, Priority 5)
 // ============================================================================
 
@@ -192,16 +226,49 @@ void controlTask(void* param) {
 
     while (true) {
         #ifdef SOFT_LATCH_SHUTDOWN
-        bool userShutdownRequest = (digitalRead(POWER_PIN_OFF) == LOW);
+        // 1. Long press detection for hard shutdown (5s)
+        bool btnIsPressed = (digitalRead(POWER_PIN_OFF) == LOW); // LOW = pressed
 
-        if (userShutdownRequest) {
+        if (btnIsPressed) {
             if (!g_shutdownButtonIsHolding) {
-            g_shutdownButtonIsHolding = true;
-            g_shutdownCountdown = millis();
-            } else if (millis() - g_shutdownCountdown >= 5000) g_userShutdownRequest = true;
+                g_shutdownButtonIsHolding = true;
+                g_shutdownCountdown = millis();
+            } else if (millis() - g_shutdownCountdown >= 5000) {
+                g_userShutdownRequest = true;
+            }
         } else {
             g_shutdownButtonIsHolding = false;
             g_shutdownCountdown = 0;
+        }
+
+        // 2. Click & Double-press detection
+        static bool lastBtnState = HIGH;
+        static uint32_t btnPressTime = 0;
+        static uint32_t clickCount = 0;
+        static uint32_t lastClickTime = 0;
+
+        if (btnIsPressed != lastBtnState) {
+            lastBtnState = btnIsPressed;
+            if (btnIsPressed == HIGH) { // Button released
+                uint32_t pressDuration = millis() - btnPressTime;
+                if (pressDuration >= 40 && pressDuration <= 600) { // Valid short click
+                    clickCount++;
+                    lastClickTime = millis();
+                }
+            } else { // Button pressed
+                btnPressTime = millis();
+            }
+        }
+
+        if (clickCount > 0) {
+            if (clickCount >= 2) {
+                // Double press detected!
+                clickCount = 0;
+                toggleWifiShutdown();
+            } else if (millis() - lastClickTime > 350) {
+                // Single press timeout
+                clickCount = 0;
+            }
         }
         #endif
 
@@ -258,12 +325,18 @@ void controlTask(void* param) {
             vTaskDelete(g_syncTaskHandle);
             g_audioSync.clearHandle();
             LOG_INFO("SYS", "Audio synchronization stopped.");
-            WiFi.status() == WL_CONNECTED ? WiFi.disconnect(true) : WiFi.softAPdisconnect(true);
-            LOG_INFO("SYS", "WiFi disconnected.");
+            if (!g_wifiShutdownActive) {
+                WiFi.status() == WL_CONNECTED ? WiFi.disconnect(true) : WiFi.softAPdisconnect(true);
+                WiFi.mode(WIFI_OFF);
+                LOG_INFO("SYS", "WiFi Transceiver turned OFF.");
+            } else {
+                LOG_INFO("SYS", "WiFi Transceiver already OFF.");
+            }
             g_statusLED.fadeOff();
             LOG_INFO("SYS", "Status LED turned off.");
             delay(300);
             LOG_INFO("SYS", "System halted.");
+            pinMode(POWER_PIN_OUT, OUTPUT);
             digitalWrite(POWER_PIN_OUT, LOW); // Shutdown system
             vTaskDelete(NULL); // Ensure task is deleted preventing auto restart
         } else {
@@ -329,15 +402,23 @@ void controlTask(void* param) {
 // ============================================================================
 
 void setup() {
-    //WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
     #ifdef SOFT_LATCH_SHUTDOWN
         pinMode(POWER_PIN_OUT, OUTPUT);
-        delay(10); // Short delay to ensure stable power before latching on
-        digitalWrite(POWER_PIN_OUT, HIGH);  // Latch power on (2N3904 gate closed)
+        digitalWrite(POWER_PIN_OUT, LOW);
+
+        pinMode(POWER_PIN_OFF, INPUT_PULLUP);
+        delay(10); 
+
+        /*
+        if (digitalRead(POWER_PIN_OFF) == HIGH) {
+            digitalWrite(POWER_PIN_OUT, LOW);
+            while(true) { }
+        }
+            */
+        digitalWrite(POWER_PIN_OUT, HIGH);
         g_statusLED.off();
     #endif
-    delay(200); // Allow time for power to stabilize before initializing components
-    pinMode(POWER_PIN_OFF, INPUT_PULLUP);
+    delay(100); // Allow time for power to stabilize before initializing components
     DBG_INIT(115200);
     DBG_PRINTLN();
     DBG_PRINTLN("=================================");
@@ -371,6 +452,18 @@ void setup() {
     
     g_paramCtrl.init(&g_pipeline, &g_audioInput, &g_audioOutput, &g_uart, &g_presetMgr, &g_wifiMgr);
     g_webServer.init(&g_wifiMgr, &g_uart, &g_paramCtrl);
+
+    // Load WiFi shutdown state from NVS
+    Preferences prefs;
+    prefs.begin("sys_state", true); // read-only
+    g_wifiShutdownActive = prefs.getBool("wifi_off", false);
+    prefs.end();
+
+    if (g_wifiShutdownActive) {
+        LOG_INFO("INIT", "WiFi state in NVS is OFF. Disconnecting & turning WiFi Transceiver OFF.");
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+    }
 
     // 4. Load preset
     if (g_presetMgr.hasPreset(0)) {

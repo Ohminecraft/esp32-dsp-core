@@ -133,6 +133,15 @@ For clean audio:
 - Slot 3: Treble cut (for harsh sources)
 - Slot 4-7: Custom per use-case
 
+#### E. WiFi Off Mode
+
+To minimize audio distortion (by preventing frame processing lag under high heap memory usage) and free up system resources:
+1. **Activate**: Double-press the power button (`POWER_PIN_OFF` / GPIO 40) rapidly. 
+   - The current DSP parameters (EQ, volume, etc.) will be **automatically saved** as the boot default (Preset Slot 0).
+   - The WiFi transceiver will turn **fully OFF**, and the status LED will breathe **Purple/Magenta**.
+2. **Deactivate**: Double-press the power button again. WiFi will resume and reconnect.
+3. **NVS Persistence**: The WiFi state is remembered in NVS. If you boot the device while WiFi is OFF, it will remain OFF on boot (showing breathing purple) without ever initializing WiFi, keeping the RF environment silent.
+
 ---
 
 ### Common Issues
@@ -246,6 +255,15 @@ Nếu vượt 95%:
 2. Điều chỉnh Compander để tránh cắt ngắn
 3. Sử dụng SoftClipper chỉ như an toàn
 4. Master Volume nên là 0dB (unity)
+
+#### D. Chế độ Tắt WiFi (WiFi Off)
+
+Để giảm thiểu hiện tượng méo âm thanh (do bộ nhớ heap tăng cao gây trễ xử lý khung nhạc) và giải phóng tài nguyên hệ thống:
+1. **Kích hoạt**: Nhấn đúp nhanh nút nguồn (`POWER_PIN_OFF` / GPIO 40).
+   - Hệ thống tự động **lưu cấu hình âm thanh** hiện tại làm mặc định khởi động (NVS Preset 0).
+   - Chip WiFi sẽ được **tắt hoàn toàn**, và đèn LED trạng thái chuyển sang **hiệu ứng thở màu Tím/Magenta**.
+2. **Khôi phục**: Nhấn đúp nhanh nút nguồn lần nữa. WiFi sẽ tự động bật lại và kết nối lại thiết bị.
+3. **Lưu trạng thái bền vững**: Trạng thái WiFi Off được ghi nhớ vào bộ nhớ NVS. Nếu bạn khởi động lại mạch khi đang ở chế độ Tắt WiFi, WiFi sẽ tiếp tục được khóa tắt ngay từ giây đầu tiên (LED thở tím) để đảm bảo môi trường hoạt động tốt nhất.
 
 ---
 
