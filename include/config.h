@@ -27,7 +27,11 @@
 #define DSP_SAMPLE_RATE_DEFAULT 96000   // Hz — max QCC5125 LDAC rate
 
 #define DSP_NUM_CHANNELS        2       // Stereo
-#define DSP_FRAME_SIZE          512     // Samples per frame per channel
+#if defined(CONFIG_IDF_TARGET_ESP32) // ESP32 can handle max 256 frame size because out of heap
+#define DSP_FRAME_SIZE          256     // Samples per frame per channel
+#else 
+#define DSP_FRAME_SIZE          512
+#endif
 #define DSP_FRAME_SAMPLES       (DSP_FRAME_SIZE * DSP_NUM_CHANNELS)
 
 // ============================================================================
@@ -103,11 +107,11 @@
 // Misc Configs
 // ============================================================================
 
-#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
+//#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
 #define AUTO_SHUTDONW_TIMER_MS 1800000 // 30min
 #define SHUTDOWN_COUNTDOWN_MS 5000 // 5s
 
-// Trigger GPIO settings (for external control via single/triple click) - requires external button wiring to POWER_PIN_OFF and POWER_PIN_OUT (SOFT_LATCH_SHUTDOWN must be defined)
+// Trigger GPIO settings (for external control via single/triple click) - requires external button wiring to POWER_PIN_OFF (SOFT_LATCH_SHUTDOWN must be defined)
 // More features can be added here in future (e.g., double-click, long-press) if needed.
 // Can customize gpio and timing parameters in web app or electron app (future).
 #define TRIGGER_GPIO_ACTIVE_LEVEL   HIGH    // Active state level (HIGH/LOW)

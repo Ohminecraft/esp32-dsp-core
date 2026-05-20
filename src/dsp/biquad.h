@@ -97,18 +97,15 @@ static inline float IRAM_ATTR dsps_biquad_sample_arp4(float x, const float* coef
 
 #endif // dsps_biquad_f32_arp4_enabled
 
-#if (dsps_biquad_f32_aes3_enabled == 1)
-    #define dsps_biquad_f32_sample  dsps_biquad_f32_sample_aes3
-
-#elif (dsps_biquad_f32_arp4_enabled == 1)
-    #define dsps_biquad_f32_sample  dsps_biquad_f32_sample_arp4
+#if (dsps_biquad_f32_arp4_enabled == 1)
+    #define dsps_biquad_f32_sample  dsps_biquad_sample_arp4
 
 #elif (dsps_biquad_f32_ae32_enabled == 1)
-    #define dsps_biquad_f32_sample  dsps_biquad_f32_sample_ae32
+    #define dsps_biquad_f32_sample  dsps_biquad_sample_ae32
 
 #else
     // ANSI C fallback — mọi chip khác (ESP32-S2, C3, C6...)
-    static inline float IRAM_ATTR dsps_biquad_f32_sample_ansi(float x, const float* c, float* w)
+    static inline float IRAM_ATTR dsps_biquad_sample_ansi(float x, const float* c, float* w)
     {
         float d0 = x - c[3] * w[0] - c[4] * w[1];
         float y  = c[0] * d0 + c[1] * w[0] + c[2] * w[1];
@@ -116,7 +113,7 @@ static inline float IRAM_ATTR dsps_biquad_sample_arp4(float x, const float* coef
         w[0] = d0;
         return y;
     }
-    #define dsps_biquad_f32_sample  dsps_biquad_f32_sample_ansi
+    #define dsps_biquad_f32_sample  dsps_biquad_sample_ansi
 #endif
 
 class Biquad {
