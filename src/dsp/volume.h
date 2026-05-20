@@ -14,7 +14,7 @@ class VolumeControl : public DspModule {
     friend class ParamController;
 public:
     VolumeControl() : _gainLinear(1.0f), _targetGain(1.0f),
-                      _currentGain(1.0f), _muted(false), _gainDb(0), _moduleId(MODULE_ID_VOLUME) {}
+                      _currentGain(1.0f), _muted(false), _gainDb(0), _moduleId(MODULE_ID_POST_GAIN) {}
 
     void init(int32_t sampleRate, int32_t numChannels) override;
     void process(float* __restrict samples, size_t numSamples) override;

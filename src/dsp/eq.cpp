@@ -46,8 +46,9 @@ void IRAM_ATTR ParametricEQ::processInternal(float* __restrict samples, size_t n
     if (!hasActiveBands) return;
 
     // 2. Process through cascaded biquads
-    // Use SIMD planar processing if we have a scratchpad and are in stereo
-    if (_scratchpad && _numChannels == 2) {
+    // Use planar processing if we have a scratchpad and are in stereo
+    
+    if (_scratchpad) {
         float* bufL = _scratchpad->buf5; // Use buf5 and buf6 to avoid overlap with DynamicEQ
         float* bufR = _scratchpad->buf6;
 
@@ -57,7 +58,7 @@ void IRAM_ATTR ParametricEQ::processInternal(float* __restrict samples, size_t n
             bufR[i] = samples[i * 2 + 1];
         }
 
-        // Process SIMD
+        // Process
         for (uint8_t b = 0; b < MAX_EQ_BANDS; b++) {
             if (_params[b].enabled) {
                 _filters[b].processPlanar(bufL, bufR, numSamples);
@@ -68,13 +69,6 @@ void IRAM_ATTR ParametricEQ::processInternal(float* __restrict samples, size_t n
         for (size_t i = 0; i < numSamples; i++) {
             samples[i * 2]     = bufL[i];
             samples[i * 2 + 1] = bufR[i];
-        }
-    } else {
-        // Fallback
-        for (uint8_t b = 0; b < MAX_EQ_BANDS; b++) {
-            if (_params[b].enabled) {
-                _filters[b].process(samples, numSamples);
-            }
         }
     }
 }

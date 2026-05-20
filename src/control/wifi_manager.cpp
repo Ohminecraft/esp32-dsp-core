@@ -6,7 +6,9 @@
 #include "wifi_manager.h"
 #include <ESPmDNS.h>
 #include <esp_wifi.h>          // esp_wifi_set_ps()
+#include "config.h"
 #include "../utils/debug_log.h"
+#include "../utils/psram.h"  // psram_alloc(), PSRAM_FREE()
 
 #define TAG "WIFI"
 
@@ -63,9 +65,21 @@ int WiFiManager::getScanCount() const {
 String WiFiManager::getScanEntry(uint8_t index) const {
     int n = WiFi.scanComplete();
     if (n < 0 || index >= (uint8_t)n) return "";
-    // Format: "SSID\tRSSI\tencrypted"
+    
+    // Dùng PSRAM cho string build thay vì String concat trên DRAM heap
     bool encrypted = (WiFi.encryptionType(index) != WIFI_AUTH_OPEN);
-    return WiFi.SSID(index) + "\t" + String(WiFi.RSSI(index)) + "\t" + (encrypted ? "1" : "0");
+    
+    char* buf = (char*)PSRAM_MALLOC(64);
+    if (!buf) return "";  // fallback graceful
+    
+    snprintf(buf, 64, "%s\t%d\t%d",
+             WiFi.SSID(index).c_str(),
+             (int)WiFi.RSSI(index),
+             encrypted ? 1 : 0);
+    
+    String result(buf);  // copy vào String (DRAM) — cần thiết vì return by value
+    PSRAM_FREE(buf);
+    return result;
 }
 
 // ── public: mode switching ────────────────────────────────────────────────────

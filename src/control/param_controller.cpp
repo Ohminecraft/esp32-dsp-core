@@ -214,8 +214,8 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
     break;
   }
 
-  case MODULE_ID_VOLUME: {
-    VolumeControl &vol = _pipeline->getVolume();
+  case MODULE_ID_POST_GAIN: {
+    VolumeControl &vol = _pipeline->getPostGain();
     switch (paramId) {
     case 0:
       vol.setGainDb((int16_t)value);
@@ -400,7 +400,7 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
   };
 
   // Volume
-  sendPkt(MODULE_ID_VOLUME, 0, _pipeline->getVolume()._gainDb);
+  sendPkt(MODULE_ID_POST_GAIN, 0, _pipeline->getPostGain()._gainDb);
   sendPkt(MODULE_ID_PRE_GAIN, 0, _pipeline->getPreGain()._gainDb);
 
   // CP

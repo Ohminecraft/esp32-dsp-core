@@ -53,7 +53,6 @@ private:
     i2s_chan_handle_t _rxHandle    = nullptr;
 
     void   initI2SInput();
-    size_t readI2S(float* __restrict buffer, size_t numSamples);
 };
 
 #endif // AUDIO_INPUT_H

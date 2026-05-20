@@ -56,7 +56,7 @@ public:
     ParametricEQ&    getEqDsp_2()        { return _eqDsp_2; }
     LeftRightEQ&     getLeftRightEq()    { return _leftRightEq; }
     DRC&             getDrc()            { return _drc; }
-    VolumeControl&   getVolume()         { return _volume; }
+    VolumeControl&   getPostGain()       { return _postGain; }
     VolumeControl&   getPreGain()        { return _preGain; }
 
     /**
@@ -83,7 +83,7 @@ private:
     ParametricEQ   _eqDsp_2;       // [06] EQ2 (post EQ / sound signature)
     LeftRightEQ    _leftRightEq;   // [07] Left Right EQ
     DRC            _drc;           // [08] DRC (dynamic range compression)
-    VolumeControl  _volume;        // [09] Master Volume
+    VolumeControl  _postGain;      // [09] Post Gain
 
     DspModule* _chain[CHAIN_LENGTH];
 };

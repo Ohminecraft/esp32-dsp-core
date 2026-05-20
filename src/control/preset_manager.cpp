@@ -133,7 +133,7 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
       enableMask |= (1 << i);
   }
   pd.en_mask = enableMask;
-  pd.vol_db = pipeline.getVolume()._gainDb;
+  pd.vol_db = pipeline.getPostGain()._gainDb;
   pd.pre_vol_db = pipeline.getPreGain()._gainDb;
 
   // CP
@@ -260,7 +260,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
     chain[i]->setEnabled((pd.en_mask >> i) & 1);
   }
 
-  pipeline.getVolume().setGainDb(pd.vol_db);
+  pipeline.getPostGain().setGainDb(pd.vol_db);
   pipeline.getPreGain().setGainDb(pd.pre_vol_db);
 
   pipeline.getCompander().setThreshold(pd.cp_thresholdDb);

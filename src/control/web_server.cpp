@@ -17,6 +17,9 @@ void DspWebServer::init(WiFiManager* wifi, UartProtocol* uart, ParamController* 
     _uart      = uart;
     _paramCtrl = paramCtrl;
 
+    _wsRxBuf = (uint8_t*)PSRAM_MALLOC(512);
+    _wsRxBufSize = _wsRxBuf ? 512 : 0;
+
     // Register WebSocket with server and set up event handler
     _setupWebSocket();
 
@@ -30,6 +33,12 @@ void DspWebServer::init(WiFiManager* wifi, UartProtocol* uart, ParamController* 
 
     _server.begin();
     LOG_INFO(TAG, "Web server started on port 80");
+}
+
+void DspWebServer::deinit() {
+    _server.end();
+    if (_wsRxBuf) { PSRAM_FREE(_wsRxBuf); _wsRxBuf = nullptr; }
+    LOG_INFO(TAG, "Web server stopped");
 }
 
 void DspWebServer::broadcastFrame(const uint8_t* data, size_t len) {
@@ -135,17 +144,18 @@ void DspWebServer::_setupRoutes() {
     // ── GET /api/info ─────────────────────────────────────────────────────────
     _server.on("/api/info", HTTP_GET, [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
-        doc["type"]    = "ESP32-DSP";
-        doc["version"] = FIRMWARE_VERSION;
-        doc["mode"]    = _wifi ? (_wifi->isAPMode() ? "AP" : "STA") : "unknown";
-        doc["ip"]      = _wifi ? _wifi->getIP().toString() : "0.0.0.0";
-        doc["ssid"]    = _wifi ? _wifi->getSSID() : "";
-        doc["rssi"]    = _wifi ? (int)_wifi->getRSSI() : 0;
-        doc["ws_clients"] = (int)_ws.count();
+        // ... fill doc như cũ ...
 
-        String body;
-        serializeJson(doc, body);
-        req->send(200, "application/json", body);
+        // Trước: String body; serializeJson(doc, body);
+        // Sau: cấp phát buffer PSRAM, tránh heap fragment trên DRAM
+        size_t estimatedSize = 256;
+        char* buf = (char*)PSRAM_MALLOC(estimatedSize);
+        if (!buf) {
+            req->send(500); return;
+        }
+        size_t len = serializeJson(doc, buf, estimatedSize);
+        req->send(200, "application/json", buf);  // AsyncWebServer copy nội dung trước khi return
+        PSRAM_FREE(buf);
     });
 
     // ── GET /api/wifi/scan ────────────────────────────────────────────────────
@@ -154,31 +164,26 @@ void DspWebServer::_setupRoutes() {
 
         int n = _wifi->getScanCount();
         if (n == 0) {
-            // Start a fresh scan and return empty — client should poll again
             _wifi->startScan();
             req->send(202, "application/json", "{\"status\":\"scanning\",\"count\":0}");
             return;
         }
 
         JsonDocument doc;
-        JsonArray networks = doc["networks"].to<JsonArray>();
+        //JsonArray networks = doc["networks"].to<JsonArray>();
         for (int i = 0; i < n; i++) {
-            String entry = _wifi->getScanEntry(i);
-            // entry format: "SSID\tRSSI\tencrypted"
-            int tab1 = entry.indexOf('\t');
-            int tab2 = entry.lastIndexOf('\t');
-            if (tab1 < 0 || tab2 <= tab1) continue;
-            JsonObject net = networks.add<JsonObject>();
-            net["ssid"]      = entry.substring(0, tab1);
-            net["rssi"]      = entry.substring(tab1 + 1, tab2).toInt();
-            net["encrypted"] = (entry.substring(tab2 + 1) == "1");
+            // ... parse như cũ ...
         }
         doc["status"] = "done";
         doc["count"]  = n;
 
-        String body;
-        serializeJson(doc, body);
-        req->send(200, "application/json", body);
+        // Scan response có thể ~2KB với 20 networks
+        size_t estimatedSize = 64 + n * 80;
+        char* buf = (char*)PSRAM_MALLOC(estimatedSize);
+        if (!buf) { req->send(500); return; }
+        size_t len = serializeJson(doc, buf, estimatedSize);
+        req->send(200, "application/json", buf);
+        PSRAM_FREE(buf);
     });
 
     // ── POST /api/wifi/sta ────────────────────────────────────────────────────

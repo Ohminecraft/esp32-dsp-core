@@ -17,13 +17,13 @@ void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     _chain[6]  = &_eqDsp_2;
     _chain[7]  = &_leftRightEq;
     _chain[8]  = &_drc;
-    _chain[9]  = &_volume;
+    _chain[9]  = &_postGain;
 
     // Set module IDs for EQ and Volume instances
     _preGain.setModuleId(MODULE_ID_PRE_GAIN);
     _eqDsp_1.setModuleId(MODULE_ID_EQ_DSP_1);
     _eqDsp_2.setModuleId(MODULE_ID_EQ_DSP_2);
-    _volume.setModuleId(MODULE_ID_VOLUME);
+    _postGain.setModuleId(MODULE_ID_POST_GAIN);
 
     // Initialize all modules and assign scratchpad
     for (size_t i = 0; i < CHAIN_LENGTH; i++) {
@@ -32,7 +32,7 @@ void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     }
     
     _preGain.enable();
-    _volume.enable();
+    _postGain.enable();
 }
 
 void IRAM_ATTR DspPipeline::processFrame(float* __restrict samples, size_t numSamples) {

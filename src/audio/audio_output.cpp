@@ -79,7 +79,7 @@ void AudioOutput::initI2SOutput() {
     m_tx_std_cfg.gpio_cfg.bclk  = (gpio_num_t)I2S_OUT_BCK_PIN;   // GPIO4
     m_tx_std_cfg.gpio_cfg.ws    = (gpio_num_t)I2S_OUT_WS_PIN;     // GPIO5
     m_tx_std_cfg.gpio_cfg.dout  = (gpio_num_t)I2S_OUT_DATA_PIN;   // GPIO22
-    m_tx_std_cfg.gpio_cfg.mclk  = (gpio_num_t)I2S_IN_MCLK_PIN; // PCM1808
+    m_tx_std_cfg.gpio_cfg.mclk  = (gpio_num_t)I2S_IN_MCLK_PIN; // Generate MCLK for PCM1808 because PCM1808 need MCLK to work, GPIO0
     m_tx_std_cfg.gpio_cfg.din   = I2S_GPIO_UNUSED;
     m_tx_std_cfg.gpio_cfg.invert_flags.mclk_inv = false;
     m_tx_std_cfg.gpio_cfg.invert_flags.bclk_inv = false;
@@ -98,11 +98,7 @@ void AudioOutput::initI2SOutput() {
 // Write
 // ---------------------------------------------------------------------------
 
-size_t AudioOutput::writeFrame(const float* __restrict buffer, size_t numSamples) {
-    return writeI2S(buffer, numSamples);
-}
-
-size_t IRAM_ATTR AudioOutput::writeI2S(const float* __restrict buffer, size_t numSamples) {
+size_t IRAM_ATTR AudioOutput::writeFrame(const float* __restrict buffer, size_t numSamples) {
     const size_t totalSamples = numSamples * _numChannels;
     if (totalSamples > DSP_FRAME_SAMPLES) return 0;
 

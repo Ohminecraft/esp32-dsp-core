@@ -23,6 +23,8 @@
 #include "uart_protocol.h"
 #include "param_controller.h"
 
+#include "utils/psram.h"  // psram_alloc(), PSRAM_FREE()
+
 class DspWebServer {
 public:
     /**
@@ -34,6 +36,11 @@ public:
      * @param paramCtrl  Pointer to ParamController (handles incoming WS commands)
      */
     void init(WiFiManager* wifi, UartProtocol* uart, ParamController* paramCtrl);
+
+    /**
+     * Stop the web server
+     */
+    void deinit();
 
     /**
      * Broadcast a binary frame to all connected WebSocket clients.
@@ -57,6 +64,9 @@ private:
     WiFiManager*    _wifi      = nullptr;
     UartProtocol*   _uart      = nullptr;
     ParamController* _paramCtrl = nullptr;
+
+    uint8_t* _wsRxBuf = nullptr;
+    size_t   _wsRxBufSize = 0;
 
     // Frame parser per-client state
     // (reuse UartProtocol's existing parser logic via a helper)
