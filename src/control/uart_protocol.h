@@ -28,6 +28,8 @@ class AsyncWebSocketClient;
 #define CMD_SAVE_PRESET 0x08
 #define CMD_LOAD_PRESET 0x09
 #define CMD_GET_ALL_STATE 0x0A
+#define CMD_SET_AUTO_EQ_TARGET 0x0B
+#define CMD_GET_AUTO_EQ_STATE 0x0C
 
 // WiFi configuration commands
 #define CMD_WIFI_SCAN       0x10  // ESP32 scans WiFi, returns SSID list via ACK frames
@@ -36,6 +38,7 @@ class AsyncWebSocketClient;
 #define CMD_WIFI_GET_STATUS 0x13  // No data — reply with mode/IP/SSID/RSSI
 
 #define CMD_REPORT_CPU_USAGE 0x40
+#define CMD_REPORT_AUTO_EQ 0x41
 
 #define CMD_ACK_RESPONSE 0xFE
 #define CMD_ERROR 0xFF

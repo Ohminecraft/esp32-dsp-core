@@ -129,6 +129,6 @@
 // ============================================================================
 // Trigger GPIO Settings (Single / Triple Click)
 // ============================================================================
-//#define TRIGGER_GPIO_PIN            41      // Target GPIO to trigger
+#define TRIGGER_GPIO_PIN            41      // Target GPIO to trigger
 
 #endif // PIN_CONFIG_H

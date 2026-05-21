@@ -22,11 +22,14 @@ export const CMD = {
     SAVE_PRESET: 0x08,
     LOAD_PRESET: 0x09,
     GET_ALL_STATE: 0x0A,
+    SET_AUTO_EQ_TARGET: 0x0B,
+    GET_AUTO_EQ_STATE: 0x0C,
     WIFI_SCAN: 0x10,
     WIFI_SET_STA: 0x11,
     WIFI_SET_AP: 0x12,
     WIFI_GET_STATUS: 0x13,
     REPORT_CPU_USAGE: 0x40,
+    REPORT_AUTO_EQ: 0x41,
     ACK_RESPONSE: 0xFE,
     ERROR: 0xFF
 };
@@ -42,6 +45,7 @@ export const MODULE = {
     DRC: 0x08,
     POST_GAIN: 0x09,
     LEFTRIGHT_EQ: 0x0A,
+    AUTO_EQ: 0x0B,
     SYSTEM: 0xF0
 };
 
@@ -54,13 +58,14 @@ export const MODULE_NAMES = {
     [MODULE.EQ_DSP_1]: 'Parmetric EQ 1',
     [MODULE.EQ_DSP_2]: 'Parmetric EQ 2',
     [MODULE.LEFTRIGHT_EQ]: 'Left Right EQ',
+    [MODULE.AUTO_EQ]: 'Auto EQ',
     [MODULE.DRC]: 'Dynamic Range Compression',
     [MODULE.POST_GAIN]: 'Post Gain',
 };
 
 export const MODULE_ORDER = [
     MODULE.PRE_GAIN, MODULE.COMPANDER, MODULE.EXCITER,
-    MODULE.DYNAMIC_BASS, MODULE.DYNAMIC_EQ, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2,
+    MODULE.DYNAMIC_BASS, MODULE.DYNAMIC_EQ, MODULE.AUTO_EQ, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2,
     MODULE.DRC, MODULE.POST_GAIN, MODULE.LEFTRIGHT_EQ
 ];
 
@@ -153,6 +158,21 @@ export function buildSetOutputSource(src) { return buildFrame(CMD.SET_OUTPUT_SOU
 
 export function buildGetAllState() {
     return buildFrame(CMD.GET_ALL_STATE, MODULE.SYSTEM);
+}
+
+export function buildSetAutoEqTarget(bands) {
+    const data = [];
+    bands.forEach(band => {
+        const freq = Math.max(20, Math.min(20000, Math.round(band.freq || 1000)));
+        const q = dbToQ88(band.gain || 0);
+        data.push(freq & 0xFF, (freq >> 8) & 0xFF);
+        data.push(q & 0xFF, (q >> 8) & 0xFF);
+    });
+    return buildFrame(CMD.SET_AUTO_EQ_TARGET, MODULE.AUTO_EQ, data);
+}
+
+export function buildGetAutoEqState() {
+    return buildFrame(CMD.GET_AUTO_EQ_STATE, MODULE.AUTO_EQ);
 }
 
 // ─── WiFi Builders ──────────────────────────────────────────────────────

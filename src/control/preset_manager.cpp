@@ -49,6 +49,9 @@ struct PresetData {
   int16_t eqr_pregain_q88;
   EQFilterParams eqr_bands[MAX_EQ_BANDS];
 
+  int16_t auto_eq_target_q88[AUTO_EQ_NUM_BANDS];
+  uint16_t auto_eq_freq_hz[AUTO_EQ_NUM_BANDS];
+
   bool valid;
 };
 
@@ -67,7 +70,7 @@ void PresetManager::saveDefault(uint8_t slot) {
   memset(&pd, 0, sizeof(PresetData));
   pd.valid = true;
 
-  pd.en_mask = (1 << 0) | (1 << 9); // only pre/post gain turn on
+  pd.en_mask = (1 << 0) | (1 << 10); // only pre/post gain turn on
 
   pd.vol_db = 0;
   pd.pre_vol_db = 0;
@@ -94,6 +97,14 @@ void PresetManager::saveDefault(uint8_t slot) {
   pd.drc_releaseMs = 160;
   pd.drc_pregainQ412 = 4096;
   pd.drc_mode = DRC_MODE_FULLBAND;
+
+  const float autoEqDefault[AUTO_EQ_NUM_BANDS] = {
+      3.0f, 2.0f, 1.0f, 0.0f, 0.0f, 0.0f, -1.0f, -2.0f, -3.0f
+  };
+  for (int i = 0; i < AUTO_EQ_NUM_BANDS; i++) {
+    pd.auto_eq_target_q88[i] = FLOAT_TO_DB_Q8(autoEqDefault[i]);
+    pd.auto_eq_freq_hz[i] = AutoEQ::DEFAULT_FREQ_HZ[i];
+  }
 
   pd.deq_lowThresh = -4000;
   pd.deq_normThresh = -2000;
@@ -199,6 +210,9 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline &pipeline) {
   pd.eqr_pregain_q88 = pipeline.getLeftRightEq().getEqRight().getPregain();
   for (int i = 0; i < MAX_EQ_BANDS; i++)
     pd.eqr_bands[i] = pipeline.getLeftRightEq().getEqRight()._params[i];
+
+  pipeline.getAutoEq().getTargetQ88(pd.auto_eq_target_q88, AUTO_EQ_NUM_BANDS);
+  pipeline.getAutoEq().getFreqHz(pd.auto_eq_freq_hz, AUTO_EQ_NUM_BANDS);
 
   // Write object
   String key = getSlotKey(slot);
@@ -326,6 +340,8 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline &pipeline) {
   pipeline.getLeftRightEq().getEqRight().setPregain(pd.eqr_pregain_q88);
   for (int i = 0; i < MAX_EQ_BANDS; i++)
     pipeline.getLeftRightEq().setEqRight(i, pd.eqr_bands[i]);
+
+  pipeline.getAutoEq().setBandConfig(pd.auto_eq_freq_hz, pd.auto_eq_target_q88, AUTO_EQ_NUM_BANDS);
 
   LOG_INFO(TAG, "Loaded preset from slot %d", slot);
   return true;

@@ -64,6 +64,21 @@ class Store extends EventEmitter {
         // Dynamic Bass
         this.dynamicBass = { cutoffFreq: 80, gainBoost: 600, enhanced: 0, boostthreshold: -2400, neutralthreshold: -1600, clipthreshold: -800, clipattack: 600, cliprelease: 200 };
 
+        const autoEqFreqs = [63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+        const autoEqTarget = [3, 2, 1, 0, 0, 0, -1, -2, -3];
+        this.autoEq = {
+            pregain: 0,
+            bands: autoEqFreqs.map((freq, i) => ({
+                enabled: true,
+                type: i === 0 ? 1 : (i === autoEqFreqs.length - 1 ? 2 : 0),
+                freq,
+                gain: autoEqTarget[i],
+                q: 1.414
+            })),
+            correction: Array.from({ length: 9 }, () => 0),
+            measured: Array.from({ length: 9 }, () => 0)
+        };
+
         // DRC — multi-band with crossover
         this.drc = {
             mode: 0,           // 0=Fullband, 1=2Band, 2=2Band+Full, 3=3Band, 4=3Band+Full
@@ -136,6 +151,7 @@ class Store extends EventEmitter {
             case 'dynHigh': return this.dynamicEq.eqHigh;
             case 'eqLeft': return this.leftRightEq.eqLeft;
             case 'eqRight': return this.leftRightEq.eqRight;
+            case 'autoEq': return this.autoEq;
             default: return this.eq1;
         }
     }
@@ -148,6 +164,7 @@ class Store extends EventEmitter {
             case 'dynHigh': return MODULE.DYNAMIC_EQ;
             case 'eqLeft': return MODULE.LEFTRIGHT_EQ;
             case 'eqRight': return MODULE.LEFTRIGHT_EQ;
+            case 'autoEq': return MODULE.AUTO_EQ;
             default: return MODULE.EQ_DSP_1;
         }
     }
@@ -159,6 +176,7 @@ class Store extends EventEmitter {
     }
 
     addEqBand(freq = 1000, gain = 0, q = 1.0, type = 0) {
+        if (this.activeEq === 'autoEq') return null;
         const eq = this.getActiveEqState();
         const slot = eq.bands.findIndex(b => !b.enabled);
         if (slot === -1) return null;  // All 10 slots in use
@@ -177,6 +195,7 @@ class Store extends EventEmitter {
     }
 
     removeEqBand(index) {
+        if (this.activeEq === 'autoEq') return;
         const eq = this.getActiveEqState();
         if (index < 0 || index >= eq.bands.length) return;
         eq.bands[index].enabled = false;
@@ -188,6 +207,20 @@ class Store extends EventEmitter {
 
     resetEqBands() {
         const eq = this.getActiveEqState();
+        if (this.activeEq === 'autoEq') {
+            const freqs = [63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+            const target = [3, 2, 1, 0, 0, 0, -1, -2, -3];
+            eq.bands.forEach((b, i) => {
+                b.enabled = true;
+                b.type = i === 0 ? 1 : (i === eq.bands.length - 1 ? 2 : 0);
+                b.freq = freqs[i];
+                b.gain = target[i];
+                b.q = 1.414;
+            });
+            this.emit('eq:changed');
+            this.emit('eq:structure-changed');
+            return;
+        }
         eq.bands.forEach(b => {
             b.enabled = false;
             b.type = 0; b.freq = 1000; b.gain = 0; b.q = 0.707;

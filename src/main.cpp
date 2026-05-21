@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file main.cpp
  * @brief ESP32 DSP Core - Main entry point
  *

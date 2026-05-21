@@ -147,6 +147,9 @@ export class EQGraph {
             this._drawDynEqOverlay(ctx);
             this._drawBandCurves(ctx);
             this._drawNodes(ctx);
+        } else if (store.activeEq === 'autoEq') {
+            this._drawAutoEqCurves(ctx);
+            this._drawNodes(ctx);
         } else {
             this._drawBandCurves(ctx);
             this._drawCombinedCurve(ctx);
@@ -154,6 +157,88 @@ export class EQGraph {
         }
 
         ctx.restore();
+    }
+
+    // ─── Auto EQ Curves ──────────────────────────────────────────
+    // Vẽ 3 đường:
+    //   1. Target curve (xanh lá, dày) — user đặt
+    //   2. Correction curve (tím, dashed) — firmware đang apply
+    //   3. Combined = Target + Correction (trắng mờ) — kết quả thực tế
+
+    _drawAutoEqCurves(ctx) {
+        const state = store.autoEq;
+
+        // ── 1. Target curve (combined biquad response của bands) ──────────
+        const targetCombined = computeCombinedCurve(state.bands, DSP_SAMPLE_RATE, NUM_POINTS, state.pregain || 0);
+
+        // Fill dưới target
+        ctx.beginPath();
+        const zeroY = this.dbToY(0);
+        ctx.moveTo(this.gx, zeroY);
+        for (let i = 0; i < NUM_POINTS; i++) {
+            const freq = freqAtIndex(i, NUM_POINTS);
+            ctx.lineTo(this.freqToX(freq), this.dbToY(targetCombined[i]));
+        }
+        ctx.lineTo(this.gx + this.gw, zeroY);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.08)';
+        ctx.fill();
+
+        // Stroke target
+        ctx.strokeStyle = COLORS.combined;
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        for (let i = 0; i < NUM_POINTS; i++) {
+            const freq = freqAtIndex(i, NUM_POINTS);
+            const x = this.freqToX(freq);
+            const y = this.dbToY(targetCombined[i]);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        // ── 2. Correction curve (tím, dashed) — nếu có data từ firmware ──
+        const correction = state.correction;
+        const hasCorrection = correction && correction.some(v => Math.abs(v) > 0.05);
+
+        if (hasCorrection) {
+            // Vẽ bar nhỏ tại mỗi center freq thay vì interpolate đường (chuẩn hơn)
+            state.bands.forEach((band, i) => {
+                const c = correction[i] || 0;
+                if (Math.abs(c) < 0.05) return;
+                const x = this.freqToX(band.freq);
+                const y0 = this.dbToY(0);
+                const y1 = this.dbToY(c);
+                ctx.strokeStyle = c > 0 ? 'rgba(139,92,246,0.7)' : 'rgba(239,68,68,0.7)';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([]);
+                ctx.beginPath();
+                ctx.moveTo(x, y0);
+                ctx.lineTo(x, y1);
+                ctx.stroke();
+
+                // Dot ở đầu bar
+                ctx.beginPath();
+                ctx.arc(x, y1, 3, 0, 2 * Math.PI);
+                ctx.fillStyle = c > 0 ? 'rgba(139,92,246,0.9)' : 'rgba(239,68,68,0.9)';
+                ctx.fill();
+            });
+
+            // Legend correction
+            ctx.font = '10px Inter, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.fillStyle = 'rgba(139,92,246,0.8)';
+            ctx.fillRect(this.gx + this.gw - 90, this.gy + 8, 8, 3);
+            ctx.fillText('Correction', this.gx + this.gw - 78, this.gy + 14);
+        }
+
+        // ── 3. Legend target ──────────────────────────────────────────────
+        ctx.font = '10px Inter, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = COLORS.combined;
+        ctx.fillRect(this.gx + 8, this.gy + 8, 16, 2.5);
+        ctx.fillText('Target', this.gx + 28, this.gy + 14);
     }
 
     _drawDynEqOverlay(ctx) {
@@ -494,6 +579,21 @@ export class EQGraph {
 
     _onWheel(e) {
         e.preventDefault();
+
+        // AutoEQ: fixed Q bands — scroll wheel điều chỉnh gain thay vì Q
+        if (store.activeEq === 'autoEq') {
+            const { x, y } = this._getPos(e);
+            const band = this.selectedBand >= 0 ? this.selectedBand : this._hitTestBand(x, y);
+            if (band < 0) return;
+            const eq = store.getActiveEqState();
+            let gain = eq.bands[band].gain;
+            const delta = e.deltaY > 0 ? -0.5 : 0.5;
+            gain = Math.max(DB_MIN, Math.min(DB_MAX, gain + delta));
+            gain = Math.round(gain * 10) / 10;
+            store.updateEqBand(band, { gain });
+            return;
+        }
+
         const { x, y } = this._getPos(e);
         const band = this.selectedBand >= 0 ? this.selectedBand : this._hitTestBand(x, y);
         if (band < 0) return;
@@ -514,11 +614,12 @@ export class EQGraph {
         const band = this._hitTestBand(x, y);
 
         if (band >= 0) {
-            // Double-click on band → reset to 0 dB
+            // Double-click on band → reset gain to 0 dB
             store.updateEqBand(band, { gain: 0 });
-        } else if (x >= this.gx && x <= this.gx + this.gw &&
+        } else if (store.activeEq !== 'autoEq' &&
+            x >= this.gx && x <= this.gx + this.gw &&
             y >= this.gy && y <= this.gy + this.gh) {
-            // Double-click on empty area → add new band
+            // Double-click on empty area → add new band (disabled on autoEq)
             const freq = Math.round(this.xToFreq(x));
             const gain = Math.round(this.yToDb(y) * 10) / 10;
             const idx = store.addEqBand(freq, gain, 0.707, 0);

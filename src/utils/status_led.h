@@ -57,8 +57,8 @@ public:
             }
 
             // 3. Heap Critical Warning
-            // If Heap < 15%, flash Red rapidly
-            if (heapPct < 15) {
+            // If Heap < 5%, flash Red rapidly
+            if (heapPct < 5) {
                 if ((millis() / 150) % 2) {
                     r = 255; g = 0; b = 0;
                 }

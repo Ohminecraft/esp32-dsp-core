@@ -9,7 +9,8 @@ import {
     buildFrame, buildEnableModule, buildDisableModule,
     buildSetParam, buildSetEqBand, buildSetDynEqBand,
     buildSetDynEqThresholds, buildSavePreset, buildLoadPreset,
-    buildGetAllState, buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
+    buildGetAllState, buildSetAutoEqTarget, buildGetAutoEqState,
+    buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
     dbToQ88, dbToQ31, qToQ610,
     leToInt16, leToInt32
 } from './protocol.js';
@@ -467,6 +468,30 @@ parser.onFrame((frame) => {
         const fs = readInt32(frame.data, 3);
         updateCpuUI(cpu10 / 10.0, 100 - heapPct, fs);
     }
+    else if (frame.cmd === CMD.REPORT_AUTO_EQ && frame.data.length >= 54) {
+        const readQ88Array = (offset) => Array.from({ length: 9 }, (_, i) => leToInt16(frame.data, offset + i * 2) / 256);
+        let targetOffset = 0;
+        let correctionOffset = 18;
+        let measuredOffset = 36;
+        if (frame.data.length >= 72) {
+            for (let i = 0; i < 9; i++) {
+                store.autoEq.bands[i].freq = frame.data[i * 2] | (frame.data[i * 2 + 1] << 8);
+            }
+            targetOffset = 18;
+            correctionOffset = 36;
+            measuredOffset = 54;
+        }
+        const target = readQ88Array(targetOffset);
+        target.forEach((gain, i) => {
+            store.autoEq.bands[i].gain = gain;
+            store.autoEq.bands[i].enabled = true;
+            store.autoEq.bands[i].type = i === 0 ? 1 : (i === store.autoEq.bands.length - 1 ? 2 : 0);
+        });
+        store.autoEq.correction = readQ88Array(correctionOffset);
+        store.autoEq.measured = readQ88Array(measuredOffset);
+        store.emit('eq:changed');
+        store.emit('auto-eq:changed');
+    }
     else if (frame.cmd === CMD.WIFI_GET_STATUS && frame.data.length >= 2) {
         const modeByte = frame.data[0];
         const ip = `${frame.data[1]}.${frame.data[2]}.${frame.data[3]}.${frame.data[4]}`;
@@ -511,6 +536,7 @@ const ACCORDION_MODULES = [
     { id: 'DYNEQ_THRESH', name: 'Dynamic EQ — Thresholds', icon: '⚡', parentId: MODULE.DYNAMIC_EQ },
     { id: 'DYNEQ_LOW', name: 'Dynamic EQ — Low', icon: '🔉', parentId: MODULE.DYNAMIC_EQ },
     { id: 'DYNEQ_HIGH', name: 'Dynamic EQ — High', icon: '🔊', parentId: MODULE.DYNAMIC_EQ },
+    { id: MODULE.AUTO_EQ, name: 'Auto EQ - Experimental', icon: '📢' },
     { id: MODULE.EQ_DSP_1, name: 'Parmetric EQ 1', icon: '📈' },
     { id: MODULE.EQ_DSP_2, name: 'Parmetric EQ 2', icon: '📉' },
     { id: 'EQ_LEFT', name: 'EQ Left', icon: '👈', parentId: MODULE.LEFTRIGHT_EQ },
@@ -569,7 +595,7 @@ function buildAccordionModules() {
         header.appendChild(title);
         header.appendChild(chevron);
 
-        const EQ_MODULE_IDS = [String(MODULE.EQ_DSP_1), String(MODULE.EQ_DSP_2), 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT'];
+        const EQ_MODULE_IDS = [String(MODULE.AUTO_EQ), String(MODULE.EQ_DSP_1), String(MODULE.EQ_DSP_2), 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT'];
         const isEqModule = EQ_MODULE_IDS.includes(String(mod.id));
 
         header.addEventListener('click', (e) => {
@@ -594,7 +620,8 @@ function buildAccordionModules() {
                     acc.classList.add('open');
 
                     // Set active EQ
-                    if (mod.id === MODULE.EQ_DSP_1) store.setActiveEq('eq1');
+                    if (mod.id === MODULE.AUTO_EQ) store.setActiveEq('autoEq');
+                    else if (mod.id === MODULE.EQ_DSP_1) store.setActiveEq('eq1');
                     else if (mod.id === MODULE.EQ_DSP_2) store.setActiveEq('eq2');
                     else if (mod.id === 'DYNEQ_LOW') store.setActiveEq('dynLow');
                     else if (mod.id === 'DYNEQ_HIGH') store.setActiveEq('dynHigh');
@@ -694,6 +721,10 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Clip Release', 0, 2000, 1, 'ms',
                 () => store.dynamicBass.cliprelease,
                 (v) => { store.dynamicBass.cliprelease = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 7, v)); });
+            break;
+
+        case MODULE.AUTO_EQ:
+            buildAutoEqPanel(body);
             break;
 
         case MODULE.EQ_DSP_1:
@@ -1100,6 +1131,12 @@ function buildDrcPanel(container) {
     updateBandTabs();
 }
 
+const BAND_COLORS_JS = [
+    '#ff6b6b', '#ffa06b', '#ffd93d', '#6bcb77',
+    '#4ecdc4', '#45b7d1', '#96c4ff', '#a78bfa',
+    '#f472b6', '#fb923c'
+];
+
 // ─── EQ Band Panel ───────────────────────────────────────────────────
 
 function buildEqBandPanel(container, moduleId, eqKey) {
@@ -1170,6 +1207,205 @@ function buildEqBandPanel(container, moduleId, eqKey) {
     container.appendChild(actions);
 }
 
+// ─── Auto EQ Panel ─────────────────────────────────────────────────
+
+function buildAutoEqPanel(container) {
+    const state = store.autoEq;
+
+    // syncTarget: gửi lên firmware + đánh dấu thời điểm gửi để block poll
+    const syncTarget = () => {
+        sendDebounced('auto_eq_target', () => {
+            store.emit('auto-eq:sent');
+            return buildSetAutoEqTarget(state.bands);
+        }, 80);
+    };
+
+    state.bands.forEach((band, i) => {
+        const row = document.createElement('div');
+        row.className = 'eq-band-row auto-eq-band-row';
+        row.dataset.bandIndex = i;
+
+        // ── Band number badge ──
+        const num = document.createElement('span');
+        num.className = 'band-num';
+        num.textContent = i + 1;
+        num.style.backgroundColor = BAND_COLORS_JS[i % BAND_COLORS_JS.length];
+        row.appendChild(num);
+
+        // ── Filter type label (read-only) ──
+        const typeLabel = document.createElement('span');
+        typeLabel.className = 'band-type-ro';
+        typeLabel.textContent = i === 0 ? 'LS' : (i === state.bands.length - 1 ? 'HS' : 'PK');
+        typeLabel.title = i === 0 ? 'Low Shelf' : (i === state.bands.length - 1 ? 'High Shelf' : 'Peaking');
+        row.appendChild(typeLabel);
+
+        // ── Freq input ──
+        const freqInput = document.createElement('input');
+        freqInput.type = 'number';
+        freqInput.min = 20; freqInput.max = 20000; freqInput.step = 1;
+        freqInput.value = band.freq;
+        freqInput.className = 'band-input band-freq';
+        freqInput.dataset.band = i; freqInput.dataset.field = 'freq';
+
+        const freqUnit = document.createElement('span');
+        freqUnit.className = 'band-unit'; freqUnit.textContent = 'Hz';
+
+        const freqWrap = document.createElement('div');
+        freqWrap.className = 'band-input-wrap';
+        freqWrap.appendChild(freqInput); freqWrap.appendChild(freqUnit);
+        row.appendChild(freqWrap);
+
+        // ── Gain input ──
+        const gainInput = document.createElement('input');
+        gainInput.type = 'number';
+        gainInput.min = -12; gainInput.max = 12; gainInput.step = 0.5;
+        gainInput.value = band.gain.toFixed(1);
+        gainInput.className = 'band-input band-gain';
+        gainInput.dataset.band = i; gainInput.dataset.field = 'gain';
+
+        const gainUnit = document.createElement('span');
+        gainUnit.className = 'band-unit'; gainUnit.textContent = 'dB';
+
+        const gainWrap = document.createElement('div');
+        gainWrap.className = 'band-input-wrap';
+        gainWrap.appendChild(gainInput); gainWrap.appendChild(gainUnit);
+        row.appendChild(gainWrap);
+
+        // ── Q display (read-only) ──
+        const qInput = document.createElement('input');
+        qInput.type = 'number';
+        qInput.value = band.q.toFixed(3);
+        qInput.className = 'band-input band-q';
+        qInput.readOnly = true;
+        qInput.tabIndex = -1;
+        qInput.title = 'Q is fixed for Auto EQ';
+        qInput.style.cssText = 'opacity:0.35;cursor:not-allowed;pointer-events:none';
+
+        const qUnit = document.createElement('span');
+        qUnit.className = 'band-unit'; qUnit.textContent = 'Q';
+        qUnit.style.opacity = '0.35';
+
+        const qWrap = document.createElement('div');
+        qWrap.className = 'band-input-wrap';
+        qWrap.appendChild(qInput); qWrap.appendChild(qUnit);
+        row.appendChild(qWrap);
+
+        // ── Correction display ──
+        const corrCell = document.createElement('div');
+        corrCell.className = 'auto-eq-corr-cell';
+
+        const corrBar = document.createElement('div');
+        corrBar.className = 'auto-eq-meter';
+        corrBar.dataset.band = i;
+        corrBar.innerHTML = '<span class="auto-eq-fill"></span>';
+
+        const corrLabel = document.createElement('span');
+        corrLabel.className = 'auto-eq-correction';
+        corrLabel.dataset.band = i;
+        const c0 = state.correction[i] || 0;
+        corrLabel.textContent = `${c0 >= 0 ? '+' : ''}${c0.toFixed(1)} dB`;
+
+        corrCell.appendChild(corrBar);
+        corrCell.appendChild(corrLabel);
+        row.appendChild(corrCell);
+
+        // ── Event handlers ──
+        freqInput.addEventListener('change', () => {
+            const v = Math.max(20, Math.min(20000, Math.round(parseFloat(freqInput.value))));
+            if (isNaN(v)) { freqInput.value = band.freq; return; }
+            band.freq = v;
+            freqInput.value = v;
+            store.emit('eq:changed');
+            syncTarget();
+        });
+
+        gainInput.addEventListener('input', () => {
+            const v = Math.max(-12, Math.min(12, parseFloat(gainInput.value)));
+            if (isNaN(v)) return;
+            band.gain = Math.round(v * 10) / 10;
+            store.emit('eq:changed');
+            // Gửi realtime khi kéo
+            syncTarget();
+        });
+
+        gainInput.addEventListener('change', () => {
+            const v = Math.max(-12, Math.min(12, parseFloat(gainInput.value)));
+            if (isNaN(v)) { gainInput.value = band.gain.toFixed(1); return; }
+            band.gain = Math.round(v * 10) / 10;
+            gainInput.value = band.gain.toFixed(1);
+            store.emit('eq:changed');
+            syncTarget();
+        });
+
+        container.appendChild(row);
+    });
+
+    // ── Actions ──
+    const actions = document.createElement('div');
+    actions.className = 'eq-actions';
+
+    const refreshBtn = document.createElement('button');
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.className = 'btn btn-outline btn-sm';
+    refreshBtn.addEventListener('click', () => sendFrame(buildGetAutoEqState()));
+
+    const resetBtn = document.createElement('button');
+    resetBtn.textContent = 'Reset Target';
+    resetBtn.className = 'btn btn-sm';
+    resetBtn.style.color = 'var(--accent-red, #ef4444)';
+    resetBtn.addEventListener('click', () => {
+        store.activeEq = 'autoEq';
+        store.resetEqBands();
+        store.emit('auto-eq:sent'); // block poll sau reset
+        sendDebounced('auto_eq_target', () => buildSetAutoEqTarget(store.autoEq.bands), 80);
+        rebuildAccordionBody(MODULE.AUTO_EQ);
+    });
+
+    actions.appendChild(refreshBtn);
+    actions.appendChild(resetBtn);
+    container.appendChild(actions);
+}
+
+function renderAutoEqMeters() {
+    const state = store.autoEq;
+
+    // Chỉ update input nếu không đang focus (tránh overwrite khi user đang gõ)
+    document.querySelectorAll('.auto-eq-band-row .band-freq').forEach(el => {
+        if (document.activeElement === el) return;
+        const i = Number(el.dataset.band);
+        el.value = state.bands[i]?.freq ?? 1000;
+    });
+
+    document.querySelectorAll('.auto-eq-band-row .band-gain').forEach(el => {
+        if (document.activeElement === el) return;
+        const i = Number(el.dataset.band);
+        el.value = (state.bands[i]?.gain ?? 0).toFixed(1);
+    });
+
+    // Correction bar
+    document.querySelectorAll('.auto-eq-meter').forEach(meter => {
+        const i = Number(meter.dataset.band);
+        const fill = meter.querySelector('.auto-eq-fill');
+        if (!fill) return;
+        const c = state.correction[i] || 0;
+        const pct = Math.min(50, Math.abs(c) / 12 * 50);
+        fill.style.width = `${pct}%`;
+        fill.style.left = c < 0 ? `${50 - pct}%` : '50%';
+        fill.classList.toggle('cut', c < 0);
+    });
+
+    // Correction label
+    document.querySelectorAll('.auto-eq-correction').forEach(el => {
+        const i = Number(el.dataset.band);
+        const c = state.correction[i] || 0;
+        const m = state.measured[i] || 0;
+        el.textContent = `${c >= 0 ? '+' : ''}${c.toFixed(1)} dB`;
+        el.title = `Correction: ${c.toFixed(2)} dB  |  Measured: ${m.toFixed(2)} dB`;
+        el.style.color = c > 0.5 ? 'var(--accent-purple, #8b5cf6)'
+            : c < -0.5 ? 'var(--accent-red, #ef4444)'
+            : 'var(--text-muted, #6b7280)';
+    });
+}
 // ─── Dynamic EQ Band Panel ───────────────────────────────────────────
 
 function buildDynEqBandPanel(container, isHigh) {
@@ -1302,9 +1538,20 @@ function rebuildAccordionBody(moduleId) {
     const acc = document.querySelector(`.accordion[data-module-id="${moduleId}"]`);
     if (!acc) return;
     const body = acc.querySelector('.accordion-body');
+
+    // Nếu accordion này đang mount graph, unmount trước để tránh memory leak
+    const hadGraph = !!body.querySelector('.eq-graph-container');
+    if (hadGraph) unmountGraph();
+
     body.innerHTML = '';
+
     const mod = ACCORDION_MODULES.find(m => m.id === moduleId);
     if (mod) buildModuleBody(body, mod);
+
+    // Remount graph nếu accordion đang mở và trước đó có graph
+    if (hadGraph && acc.classList.contains('open')) {
+        mountGraphToAccordion(acc);
+    }
 }
 
 // ─── EQ Hardware Sync ────────────────────────────────────────────────
@@ -1347,6 +1594,10 @@ function syncEqToHardware(moduleId) {
         store.leftRightEq.eqRight.bands.forEach((_, i) => syncEqBand(moduleId, i));
         store.activeEq = prev;
     }
+}
+
+function syncAutoEqToHardware() {
+    sendDebounced('auto_eq_bands', () => buildSetAutoEqTarget(store.autoEq.bands), 16);
 }
 
 function syncDynEqBand(isHigh, index) {
@@ -1511,7 +1762,8 @@ function mountGraphToAccordion(acc) {
     // Pregain slider below graph
     const moduleId = acc.dataset.moduleId;
     let eqState;
-    if (moduleId === String(MODULE.EQ_DSP_1)) eqState = store.eq1;
+    if (moduleId === String(MODULE.AUTO_EQ)) eqState = null;
+    else if (moduleId === String(MODULE.EQ_DSP_1)) eqState = store.eq1;
     else if (moduleId === String(MODULE.EQ_DSP_2)) eqState = store.eq2;
     else if (moduleId === 'DYNEQ_LOW') eqState = store.dynamicEq.eqLow;
     else if (moduleId === 'DYNEQ_HIGH') eqState = store.dynamicEq.eqHigh;
@@ -1756,10 +2008,6 @@ function renderWifiList() {
 }
 
 function buildBottomBar() {
-
-
-
-
     for (let i = 0; i < 8; i++) {
         const btn = document.getElementById(`preset-${i}`);
         if (!btn) continue;
@@ -2086,6 +2334,9 @@ document.addEventListener('DOMContentLoaded', () => {
             syncDynEqBand(false, index);
         } else if (store.activeEq === 'dynHigh') {
             syncDynEqBand(true, index);
+        } else if (store.activeEq === 'autoEq') {
+            syncAutoEqToHardware();
+            renderAutoEqMeters();
         } else {
             const mid = store.getActiveEqModuleId();
             syncEqBand(mid, index);
@@ -2096,7 +2347,8 @@ document.addEventListener('DOMContentLoaded', () => {
             store.activeEq === 'eq2' ? MODULE.EQ_DSP_2 :
                 store.activeEq === 'dynLow' ? 'DYNEQ_LOW' :
                     store.activeEq === 'dynHigh' ? 'DYNEQ_HIGH' :
-                        store.activeEq === 'eqLeft' ? 'EQ_LEFT' : 'EQ_RIGHT';
+                        store.activeEq === 'autoEq' ? MODULE.AUTO_EQ :
+                            store.activeEq === 'eqLeft' ? 'EQ_LEFT' : 'EQ_RIGHT';
         const activeAcc = document.querySelector(`.accordion[data-module-id="${accId}"].open`);
         if (!activeAcc) return;
 
@@ -2121,7 +2373,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const rebuildStructural = () => {
         unmountGraph();
 
-        const rebuildIds = [MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
+        const rebuildIds = [MODULE.AUTO_EQ, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
         let activeAcc = null;
 
         rebuildIds.forEach(id => {
@@ -2142,6 +2394,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     store.on('state:loaded', rebuildStructural);
     store.on('eq:structure-changed', rebuildStructural);
+    store.on('auto-eq:changed', renderAutoEqMeters);
+
+    setInterval(() => {
+        if (!store.system.connected) return;
+        const acc = document.querySelector(`.accordion[data-module-id="${MODULE.AUTO_EQ}"].open`);
+        if (acc) sendFrame(buildGetAutoEqState());
+    }, 1000);
 
     if (isBrowser) {
         // Running in mobile browser, connect directly via WebSocket

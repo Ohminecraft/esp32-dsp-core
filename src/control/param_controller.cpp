@@ -52,6 +52,14 @@ void ParamController::handleCommand(const UartCommand &cmd) {
     handleSetDynEqThresholds(cmd);
     break;
 
+  case CMD_SET_AUTO_EQ_TARGET:
+    handleSetAutoEqTarget(cmd);
+    break;
+
+  case CMD_GET_AUTO_EQ_STATE:
+    sendAutoEqState();
+    break;
+
   case CMD_SAVE_PRESET:
     if (cmd.dataLen > 0)
       _presetMgr->savePreset(cmd.data[0], *_pipeline);
@@ -272,6 +280,63 @@ void ParamController::handleSetParam(const UartCommand &cmd) {
   _uart->sendAck(cmd.moduleId, 0);
 }
 
+void ParamController::handleSetAutoEqTarget(const UartCommand &cmd) {
+  if (cmd.dataLen < AUTO_EQ_NUM_BANDS * 2) {
+    _uart->sendError(0x03);
+    return;
+  }
+
+  if (cmd.dataLen >= AUTO_EQ_NUM_BANDS * 4) {
+    uint16_t freq[AUTO_EQ_NUM_BANDS];
+    int16_t target[AUTO_EQ_NUM_BANDS];
+    for (int i = 0; i < AUTO_EQ_NUM_BANDS; i++) {
+      freq[i] = (uint16_t)extractInt16(&cmd.data[i * 4]);
+      target[i] = extractInt16(&cmd.data[i * 4 + 2]);
+    }
+    _pipeline->getAutoEq().setBandConfig(freq, target, AUTO_EQ_NUM_BANDS);
+    _uart->sendAck(MODULE_ID_AUTO_EQ, 0);
+    sendAutoEqState();
+    return;
+  }
+
+  int16_t target[AUTO_EQ_NUM_BANDS];
+  for (int i = 0; i < AUTO_EQ_NUM_BANDS; i++) {
+    target[i] = extractInt16(&cmd.data[i * 2]);
+  }
+
+  _pipeline->getAutoEq().setTargetQ88(target, AUTO_EQ_NUM_BANDS);
+  _uart->sendAck(MODULE_ID_AUTO_EQ, 0);
+  sendAutoEqState();
+}
+
+void ParamController::sendAutoEqState() {
+  uint8_t pkt[AUTO_EQ_NUM_BANDS * 2 * 4];
+  int16_t values[AUTO_EQ_NUM_BANDS];
+  uint16_t freq[AUTO_EQ_NUM_BANDS];
+
+  auto writeQ88 = [&](int base, const int16_t* src) {
+    for (int i = 0; i < AUTO_EQ_NUM_BANDS; i++) {
+      pkt[base + i * 2] = src[i] & 0xFF;
+      pkt[base + i * 2 + 1] = (src[i] >> 8) & 0xFF;
+    }
+  };
+
+  _pipeline->getAutoEq().getFreqHz(freq, AUTO_EQ_NUM_BANDS);
+  for (int i = 0; i < AUTO_EQ_NUM_BANDS; i++) {
+    pkt[i * 2] = freq[i] & 0xFF;
+    pkt[i * 2 + 1] = (freq[i] >> 8) & 0xFF;
+  }
+
+  _pipeline->getAutoEq().getTargetQ88(values, AUTO_EQ_NUM_BANDS);
+  writeQ88(AUTO_EQ_NUM_BANDS * 2, values);
+  _pipeline->getAutoEq().getCorrectionQ88(values, AUTO_EQ_NUM_BANDS);
+  writeQ88(AUTO_EQ_NUM_BANDS * 4, values);
+  _pipeline->getAutoEq().getMeasuredQ88(values, AUTO_EQ_NUM_BANDS);
+  writeQ88(AUTO_EQ_NUM_BANDS * 6, values);
+
+  _uart->sendFrame(CMD_REPORT_AUTO_EQ, MODULE_ID_AUTO_EQ, pkt, sizeof(pkt));
+}
+
 void ParamController::handleSetEqBand(const UartCommand &cmd) {
   // Data: pregain(2B) + band(1B) + type(1B) + freq(2B) + gain(2B) + Q(2B) = 10 bytes
   if (cmd.dataLen < 10) {
@@ -479,6 +544,8 @@ void ParamController::handleGetAllState(const UartCommand &cmd) {
 
   sendEq(CMD_SET_DYNEQ_LOW_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqLow);
   sendEq(CMD_SET_DYNEQ_HIGH_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqHigh);
+
+  sendAutoEqState();
 
   // Tell host we're done
   _uart->sendAck(MODULE_ID_SYSTEM, 0);

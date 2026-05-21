@@ -13,11 +13,12 @@ void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
     _chain[2]  = &_exciter;
     _chain[3]  = &_dynamicBass;
     _chain[4]  = &_dynamicEq;
-    _chain[5]  = &_eqDsp_1;
-    _chain[6]  = &_eqDsp_2;
-    _chain[7]  = &_leftRightEq;
-    _chain[8]  = &_drc;
-    _chain[9]  = &_postGain;
+    _chain[5]  = &_autoEq;
+    _chain[6]  = &_eqDsp_1;
+    _chain[7]  = &_eqDsp_2;
+    _chain[8]  = &_leftRightEq;
+    _chain[9]  = &_drc;
+    _chain[10] = &_postGain;
 
     // Set module IDs for EQ and Volume instances
     _preGain.setModuleId(MODULE_ID_PRE_GAIN);

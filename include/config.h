@@ -50,7 +50,7 @@
 // DSP Pipeline — Module Count
 // ============================================================================
 
-#define DSP_MODULE_COUNT        10      // Total modules in pipeline
+#define DSP_MODULE_COUNT        11      // Total modules in pipeline
 
 // Module IDs (UART protocol)
 #define MODULE_ID_PRE_GAIN      0x01
@@ -63,6 +63,7 @@
 #define MODULE_ID_DRC           0x08
 #define MODULE_ID_POST_GAIN     0x09
 #define MODULE_ID_LEFTRIGHT_EQ  0x0A
+#define MODULE_ID_AUTO_EQ       0x0B
 #define MODULE_ID_SYSTEM        0xF0
 
 // ============================================================================
@@ -107,7 +108,7 @@
 // Misc Configs
 // ============================================================================
 
-//#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
+#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
 #define AUTO_SHUTDONW_TIMER_MS 1800000 // 30min
 #define SHUTDOWN_COUNTDOWN_MS 5000 // 5s
 

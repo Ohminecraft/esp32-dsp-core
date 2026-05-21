@@ -66,6 +66,89 @@ body {
     -webkit-app-region: no-drag;
 }
 
+.auto-eq-grid {
+    display: grid;
+    gap: 8px;
+}
+
+.auto-eq-row {
+    display: grid;
+    grid-template-columns: 44px 72px minmax(120px, 1fr) 64px minmax(90px, 160px) 100px;
+    align-items: center;
+    gap: 10px;
+}
+
+.auto-eq-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
+.auto-eq-target {
+    width: 100%;
+    min-width: 0;
+}
+
+.auto-eq-value {
+    width: 64px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 3px 5px;
+    text-align: right;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.auto-eq-meter {
+    position: relative;
+    height: 8px;
+    background: #e5e7eb;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.auto-eq-zero {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: 1px;
+    height: 100%;
+    background: rgba(17, 24, 39, 0.35);
+}
+
+.auto-eq-fill {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    height: 100%;
+    width: 0;
+    background: var(--accent-green);
+}
+
+.auto-eq-fill.cut {
+    background: var(--accent-red);
+}
+
+.auto-eq-correction {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-align: right;
+    white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+    .auto-eq-row {
+        grid-template-columns: 38px 62px minmax(90px, 1fr) 58px;
+    }
+
+    .auto-eq-meter,
+    .auto-eq-correction {
+        grid-column: 2 / 5;
+    }
+}
+
 /* ─── Layout ────────────────────────────────────────────────── */
 
 #app {
@@ -1061,4 +1144,4 @@ body {
     gap: 4px;
     padding: 4px 0;
     flex: 1;
-}
+}

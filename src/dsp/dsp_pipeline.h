@@ -15,6 +15,7 @@
 //#include "stereo_widener.h"
 #include "eq.h"
 #include "dynamic_eq.h"
+#include "auto_eq.h"
 #include "drc.h"
 #include "volume.h"
 #include "leftrighteq.h"
@@ -55,6 +56,7 @@ public:
     ParametricEQ&    getEqDsp_1()        { return _eqDsp_1; }
     ParametricEQ&    getEqDsp_2()        { return _eqDsp_2; }
     LeftRightEQ&     getLeftRightEq()    { return _leftRightEq; }
+    AutoEQ&          getAutoEq()         { return _autoEq; }
     DRC&             getDrc()            { return _drc; }
     VolumeControl&   getPostGain()       { return _postGain; }
     VolumeControl&   getPreGain()        { return _preGain; }
@@ -79,11 +81,12 @@ private:
     Exciter        _exciter;       // [02] Harmonic Exciter
     DynamicBass    _dynamicBass;   // [03] Dynamic Bass
     DynamicEQ      _dynamicEq;     // [04] Dynamic EQ (dual-EQ system)
-    ParametricEQ   _eqDsp_1;       // [05] EQ1 (main parametric EQ)
-    ParametricEQ   _eqDsp_2;       // [06] EQ2 (post EQ / sound signature)
-    LeftRightEQ    _leftRightEq;   // [07] Left Right EQ
-    DRC            _drc;           // [08] DRC (dynamic range compression)
-    VolumeControl  _postGain;      // [09] Post Gain
+    AutoEQ         _autoEq;        // [05] Auto EQ analyzer + correction
+    ParametricEQ   _eqDsp_1;       // [06] EQ1 (main parametric EQ)
+    ParametricEQ   _eqDsp_2;       // [07] EQ2 (post EQ / sound signature)
+    LeftRightEQ    _leftRightEq;   // [08] Left Right EQ
+    DRC            _drc;           // [09] DRC (dynamic range compression)
+    VolumeControl  _postGain;      // [10] Post Gain
 
     DspModule* _chain[CHAIN_LENGTH];
 };
