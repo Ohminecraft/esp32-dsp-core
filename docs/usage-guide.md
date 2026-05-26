@@ -79,7 +79,7 @@ Click "EQ Designer..." button for EQ1 or EQ2:
 1. Adjust all modules and parameters
 2. Click "Save" button
 3. Preset saved to ESP32 NVS
-4. Next power-on: Slot 0 loads automatically
+4. Next power-on: It will automatically load the preset that you used previously.
 ```
 
 **Preset Slots**: 8 available (0-7)
@@ -87,7 +87,7 @@ Click "EQ Designer..." button for EQ1 or EQ2:
 #### 6. **Load Presets**
 
 ```
-1. Click 1->8 preset slot button
+1. Click 1->4 preset slot button
 2. All module states restored
 3. GUI sliders update automatically
 ```
@@ -131,7 +131,6 @@ For clean audio:
 - Slot 1: Bass boost (for bass music)
 - Slot 2: Bright (for vocals)
 - Slot 3: Treble cut (for harsh sources)
-- Slot 4-7: Custom per use-case
 
 #### E. WiFi Off Mode
 
@@ -215,13 +214,13 @@ Sử dụng thanh trượt/điều khiển:
 1. Điều chỉnh tất cả module
 2. Nhấp "Save"
 3. Preset lưu vào NVS của ESP32
-4. Lần khởi động tiếp: Slot 0 tải tự động
+4. Lần khởi động tiếp: sẽ tự động load preset được sử dụng trước khi tắt
 ```
 
 #### 6. **Tải Preset**
 
 ```
-1. Nhấp preset slot từ 1->9
+1. Nhấp preset slot từ 1->4
 2. Nó sẽ tự động khôi phục tất cả trạng thái module
 3. Thanh trượt GUI cập nhật tự động
 ```

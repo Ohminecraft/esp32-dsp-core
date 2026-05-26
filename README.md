@@ -4,7 +4,7 @@
 
 A high-performance real-time audio digital signal processing (DSP) framework for ESP32/ESP32-S3. This project provides a modular signal chain, professional-grade audio algorithms, and a dual-transport control interface (USB Serial & WiFi WebSocket).
 
-**Status**: ✅ Stable & High-Performance | **Sample Rate**: 96 kHz (Auto-Sync) | **Latency**: 2.67ms | **Transport**: UART + WebSocket
+**Status**: ✅ Stable & High-Performance | **Max Sample Rate Support**: 96 kHz | **Latency**: 2.67ms | **Transport**: UART + WebSocket
 
 ---
 
@@ -57,11 +57,6 @@ Unlike traditional protocols, ESP32 DSP Core uses **Frame Batching**. Instead of
 - **Serial Sync**: ~100ms
 - **WiFi Sync**: <500ms (even on crowded networks)
 
-### 🔄 Dev Workflow Automation
-Built-in PlatformIO automation script (`sync_web_ui.py`):
-- **Auto-Sync**: Automatically copies Web UI (JS/CSS/HTML) to SPIFFS before upload.
-- **Smart Upload**: Only triggers `uploadfs` if changes are detected in the web source files.
-
 ### 📱 Mobile-Ready Web UI
 Serve the control interface directly from the ESP32 SPIFFS.
 - **Auto-Reconnect**: Handles mobile sleep/wake cycles gracefully.
@@ -76,8 +71,8 @@ Serve the control interface directly from the ESP32 SPIFFS.
 | **Sample Rate** | 96 kHz (Standard) / Auto-Scaling |
 | **Channels** | 2 (Stereo) |
 | **Bit Depth** | 32-bit Float Processing |
-| **Latency** | 2.67ms (256 samples @ 96kHz) |
-| **Hardware** | ESP32-S3 (N16R8 recommended) / PCM1808 ADC / PCM5102A DAC |
+| **Latency** | 2.67ms (512 samples (for ESP32-S3), 256 samples (for ESP32)) @ 96kHz) |
+| **Hardware** | ESP32-S3 (N16R8 recommended) / PCM1808 ADC or Bluetooth like QCC5125 / PCM5102A DAC |
 
 ---
 
@@ -102,4 +97,4 @@ ESP32 DSP Core là một framework xử lý âm thanh kỹ thuật số (DSP) hi
 ---
 
 **Last Updated**: May 5, 2026  
-**Status**: Production Ready ✅
+**Status**: In-Experimental ✅

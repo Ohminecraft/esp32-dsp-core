@@ -32,7 +32,7 @@ The ESP32 DSP Core is designed as a **deterministic real-time system**. It lever
 │           ↓                 │             ↓                 │
 │  ┌─────────────────┐        │  ┌──────────────────────────┐ │
 │  │ NVS Preset Mgr  │◄───────┼─►│ I2S Port 0 (Output)      │ │
-│  │ (8 Slots)       │        │  │ PCM5102A Master          │ │
+│  │ (4 Slots)       │        │  │ PCM5102A Master          │ │
 │  └─────────────────┘        │  └──────────────────────────┘ │
 └──────────────┬──────────────┴───────────────────────────────┘
                │
@@ -81,4 +81,4 @@ Dự án hỗ trợ chuyển đổi mượt mà giữa 2 phương thức:
 - **Bộ nhớ tĩnh**: 100% bộ đệm âm thanh được cấp phát tĩnh ngay khi khởi động.
 
 ---
-**Last Updated**: May 5, 2026
+**Last Updated**: May 26, 2026
