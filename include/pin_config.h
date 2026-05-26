@@ -120,10 +120,15 @@
 // ============================================================================
 
 #ifdef SOFT_LATCH_SHUTDOWN
-#define POWER_PIN_OUT 39
+#define POWER_PIN_OUT 2
 #define POWER_PIN_OFF 40
 #endif
 
 #define MUTE_PIN 1
+
+// ============================================================================
+// Trigger GPIO Settings (Single / Triple Click)
+// ============================================================================
+#define TRIGGER_GPIO_PIN            41      // Target GPIO to trigger
 
 #endif // PIN_CONFIG_H

@@ -22,11 +22,19 @@ export const CMD = {
     SAVE_PRESET: 0x08,
     LOAD_PRESET: 0x09,
     GET_ALL_STATE: 0x0A,
+    SET_ISF_PRESET: 0x0B,   // Set one ISF preset slot
+    SET_ISF_BAND_PARAMS: 0x0C,
+    GET_ISF_STATE: 0x0D,    // Request ISF state report
+    SET_ISF_CONFIG: 0x0E,   // Set RMS/slew config
     WIFI_SCAN: 0x10,
     WIFI_SET_STA: 0x11,
     WIFI_SET_AP: 0x12,
     WIFI_GET_STATUS: 0x13,
     REPORT_CPU_USAGE: 0x40,
+    REPORT_ISF: 0x41,       // Push ISF state
+    REPORT_ISF_PRESET: 0x42, // Push ISF preset data
+    REPORT_ISF_BAND_PER_PRESET: 0x43,
+    REPORT_ENABLE_MASK: 0x44,
     ACK_RESPONSE: 0xFE,
     ERROR: 0xFF
 };
@@ -42,6 +50,8 @@ export const MODULE = {
     DRC: 0x08,
     POST_GAIN: 0x09,
     LEFTRIGHT_EQ: 0x0A,
+    ISF_1: 0x0B,   // Index Selectable Filter instance 1 (replaces AUTO_EQ)
+    ISF_2: 0x0C,   // Index Selectable Filter instance 2
     SYSTEM: 0xF0
 };
 
@@ -51,17 +61,21 @@ export const MODULE_NAMES = {
     [MODULE.EXCITER]: 'Exciter',
     [MODULE.DYNAMIC_BASS]: 'Dynamic Bass',
     [MODULE.DYNAMIC_EQ]: 'Dynamic EQ',
-    [MODULE.EQ_DSP_1]: 'Parmetric EQ 1',
-    [MODULE.EQ_DSP_2]: 'Parmetric EQ 2',
+    [MODULE.EQ_DSP_1]: 'Parametric EQ 1',
+    [MODULE.EQ_DSP_2]: 'Parametric EQ 2',
     [MODULE.LEFTRIGHT_EQ]: 'Left Right EQ',
+    [MODULE.ISF_1]: 'Index Selectable Filter 1',
+    [MODULE.ISF_2]: 'Index Selectable Filter 2',
     [MODULE.DRC]: 'Dynamic Range Compression',
     [MODULE.POST_GAIN]: 'Post Gain',
 };
 
 export const MODULE_ORDER = [
     MODULE.PRE_GAIN, MODULE.COMPANDER, MODULE.EXCITER,
-    MODULE.DYNAMIC_BASS, MODULE.DYNAMIC_EQ, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2,
-    MODULE.DRC, MODULE.POST_GAIN, MODULE.LEFTRIGHT_EQ
+    MODULE.DYNAMIC_BASS, MODULE.DYNAMIC_EQ,
+    MODULE.ISF_1, MODULE.ISF_2,
+    MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, MODULE.LEFTRIGHT_EQ,
+    MODULE.DRC, MODULE.POST_GAIN
 ];
 
 export const EQ_FILTER_TYPES = [
@@ -154,6 +168,76 @@ export function buildSetOutputSource(src) { return buildFrame(CMD.SET_OUTPUT_SOU
 export function buildGetAllState() {
     return buildFrame(CMD.GET_ALL_STATE, MODULE.SYSTEM);
 }
+
+// ─── ISF Builders ──────────────────────────────────────────────────────
+
+/**
+ * Set one ISF preset slot.
+ * @param {number} moduleId  MODULE.ISF_1 or MODULE.ISF_2
+ * @param {number} presetIdx 0..9
+ * @param {object} preset    { thresholdDb, pregainDb }
+ */
+export function buildSetIsfPreset(moduleId, presetIdx, preset) {
+    // preset_idx(1) + threshold(2) + pregain(2)
+    const data = [
+        presetIdx & 0xFF,
+        ...int16ToLE(dbToQ88(preset.thresholdDb || 0)),
+        ...int16ToLE(dbToQ88(preset.pregainDb   || 0)),
+    ];
+    return buildFrame(CMD.SET_ISF_PRESET, moduleId, data);
+}
+
+export function buildSetIsfBandParams(moduleId, presetIdx, bandIdx, presetObj) {
+    if (!presetObj || !presetObj.bands || !presetObj.bands[bandIdx]) {
+        return null; 
+    }
+
+    const currentband = presetObj.bands[bandIdx]; 
+    
+    const data = [
+        presetIdx,
+        bandIdx,
+        currentband.enabled ? 1 : 0,
+        (currentband.type || 0) & 0xFF,
+        (currentband.freq || 1000) & 0xFF,
+        ((currentband.freq || 1000) >> 8) & 0xFF,
+        ...int16ToLE(dbToQ88(currentband.gain || 0)),
+        ...int16ToLE(qToQ610(currentband.q || 0.707))
+    ];
+    
+    return buildFrame(CMD.SET_ISF_BAND_PARAMS, moduleId, data);
+}
+
+/**
+ * Set ISF config (RMS window, slew time, num presets, level override).
+ * @param {number} moduleId   MODULE.ISF_1 or MODULE.ISF_2
+ * @param {number} numPresets 1..10
+ * @param {number} rmsMs      RMS window ms
+ * @param {number} slewMs     Slew time per index step ms
+ * @param {number|null} overrideDb  null = auto (use RMS), number = override level
+ */
+export function buildSetIsfConfig(moduleId, numPresets, rmsMs, slewMs, overrideDb = null) {
+    const overrideQ88 = (overrideDb === null) ? 0x8000 : dbToQ88(overrideDb);
+    const data = [
+        numPresets & 0xFF,
+        ...int16ToLE(rmsMs),
+        ...int16ToLE(slewMs),
+        ...int16ToLE(overrideQ88)
+    ];
+    return buildFrame(CMD.SET_ISF_CONFIG, moduleId, data);
+}
+
+/** Request ISF state for both instances. */
+export function buildGetIsfState() {
+    return buildFrame(CMD.GET_ISF_STATE, MODULE.ISF_1);
+}
+
+function int16ToLE(v) {
+    const vi = v | 0;
+    return [vi & 0xFF, (vi >> 8) & 0xFF];
+}
+
+
 
 // ─── WiFi Builders ──────────────────────────────────────────────────────
 

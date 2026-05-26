@@ -69,7 +69,7 @@ static bool IRAM_ATTR pcntOverflowCb(pcnt_unit_handle_t,
                                       void*) {
     // portENTER_CRITICAL_ISR is safe to call from IRAM ISR context
     portENTER_CRITICAL_ISR(&s_mux);
-    s_overflowCount++;
+    s_overflowCount = s_overflowCount + 1;
     portEXIT_CRITICAL_ISR(&s_mux);
     return false;
 }

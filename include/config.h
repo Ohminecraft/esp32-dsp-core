@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-#define FIRMWARE_VERSION "1.3"
+#define FIRMWARE_VERSION "1.4"
 
 // ============================================================================
 // Audio Configuration
@@ -27,12 +27,20 @@
 #define DSP_SAMPLE_RATE_DEFAULT 96000   // Hz — max QCC5125 LDAC rate
 
 #define DSP_NUM_CHANNELS        2       // Stereo
+#if defined(CONFIG_IDF_TARGET_ESP32) // ESP32 can handle max 256 frame size because out of heap
 #define DSP_FRAME_SIZE          256     // Samples per frame per channel
+#else 
+#define DSP_FRAME_SIZE          512
+#endif
 #define DSP_FRAME_SAMPLES       (DSP_FRAME_SIZE * DSP_NUM_CHANNELS)
 
 // ============================================================================
 // EQ Configuration
 // ============================================================================
+
+#define ISF_MAX_PRESETS         5
+#define ISF_DEFAULT_RMS_MS      300
+#define ISF_DEFAULT_SLEW_MS     500
 
 #define MAX_EQ_BANDS            10      // Maximum EQ bands per module
 
@@ -46,7 +54,7 @@
 // DSP Pipeline — Module Count
 // ============================================================================
 
-#define DSP_MODULE_COUNT        10      // Total modules in pipeline
+#define DSP_MODULE_COUNT        12      // Total modules in pipeline
 
 // Module IDs (UART protocol)
 #define MODULE_ID_PRE_GAIN      0x01
@@ -57,8 +65,10 @@
 #define MODULE_ID_EQ_DSP_1      0x06
 #define MODULE_ID_EQ_DSP_2      0x07
 #define MODULE_ID_DRC           0x08
-#define MODULE_ID_VOLUME        0x09
+#define MODULE_ID_POST_GAIN     0x09
 #define MODULE_ID_LEFTRIGHT_EQ  0x0A
+#define MODULE_ID_ISF_1         0x0B
+#define MODULE_ID_ISF_2         0x0C
 #define MODULE_ID_SYSTEM        0xF0
 
 // ============================================================================
@@ -67,7 +77,7 @@
 
 #define AUDIO_TASK_CORE         1
 #define AUDIO_TASK_PRIORITY     configMAX_PRIORITIES - 1
-#define AUDIO_TASK_STACK_SIZE   16384
+#define AUDIO_TASK_STACK_SIZE   24576
 
 #define CONTROL_TASK_CORE       0
 #define CONTROL_TASK_PRIORITY   5
@@ -87,18 +97,34 @@
 #define UART_SYNC_BYTE_2        0x55
 
 // ============================================================================
+// Web Server Configuration
+// ============================================================================
+
+#define WIFI_AP_SSID     "ESP32-DSP"
+#define WIFI_AP_PASS     "dsp12345"
+
+// ============================================================================
 // Preset Configuration
 // ============================================================================
 
-#define MAX_PRESET_SLOTS        8
+#define MAX_PRESET_SLOTS        4
 
 // ============================================================================
 // Misc Configs
 // ============================================================================
 
+#define DISABLE_PERF_LOG
+
 #define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
-#define AUTO_SHUTDONW_TIMER 1800000 // 30min
+#define AUTO_SHUTDONW_TIMER_MS 1800000 // 30min
 #define SHUTDOWN_COUNTDOWN_MS 5000 // 5s
+
+// Trigger GPIO settings (for external control via single/triple click) - requires external button wiring to POWER_PIN_OFF (SOFT_LATCH_SHUTDOWN must be defined)
+// More features can be added here in future (e.g., double-click, long-press) if needed.
+// Can customize gpio and timing parameters in web app or electron app (future).
+#define TRIGGER_GPIO_ACTIVE_LEVEL   HIGH    // Active state level (HIGH/LOW)
+#define TRIGGER_SINGLE_DURATION_MS  200     // Duration for single click (ms)
+#define TRIGGER_TRIPLE_DURATION_MS  4000    // Duration for triple click (ms)
 
 #define MUTE_PIN_LOGIC LOW
 

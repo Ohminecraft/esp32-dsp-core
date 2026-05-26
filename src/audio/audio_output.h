@@ -53,7 +53,6 @@ private:
     i2s_chan_handle_t _txHandle    = nullptr;
 
     void   initI2SOutput();
-    size_t writeI2S(const float* __restrict buffer, size_t numSamples);
 
     // Saturating float → int32 conversion
     static inline int32_t floatToI32Sat(float x) {

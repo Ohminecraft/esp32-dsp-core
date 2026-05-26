@@ -1,9 +1,4 @@
-/* ═══════════════════════════════════════════════════════════════
-   DSP Control App — Clean Accordion UI
-   Inspired by TIDL DSP / ACPWorkbench
-   ═══════════════════════════════════════════════════════════════ */
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+/*@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');*/
 
 *,
 *::before,
@@ -1061,4 +1056,95 @@ body {
     gap: 4px;
     padding: 4px 0;
     flex: 1;
-}
+}
+
+/* ─── ISF Panel ──────────────────────────────────────────────────────── */
+
+.isf-config-row {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 6px 0 10px; border-bottom: 1px solid var(--border-light);
+    margin-bottom: 8px;
+}
+.isf-config-item {
+    display: flex; align-items: center; gap: 6px;
+}
+.isf-config-item > span:first-child {
+    font-size: 11px; font-weight: 600; color: var(--text-secondary); white-space: nowrap;
+}
+.isf-config-item .num-input { width: 54px; }
+.isf-config-item input[type="checkbox"] {
+    width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer;
+}
+
+/* Level meter */
+.isf-meter-wrap {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0 8px; border-bottom: 1px solid var(--border-light); margin-bottom: 8px;
+}
+.isf-meter-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-dim); min-width: 36px; flex-shrink: 0;
+}
+.isf-meter-track {
+    flex: 1; height: 6px; background: var(--bg-input);
+    border-radius: 3px; border: 1px solid var(--border-light); overflow: hidden;
+}
+.isf-meter-fill {
+    height: 100%; width: 0%; background: var(--accent-green);
+    border-radius: 3px; transition: width 0.1s ease, background 0.2s ease;
+}
+.isf-level-label {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+    color: var(--accent-dark); background: var(--accent-light);
+    padding: 2px 6px; border-radius: var(--radius-sm); min-width: 52px;
+    text-align: center; flex-shrink: 0;
+}
+.isf-idx-label {
+    font-size: 10px; font-weight: 600; color: var(--text-secondary);
+    min-width: 90px; flex-shrink: 0;
+}
+
+/* Tabs */
+.isf-tabs-wrap { display: flex; flex-direction: column; }
+.isf-tab-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+.isf-tab-bar {
+    display: flex; gap: 3px; flex-wrap: wrap;
+    border-bottom: 2px solid var(--border-light); margin-bottom: 0;
+}
+.isf-tab {
+    padding: 5px 12px;
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-bottom: none; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    color: var(--text-secondary); font-size: 11px; font-weight: 700;
+    cursor: pointer; transition: all var(--transition); position: relative; bottom: -1px;
+}
+.isf-tab:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+
+/* Tab đang edit — border bên dưới merge với preset body */
+.isf-tab.active {
+    background: var(--bg-card); border-color: var(--accent);
+    color: var(--accent); border-bottom: 2px solid var(--bg-card); z-index: 1;
+}
+
+/* Tab firmware đang active (theo RMS level) — overlay xanh lá, không thay thế active */
+.isf-tab.fw-active::after {
+    content: ''; position: absolute; bottom: 2px; left: 4px; right: 4px;
+    height: 2px; background: var(--accent-green); border-radius: 1px;
+}
+/* Tab firmware đang transition sang */
+.isf-tab.fw-next::after {
+    content: ''; position: absolute; bottom: 2px; left: 4px; right: 4px;
+    height: 2px; background: var(--accent-purple, #8b5cf6); border-radius: 1px; opacity: 0.6;
+}
+
+/* Preset body */
+.isf-preset-body {
+    border: 1px solid var(--border-light); border-top: none;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    padding: 10px 10px 4px; background: var(--bg-card); margin-bottom: 8px;
+}
+.isf-preset-meta {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--border-light);
+}
+.isf-band-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }

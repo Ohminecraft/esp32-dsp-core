@@ -64,6 +64,37 @@ class Store extends EventEmitter {
         // Dynamic Bass
         this.dynamicBass = { cutoffFreq: 80, gainBoost: 600, enhanced: 0, boostthreshold: -2400, neutralthreshold: -1600, clipthreshold: -800, clipattack: 600, cliprelease: 200 };
 
+        // ── ISF state ──────────────────────────────────────────────────
+        // Helper: create one ISF instance state
+        const makeIsfBand = () => ({
+            enabled: false, type: 0, freq: 1000, gain: 0, q: 0.707
+        });
+        const makeIsfPreset = (thresholdDb = -96) => ({
+            thresholdDb,
+            pregainDb: 0,
+            bands: Array.from({ length: 10 }, makeIsfBand),
+            numBands: 0
+        });
+        const makeIsfInstance = () => ({
+            numPresets: 1,
+            rmsMs: 300,
+            slewMs: 500,
+            overrideDb: null,           // null = auto RMS
+            presets: Array.from({ length: 5 }, (_, i) => makeIsfPreset(-96 + i * 5)),
+            // Runtime state from firmware (read-only)
+            currentLevelDb: -96,
+            slewIndex: 0,               // fractional
+            activeA: 0,
+            activeB: 0
+        });
+        this.isf1 = makeIsfInstance();
+        this.isf2 = makeIsfInstance();
+
+        // Active ISF tab: 'isf1' or 'isf2'
+        this._activeIsfInstance = 'isf1';
+        // Active preset index within the active ISF instance
+        this._activeIsfPreset = 0;
+
         // DRC — multi-band with crossover
         this.drc = {
             mode: 0,           // 0=Fullband, 1=2Band, 2=2Band+Full, 3=3Band, 4=3Band+Full
@@ -150,6 +181,73 @@ class Store extends EventEmitter {
             case 'eqRight': return MODULE.LEFTRIGHT_EQ;
             default: return MODULE.EQ_DSP_1;
         }
+    }
+
+    // ─── ISF ──────────────────────────────────────────────────────
+
+    getActiveIsf() {
+        return this._activeIsfInstance === 'isf1' ? this.isf1 : this.isf2;
+    }
+
+    getIsfInstance(which) {
+        return which === 'isf1' ? this.isf1 : this.isf2;
+    }
+
+    getIsfModuleId(which) {
+        return (which === 'isf1') ? MODULE.ISF_1 : MODULE.ISF_2;
+    }
+
+    setActiveIsfInstance(which) {
+        this._activeIsfInstance = which;
+        this.emit('isf:instance-changed', which);
+    }
+
+    setActiveIsfPreset(idx) {
+        this._activeIsfPreset = idx;
+        this.emit('isf:preset-changed', idx);
+    }
+
+    getActiveIsfPreset() {
+        return this._activeIsfPreset;
+    }
+
+    /** Update ISF runtime state from firmware REPORT_ISF frame. */
+    updateIsfState(which, levelDb, slewIndex, activeA, activeB) {
+        const isf = this.getIsfInstance(which);
+        isf.currentLevelDb = levelDb;
+        isf.slewIndex      = slewIndex;
+        isf.activeA        = activeA;
+        isf.activeB        = activeB;
+        this.emit('isf:state-updated', which);
+    }
+
+    /** Update one ISF preset from firmware REPORT_ISF_PRESET. */
+    updateIsfPreset(which, presetIdx, preset) {
+        const isf = this.getIsfInstance(which);
+        if (presetIdx < 0 || presetIdx >= 5) return;
+        const target = isf.presets[presetIdx];
+        if (preset.thresholdDb !== undefined) target.thresholdDb = preset.thresholdDb;
+        if (preset.pregainDb   !== undefined) target.pregainDb   = preset.pregainDb;
+
+        if (preset.bands && Array.isArray(preset.bands)) {
+            target.bands.forEach(b => { b.enabled = false; });
+            preset.bands.forEach((fb, i) => {
+                if (i >= 5) return;
+                Object.assign(target.bands[i], fb);
+                target.bands[i].enabled = fb.enabled !== false;
+            });
+            target.numBands = target.bands.filter(b => b.enabled).length;
+        }
+        if (presetIdx >= isf.numPresets) isf.numPresets = presetIdx + 1;
+        this.emit('isf:preset-data-updated', which, presetIdx);
+    }
+
+    updateIsfEqBand(which, bandIdx, freqIn, gainIn) {
+        const isf = this.getIsfInstance(which);
+        const pIdx = this.getActiveIsfPreset ? this.getActiveIsfPreset() : 0;
+        const preset = isf.presets[pIdx];
+        Object.assign(preset.bands[bandIdx], { freq: freqIn, gain: gainIn });
+        this.emit('isf:band-dragging', store.graphMode, pIdx, bandIdx);
     }
 
     setActiveEq(which) {

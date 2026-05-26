@@ -28,7 +28,7 @@
 #pragma once
 
 #include "dsp_module.h"
-#include "biquad.h"
+#include "helper/biquad.h"
 #include "../utils/fixed_math.h"
 #include "config.h"
 

@@ -85,11 +85,7 @@ void AudioInput::initI2SInput() {
 // Read
 // ---------------------------------------------------------------------------
 
-size_t AudioInput::readFrame(float* __restrict buffer, size_t numSamples) {
-    return readI2S(buffer, numSamples);
-}
-
-size_t IRAM_ATTR AudioInput::readI2S(float* __restrict buffer, size_t numSamples) {
+size_t IRAM_ATTR AudioInput::readFrame(float* __restrict buffer, size_t numSamples) {
     const size_t totalSamples = numSamples * _numChannels;
     if (totalSamples > DSP_FRAME_SAMPLES) return 0;
 

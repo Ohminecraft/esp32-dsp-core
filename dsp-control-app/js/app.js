@@ -9,9 +9,11 @@ import {
     buildFrame, buildEnableModule, buildDisableModule,
     buildSetParam, buildSetEqBand, buildSetDynEqBand,
     buildSetDynEqThresholds, buildSavePreset, buildLoadPreset,
-    buildGetAllState, buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
+    buildGetAllState, buildSetIsfPreset, buildSetIsfConfig, buildGetIsfState,
+    buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
     dbToQ88, dbToQ31, qToQ610,
-    leToInt16, leToInt32
+    leToInt16, leToInt32,
+    buildSetIsfBandParams
 } from './protocol.js';
 import { EQGraph } from './eq-graph.js';
 import { DRCGraph } from './drc-graph.js';
@@ -359,8 +361,15 @@ parser.onFrame((frame) => {
         }
     }
     else if (frame.cmd === CMD.ERROR) showStatus(`Error: 0x${frame.data[0]?.toString(16)}`, 'error');
-    else if (frame.cmd === CMD.ENABLE_MODULE) store.setModuleEnabled(frame.moduleId, true);
-    else if (frame.cmd === CMD.DISABLE_MODULE) store.setModuleEnabled(frame.moduleId, false);
+    else if (frame.cmd === CMD.REPORT_ENABLE_MASK && frame.data.length >= 2) {
+        // Firmware sends enable mask after GET_ALL_STATE
+        // Bits correspond to chain order: [0]=preGain ... [11]=postGain
+        const mask = frame.data[0] | (frame.data[1] << 8);
+        MODULE_ORDER.forEach((modId, chainIdx) => {
+            const enabled = Boolean((mask >> chainIdx) & 1);
+            store.setModuleEnabled(modId, enabled);
+        });
+    }
     else if (frame.cmd === CMD.SET_PARAM && frame.data.length >= 5) {
         const pIndex = frame.data[0];
         const val = readInt32(frame.data, 1);
@@ -467,6 +476,43 @@ parser.onFrame((frame) => {
         const fs = readInt32(frame.data, 3);
         updateCpuUI(cpu10 / 10.0, 100 - heapPct, fs);
     }
+    else if (frame.cmd === CMD.REPORT_ISF && frame.data.length >= 7) {
+        // Data: instance(1)+level_q88(2)+slew_q88(2)+activeA(1)+activeB(1)+numPresets(1)
+        const d = frame.data;
+        const instanceIdx = d[0];
+        const which = instanceIdx === 0 ? 'isf1' : 'isf2';
+        const levelDb  = leToInt16(d, 1) / 256;
+        const slewQ88  = leToInt16(d, 3);
+        const slewIdx  = slewQ88 / 256;
+        const activeA  = d[5];
+        const activeB  = d[6];
+        store.updateIsfState(which, levelDb, slewIdx, activeA, activeB);
+        renderIsfLevelMeter(which, levelDb, slewIdx, activeA, activeB);
+    }
+    else if (frame.cmd === CMD.REPORT_ISF_PRESET && frame.data.length >= 5) {
+        // Data: preset_idx(1)+threshold(2)+pregain(2)
+        const d = frame.data;
+        const moduleId  = frame.moduleId;
+        const which     = (moduleId === MODULE.ISF_1) ? 'isf1' : 'isf2';
+        const presetIdx = d[0];
+        const threshDb  = leToInt16(d, 1) / 256;
+        const pregainDb = leToInt16(d, 3) / 256;
+        
+        store.updateIsfPreset(which, presetIdx, { thresholdDb: threshDb, pregainDb});
+        store.emit("isf:preset-data-update", which, presetIdx);
+    }
+    else if (frame.cmd === CMD.REPORT_ISF_BAND_PER_PRESET && frame.data.length >= 10) {
+        const d = frame.data;
+        const moduleId  = frame.moduleId;
+        const which     = (moduleId === MODULE.ISF_1) ? 'isf1' : 'isf2';
+        const presetIdx = d[0];
+        const bandIdx = d[1];
+        const isf = store.getIsfInstance(which);
+        const changes = { enabled: d[2] === 1, type: d[3], freq: (d[4] | (d[5] << 8)), gain: leToInt16(d, 6) / 256, q: leToInt16(d, 8) / 1024};
+        Object.assign(isf.presets[presetIdx].bands[bandIdx], changes);
+        isf.presets[presetIdx].numBands = isf.presets[presetIdx].bands.filter(x => x.enabled).length;
+        store.emit("isf:preset-data-update", which, presetIdx);
+    }
     else if (frame.cmd === CMD.WIFI_GET_STATUS && frame.data.length >= 2) {
         const modeByte = frame.data[0];
         const ip = `${frame.data[1]}.${frame.data[2]}.${frame.data[3]}.${frame.data[4]}`;
@@ -511,8 +557,10 @@ const ACCORDION_MODULES = [
     { id: 'DYNEQ_THRESH', name: 'Dynamic EQ — Thresholds', icon: '⚡', parentId: MODULE.DYNAMIC_EQ },
     { id: 'DYNEQ_LOW', name: 'Dynamic EQ — Low', icon: '🔉', parentId: MODULE.DYNAMIC_EQ },
     { id: 'DYNEQ_HIGH', name: 'Dynamic EQ — High', icon: '🔊', parentId: MODULE.DYNAMIC_EQ },
-    { id: MODULE.EQ_DSP_1, name: 'Parmetric EQ 1', icon: '📈' },
-    { id: MODULE.EQ_DSP_2, name: 'Parmetric EQ 2', icon: '📉' },
+    { id: MODULE.ISF_1, name: 'ISF 1 EQ', icon: '🎛️' },
+    { id: MODULE.ISF_2, name: 'ISF 2 EQ', icon: '🎛️' },
+    { id: MODULE.EQ_DSP_1, name: 'Parametric EQ 1', icon: '📈' },
+    { id: MODULE.EQ_DSP_2, name: 'Parametric EQ 2', icon: '📉' },
     { id: 'EQ_LEFT', name: 'EQ Left', icon: '👈', parentId: MODULE.LEFTRIGHT_EQ },
     { id: 'EQ_RIGHT', name: 'EQ Right', icon: '👉', parentId: MODULE.LEFTRIGHT_EQ },
     { id: MODULE.DRC, name: 'Dynamic Range Compression', icon: '🛡️' },
@@ -569,7 +617,7 @@ function buildAccordionModules() {
         header.appendChild(title);
         header.appendChild(chevron);
 
-        const EQ_MODULE_IDS = [String(MODULE.EQ_DSP_1), String(MODULE.EQ_DSP_2), 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT'];
+        const EQ_MODULE_IDS = [String(MODULE.ISF_1), String(MODULE.ISF_2), String(MODULE.EQ_DSP_1), String(MODULE.EQ_DSP_2), 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT'];
         const isEqModule = EQ_MODULE_IDS.includes(String(mod.id));
 
         header.addEventListener('click', (e) => {
@@ -600,6 +648,8 @@ function buildAccordionModules() {
                     else if (mod.id === 'DYNEQ_HIGH') store.setActiveEq('dynHigh');
                     else if (mod.id === 'EQ_LEFT') store.setActiveEq('eqLeft');
                     else if (mod.id === 'EQ_RIGHT') store.setActiveEq('eqRight');
+                    else if (mod.id === MODULE.ISF_1) { store.setActiveIsfInstance('isf1'); store.graphMode = 'isf1'; }
+                    else if (mod.id === MODULE.ISF_2) { store.setActiveIsfInstance('isf2'); store.graphMode = 'isf2'; }
 
                     // Mount graph
                     mountGraphToAccordion(acc);
@@ -694,6 +744,18 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Clip Release', 0, 2000, 1, 'ms',
                 () => store.dynamicBass.cliprelease,
                 (v) => { store.dynamicBass.cliprelease = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 7, v)); });
+            break;
+
+        case MODULE.AUTO_EQ:
+            buildAutoEqPanel(body);
+            break;
+
+        case MODULE.ISF_1:
+            buildIsfPanel(body, 'isf1');
+            break;
+
+        case MODULE.ISF_2:
+            buildIsfPanel(body, 'isf2');
             break;
 
         case MODULE.EQ_DSP_1:
@@ -1100,6 +1162,12 @@ function buildDrcPanel(container) {
     updateBandTabs();
 }
 
+const BAND_COLORS_JS = [
+    '#ff6b6b', '#ffa06b', '#ffd93d', '#6bcb77',
+    '#4ecdc4', '#45b7d1', '#96c4ff', '#a78bfa',
+    '#f472b6', '#fb923c'
+];
+
 // ─── EQ Band Panel ───────────────────────────────────────────────────
 
 function buildEqBandPanel(container, moduleId, eqKey) {
@@ -1160,16 +1228,7 @@ function buildEqBandPanel(container, moduleId, eqKey) {
         eq.bands.forEach((_, i) => syncEqBand(moduleId, i));
     });
     actions.appendChild(resetBtn);
-
-    const exportBtn = document.createElement('button');
-    exportBtn.textContent = 'Export C++';
-    exportBtn.className = 'btn btn-outline btn-sm';
-    exportBtn.style.marginLeft = 'auto';
-    exportBtn.addEventListener('click', () => exportEqToCpp(eqKey));
-    actions.appendChild(exportBtn);
-    container.appendChild(actions);
 }
-
 // ─── Dynamic EQ Band Panel ───────────────────────────────────────────
 
 function buildDynEqBandPanel(container, isHigh) {
@@ -1222,13 +1281,6 @@ function buildDynEqBandPanel(container, isHigh) {
         });
         actions.appendChild(addBtn);
     }
-
-    const exportBtn = document.createElement('button');
-    exportBtn.textContent = 'Export C++';
-    exportBtn.className = 'btn btn-outline btn-sm';
-    exportBtn.style.marginLeft = 'auto';
-    exportBtn.addEventListener('click', () => exportEqToCpp(isHigh ? 'dynHigh' : 'dynLow'));
-    actions.appendChild(exportBtn);
 
     container.appendChild(actions);
 }
@@ -1302,9 +1354,20 @@ function rebuildAccordionBody(moduleId) {
     const acc = document.querySelector(`.accordion[data-module-id="${moduleId}"]`);
     if (!acc) return;
     const body = acc.querySelector('.accordion-body');
+
+    // Nếu accordion này đang mount graph, unmount trước để tránh memory leak
+    const hadGraph = !!body.querySelector('.eq-graph-container');
+    if (hadGraph) unmountGraph();
+
     body.innerHTML = '';
+
     const mod = ACCORDION_MODULES.find(m => m.id === moduleId);
     if (mod) buildModuleBody(body, mod);
+
+    // Remount graph nếu accordion đang mở và trước đó có graph
+    if (hadGraph && acc.classList.contains('open')) {
+        mountGraphToAccordion(acc);
+    }
 }
 
 // ─── EQ Hardware Sync ────────────────────────────────────────────────
@@ -1347,6 +1410,10 @@ function syncEqToHardware(moduleId) {
         store.leftRightEq.eqRight.bands.forEach((_, i) => syncEqBand(moduleId, i));
         store.activeEq = prev;
     }
+}
+
+function syncAutoEqToHardware() {
+    sendDebounced('auto_eq_bands', () => buildSetAutoEqTarget(store.autoEq.bands), 16);
 }
 
 function syncDynEqBand(isHigh, index) {
@@ -1485,6 +1552,385 @@ function exportEqToCpp(eqContextTarget) {
     });
 }
 
+
+// ─── ISF Panel ───────────────────────────────────────────────────────
+
+/**
+ * Send all presets of one ISF instance to firmware.
+ */
+function syncIsfAllPresets(which) {
+    const isf = store.getIsfInstance(which);
+    const modId = store.getIsfModuleId(which);
+    for (let p = 0; p < isf.numPresets; p++) {
+        const preset = isf.presets[p];
+        sendDebounced(`isf_${which}_preset_${p}`,
+            () => buildSetIsfPreset(modId, p, { thresholdDb: preset.thresholdDb, pregainDb: preset.pregainDb}),
+            30
+        );
+        for (let b = 0; b < 10; b++) {
+            sendDebounced(`isf_${which}_preset_${p}_band_${b}`, () => buildSetIsfBandParams(modId, p, b, preset), 16);
+        }
+    }
+    // Also send config
+    sendDebounced(`isf_${which}_config`,
+        () => buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb),
+        30
+    );
+}
+
+/**
+ * Send one preset to firmware.
+ */
+function syncIsfPreset(which, presetIdx) {
+    const isf  = store.getIsfInstance(which);
+    const modId = store.getIsfModuleId(which);
+    const preset = isf.presets[presetIdx];
+    sendDebounced(`isf_${which}_preset_${presetIdx}`,
+        () => buildSetIsfPreset(modId, presetIdx, { thresholdDb: preset.thresholdDb, pregainDb: preset.pregainDb}),
+        30
+    );
+}
+
+function syncIsfBandParams(which, presentIdx, bandIdx) {
+    const isf = store.getIsfInstance(which);
+    const modId = store.getIsfModuleId(which);
+    const preset = isf.presets[presentIdx];
+
+    if (bandIdx === undefined || bandIdx === null || bandIdx < 0) {
+        return;
+    }
+    sendDebounced(`isf_${which}_preset_${presentIdx}_band_${bandIdx}`, () => buildSetIsfBandParams(modId, presentIdx, bandIdx, preset), 16);
+}
+/**
+ * Update live level meter in ISF panel.
+ */
+function renderIsfLevelMeter(which, levelDb, slewIdx, activeA, activeB) {
+    const suffix = which === 'isf1' ? '1' : '2';
+    const meter  = document.getElementById(`isf-meter-${suffix}`);
+    const label  = document.getElementById(`isf-level-label-${suffix}`);
+    const idxLabel = document.getElementById(`isf-idx-label-${suffix}`);
+    if (!meter || !label) return;
+
+    // Level bar: map -60..0 dB → 0..100%
+    const pct = Math.max(0, Math.min(100, (levelDb + 60) / 60 * 100));
+    meter.style.width = `${pct}%`;
+    meter.style.background = levelDb > -6 ? 'var(--accent-red)'
+        : levelDb > -18 ? 'var(--accent-orange)'
+        : 'var(--accent-green)';
+    label.textContent = `${levelDb.toFixed(1)} dB`;
+    if (idxLabel) {
+        const blend = Math.round((slewIdx - Math.floor(slewIdx)) * 100);
+        idxLabel.textContent = blend > 1
+            ? `Preset ${activeA + 1} → ${activeB + 1} (${blend}%)`
+            : `Preset ${activeA + 1}`;
+    }
+
+    // Highlight firmware-active preset (separate from editing-active)
+    const tabContainer = document.getElementById(`isf-tabs-${suffix}`);
+    if (!tabContainer) return;
+    tabContainer.querySelectorAll('.isf-tab').forEach((tab, i) => {
+        // fw-active = preset firmware đang dùng (theo RMS level)
+        tab.classList.toggle('fw-active', i === activeA);
+        // fw-next = preset sắp chuyển sang (smooth slew)
+        tab.classList.toggle('fw-next',   i === activeB && activeA !== activeB);
+        // Không đụng vào class 'active' — class đó dành cho preset đang edit
+    });
+}
+
+/**
+ * Build the complete ISF panel for one instance (isf1 or isf2).
+ */
+function buildIsfPanel(container, which) {
+    const isf    = store.getIsfInstance(which);
+    const suffix = which === 'isf1' ? '1' : '2';
+    const modId  = store.getIsfModuleId(which);
+    let currentPreset = 0;
+
+    // ── Helper: compact labeled number input ─────────────────────────────
+    const makeConfigItem = (labelText, val, min, max, step, unit, onChange) => {
+        const item = document.createElement('div');
+        item.className = 'isf-config-item';
+        const lbl = document.createElement('span'); lbl.textContent = labelText;
+        const inp = document.createElement('input');
+        inp.type = 'number'; inp.min = min; inp.max = max;
+        inp.step = step; inp.value = val; inp.className = 'num-input';
+        inp.addEventListener('change', () => {
+            const v = parseFloat(inp.value);
+            if (!isNaN(v)) { inp.value = Math.max(min, Math.min(max, v)); onChange(parseFloat(inp.value)); }
+        });
+        const u = document.createElement('span'); u.className = 'num-unit'; u.textContent = unit;
+        item.appendChild(lbl); item.appendChild(inp); item.appendChild(u);
+        return { el: item, inp };
+    };
+
+    // ── Config row ────────────────────────────────────────────────────────
+    const configRow = document.createElement('div');
+    configRow.className = 'isf-config-row';
+    const sendConfig = () =>
+        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb));
+
+    const { el: rmsEl } = makeConfigItem('RMS Window', isf.rmsMs, 10, 2000, 10, 'ms', v => { isf.rmsMs = v; sendConfig(); });
+    const { el: slewEl } = makeConfigItem('Slew Time', isf.slewMs, 10, 5000, 50, 'ms/step', v => { isf.slewMs = v; sendConfig(); });
+
+    const ovItem = document.createElement('div'); ovItem.className = 'isf-config-item';
+    const ovChk = document.createElement('input'); ovChk.type = 'checkbox'; ovChk.checked = isf.overrideDb !== null;
+    const ovLbl = document.createElement('span'); ovLbl.textContent = 'Override';
+    const ovInp = document.createElement('input');
+    ovInp.type = 'number'; ovInp.min = -96; ovInp.max = 0; ovInp.step = 1;
+    ovInp.value = isf.overrideDb ?? -20; ovInp.className = 'num-input'; ovInp.disabled = isf.overrideDb === null;
+    const ovUnit = document.createElement('span'); ovUnit.className = 'num-unit'; ovUnit.textContent = 'dB';
+    const applyOv = () => { isf.overrideDb = ovChk.checked ? parseFloat(ovInp.value) : null; ovInp.disabled = !ovChk.checked; sendConfig(); };
+    ovChk.addEventListener('change', applyOv); ovInp.addEventListener('change', applyOv);
+    ovItem.appendChild(ovChk); ovItem.appendChild(ovLbl); ovItem.appendChild(ovInp); ovItem.appendChild(ovUnit);
+    configRow.appendChild(rmsEl); configRow.appendChild(slewEl); configRow.appendChild(ovItem);
+    container.appendChild(configRow);
+
+    // ── Live level meter ──────────────────────────────────────────────────
+    const meterWrap = document.createElement('div'); meterWrap.className = 'isf-meter-wrap';
+    const meterLbl = document.createElement('span'); meterLbl.className = 'isf-meter-label'; meterLbl.textContent = 'Level';
+    const meterTrack = document.createElement('div'); meterTrack.className = 'isf-meter-track';
+    const meterFill = document.createElement('div'); meterFill.className = 'isf-meter-fill'; meterFill.id = `isf-meter-${suffix}`;
+    meterTrack.appendChild(meterFill);
+    const levelLabel = document.createElement('span'); levelLabel.className = 'isf-level-label';
+    levelLabel.id = `isf-level-label-${suffix}`; levelLabel.textContent = '-- dB';
+    const idxLabel = document.createElement('span'); idxLabel.className = 'isf-idx-label';
+    idxLabel.id = `isf-idx-label-${suffix}`; idxLabel.textContent = 'Preset 1';
+    meterWrap.appendChild(meterLbl); meterWrap.appendChild(meterTrack);
+    meterWrap.appendChild(levelLabel); meterWrap.appendChild(idxLabel);
+    container.appendChild(meterWrap);
+
+    // ── Tabs wrap ─────────────────────────────────────────────────────────
+    const tabsWrap = document.createElement('div'); tabsWrap.className = 'isf-tabs-wrap';
+    const tabActions = document.createElement('div'); tabActions.className = 'isf-tab-actions';
+    const addPresetBtn = document.createElement('button');
+    addPresetBtn.textContent = '+ Preset'; addPresetBtn.className = 'btn btn-outline btn-sm';
+    const removePresetBtn = document.createElement('button');
+    removePresetBtn.textContent = '− Preset'; removePresetBtn.className = 'btn btn-sm';
+    removePresetBtn.style.color = 'var(--accent-red)';
+    tabActions.appendChild(addPresetBtn); tabActions.appendChild(removePresetBtn);
+    const tabBar = document.createElement('div');
+    tabBar.className = 'isf-tab-bar'; tabBar.id = `isf-tabs-${suffix}`;
+
+    // Preset content — persistent in DOM, only bandList.innerHTML rebuilds
+    const presetContent = document.createElement('div'); presetContent.className = 'isf-preset-body';
+    const metaRow = document.createElement('div'); metaRow.className = 'isf-preset-meta';
+    const { el: thrEl, inp: thrInp } = makeConfigItem('Threshold', isf.presets[0].thresholdDb.toFixed(1), -96, 0, 0.5, 'dB', v => {
+        isf.presets[currentPreset].thresholdDb = v;
+        const tab = tabBar.querySelector(`.isf-tab[data-p="${currentPreset}"]`);
+        if (tab) tab.title = `Threshold: ${v.toFixed(1)} dB`;
+        syncIsfPreset(which, currentPreset);
+    });
+    const { el: pgEl, inp: pgInp } = makeConfigItem('Pregain', isf.presets[0].pregainDb.toFixed(1), -24, 24, 0.5, 'dB', v => {
+        isf.presets[currentPreset].pregainDb = v;
+        store.emit('isf:eq-changed');
+        syncIsfPreset(which, currentPreset);
+    });
+    metaRow.appendChild(thrEl); metaRow.appendChild(pgEl);
+    presetContent.appendChild(metaRow);
+
+    const bandList = document.createElement('div'); bandList.className = 'isf-band-list';
+    presetContent.appendChild(bandList);
+
+    const actionsRow = document.createElement('div'); actionsRow.className = 'eq-actions';
+    const addBandBtn = document.createElement('button');
+    addBandBtn.textContent = '+ Add Band'; addBandBtn.className = 'btn btn-outline btn-sm';
+    actionsRow.appendChild(addBandBtn);
+    const clearBandsBtn = document.createElement('button');
+    clearBandsBtn.textContent = 'Clear Bands'; clearBandsBtn.className = 'btn btn-sm';
+    clearBandsBtn.style.color = 'var(--accent-red)';
+    actionsRow.appendChild(clearBandsBtn);
+    presetContent.appendChild(actionsRow);
+
+    tabsWrap.appendChild(tabActions);
+    tabsWrap.appendChild(tabBar);
+    tabsWrap.appendChild(presetContent);
+    container.appendChild(tabsWrap);
+
+    // ── Sync + Refresh ────────────────────────────────────────────────────
+    const syncRow = document.createElement('div'); syncRow.className = 'eq-actions';
+    const syncAllBtn = document.createElement('button');
+    syncAllBtn.textContent = '↑ Sync All Presets'; syncAllBtn.className = 'btn btn-outline btn-sm';
+    syncAllBtn.addEventListener('click', () => { syncIsfAllPresets(which); showStatus(`ISF ${suffix} synced`, 'ok'); });
+    const refreshBtn = document.createElement('button');
+    refreshBtn.textContent = 'Refresh'; refreshBtn.className = 'btn btn-outline btn-sm';
+    refreshBtn.addEventListener('click', () => sendFrame(buildGetIsfState()));
+    syncRow.appendChild(syncAllBtn); syncRow.appendChild(refreshBtn);
+    container.appendChild(syncRow);
+
+    // ── renderBandList — chỉ rebuild band rows, không đụng phần còn lại ──
+    const renderBandList = () => {
+        bandList.innerHTML = '';
+        const preset = isf.presets[currentPreset];
+        let hasEnabled = false;
+ 
+        preset.bands.forEach((band, realIdx) => {
+            if (!band.enabled) return;
+            hasEnabled = true;
+ 
+            const row = buildBandRow(
+                band,
+                realIdx,
+                (idx, changes) => {
+                    Object.assign(band, changes);
+                    store.emit('isf:eq-changed');
+                    syncIsfBandParams(which, currentPreset, idx);
+                },
+                (idx) => {
+                    band.enabled = false;
+                    preset.numBands = preset.bands.filter(x => x.enabled).length;
+                    Object.assign(band, { type: 0, freq: 1000, gain: 0, q: 0.707 });
+                    store.emit('isf:eq-changed');
+                    syncIsfBandParams(which, currentPreset, idx);
+                    renderBandList();
+                }
+            );
+            bandList.appendChild(row);
+        });
+
+        if (!hasEnabled) {
+            const hint = document.createElement('p');
+            hint.className = 'hint';
+            hint.textContent = 'Double-click the graph to add bands, or click + Add Band';
+            bandList.appendChild(hint);
+        }
+        addBandBtn.disabled = (preset.numBands >= 10);
+        addBandBtn.textContent = (preset.numBands >= 10) ? "⚠ Max 10 bands" : "+ Add Band";
+    };
+
+    // ── switchPreset — cập nhật inputs + band list khi đổi tab ──────────
+    const switchPreset = (pIdx) => {
+        currentPreset = pIdx;
+        store.setActiveIsfPreset(pIdx);
+        const preset = isf.presets[pIdx];
+        thrInp.value = preset.thresholdDb.toFixed(1);
+        pgInp.value  = preset.pregainDb.toFixed(1);
+        renderBandList();
+        store.emit('isf:preset-selected', which, pIdx);
+    };
+
+    addBandBtn.addEventListener('click', () => {
+        const preset = isf.presets[currentPreset];
+        const slot = preset.bands.findIndex(x => !x.enabled);
+        if (slot === -1) return;
+        Object.assign(preset.bands[slot], { enabled: true, freq: 1000, gain: 0, q: 0.707, type: 0 });
+        preset.numBands = preset.bands.filter(x => x.enabled).length;
+        syncIsfBandParams(which, currentPreset, slot);
+        store.emit('isf:eq-changed');
+        renderBandList();
+    });
+
+    clearBandsBtn.addEventListener('click', () => {
+        const preset = isf.presets[currentPreset];
+        preset.bands.forEach(x => { x.enabled = false; x.freq = 1000; x.gain = 0; x.q = 0.707; x.type = 0; });
+        preset.numBands = 0;
+        store.emit('isf:eq-changed');
+        for(let b = 0; b < 10; b++) {
+            syncIsfBandParams(which, currentPreset, b);
+        }
+        renderBandList();
+    });
+
+    // ── Tab bar ──────────────────────────────────────────────────────────
+    const rebuildTabs = () => {
+        tabBar.innerHTML = '';
+        for (let p = 0; p < isf.numPresets; p++) {
+            const tab = document.createElement('button');
+            tab.className = 'isf-tab btn' + (p === currentPreset ? ' active' : '');
+            tab.textContent = `P${p + 1}`;
+            tab.dataset.p = p;
+            tab.title = `Preset ${p + 1}: threshold ${isf.presets[p].thresholdDb.toFixed(1)} dB`;
+            tab.addEventListener('click', () => {
+                tabBar.querySelectorAll('.isf-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                switchPreset(p);
+            });
+            tabBar.appendChild(tab);
+        }
+        addPresetBtn.disabled  = isf.numPresets >= 5;
+        removePresetBtn.disabled = isf.numPresets <= 1;
+    };
+
+
+    addPresetBtn.addEventListener('click', () => {
+        if (isf.numPresets >= 5) {
+            addPresetBtn.disabled = true;
+            addPresetBtn.textContent = "⚠ Max 5 presets";
+            return;
+        } else {
+            addPresetBtn.textContent = "+ Preset";
+        };
+        const p = isf.numPresets++;
+        isf.presets[p].thresholdDb = -96 + p * Math.round(96 / isf.numPresets);
+        isf.presets[p].numBands = 0; isf.presets[p].pregainDb = 0;
+        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb));
+        rebuildTabs(); switchPreset(p);
+    });
+
+    removePresetBtn.addEventListener('click', () => {
+        if (isf.numPresets <= 1) {
+            removePresetBtn.disabled = true;
+            removePresetBtn.textContent = "⚠ At least 1 preset";
+            return;
+        } else {
+            removePresetBtn.textContent = "− Preset";
+        };
+        isf.numPresets--;
+        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb));
+        rebuildTabs(); switchPreset(Math.min(currentPreset, isf.numPresets - 1));
+    });
+
+    // ── Event listeners ───────────────────────────────────────────────────
+
+    // Đang drag → update freq/gain inputs live (không rebuild toàn bộ list)
+    store.on('isf:band-dragging', (w, pIdx2, bandArrayIdx) => {
+        if (w !== which || pIdx2 !== currentPreset) return;
+        const preset = isf.presets[pIdx2];
+        const draggedBand = preset.bands[bandArrayIdx];
+        const modid = store.getIsfModuleId(which);
+ 
+        const activeAcc = document.querySelector(`.accordion[data-module-id="${modId}"].open`);
+        if (!activeAcc) return;
+
+        const row = activeAcc.querySelector(`.eq-band-row[data-band-index="${bandArrayIdx}"]`);
+        if (row) {
+            const fFreq = row.querySelector('input[data-field="freq"]');
+            const fGain = row.querySelector('input[data-field="gain"]');
+            const fQ = row.querySelector('input[data-field="q"]');
+            const targetActiveElem = document.activeElement;
+
+            if (fFreq && fFreq !== targetActiveElem) fFreq.value = draggedBand.freq;
+            if (fGain && fGain !== targetActiveElem) fGain.value = draggedBand.gain.toFixed(1);
+        }
+        syncIsfBandParams(which, currentPreset, bandArrayIdx);
+    });
+    // Band added từ graph double-click
+    store.on('isf:band-added', (w, pIdx2) => {
+        if (w !== which) return;
+        if (pIdx2 !== undefined && pIdx2 !== currentPreset) {
+            tabBar.querySelectorAll('.isf-tab').forEach((t, i) => t.classList.toggle('active', i === pIdx2));
+            switchPreset(pIdx2);
+        } else {
+            renderBandList();
+        }
+    });
+
+    store.on('isf:preset-data-updated', (w, pIdx2) => {
+        if (w !== which) return;
+        // Rebuild tabs (thresholds may have changed)
+        rebuildTabs();
+        // If the updated preset is currently shown, refresh band list
+        if (pIdx2 === currentPreset) {
+            thrInp.value = isf.presets[currentPreset].thresholdDb.toFixed(1);
+            pgInp.value  = isf.presets[currentPreset].pregainDb.toFixed(1);
+            renderBandList();
+        }
+    });
+
+    // ── Initial render ─────────────────────────────────────────────────
+    rebuildTabs();
+    switchPreset(0);
+}
+
 // ─── Graph Container Helpers ─────────────────────────────────────────
 
 function mountGraphToAccordion(acc) {
@@ -1511,7 +1957,9 @@ function mountGraphToAccordion(acc) {
     // Pregain slider below graph
     const moduleId = acc.dataset.moduleId;
     let eqState;
-    if (moduleId === String(MODULE.EQ_DSP_1)) eqState = store.eq1;
+    if (moduleId === String(MODULE.ISF_1)) eqState = null;
+    else if (moduleId === String(MODULE.ISF_2)) eqState = null;
+    else if (moduleId === String(MODULE.EQ_DSP_1)) eqState = store.eq1;
     else if (moduleId === String(MODULE.EQ_DSP_2)) eqState = store.eq2;
     else if (moduleId === 'DYNEQ_LOW') eqState = store.dynamicEq.eqLow;
     else if (moduleId === 'DYNEQ_HIGH') eqState = store.dynamicEq.eqHigh;
@@ -1756,11 +2204,7 @@ function renderWifiList() {
 }
 
 function buildBottomBar() {
-
-
-
-
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 4; i++) {
         const btn = document.getElementById(`preset-${i}`);
         if (!btn) continue;
         btn.addEventListener('click', () => {
@@ -1784,7 +2228,7 @@ function buildBottomBar() {
     });
 
     store.on('preset:active-changed', (idx) => {
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 4; i++) {
             const btn = document.getElementById(`preset-${i}`);
             if (btn) btn.classList.toggle('active', i === idx);
         }
@@ -1792,7 +2236,7 @@ function buildBottomBar() {
 
     // Initial highlight
     const initialPreset = store.system.activePreset;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 4; i++) {
         const btn = document.getElementById(`preset-${i}`);
         if (btn) btn.classList.toggle('active', i === initialPreset);
     }
@@ -2086,6 +2530,9 @@ document.addEventListener('DOMContentLoaded', () => {
             syncDynEqBand(false, index);
         } else if (store.activeEq === 'dynHigh') {
             syncDynEqBand(true, index);
+        } else if (store.activeEq === 'autoEq') {
+            syncAutoEqToHardware();
+            renderAutoEqMeters();
         } else {
             const mid = store.getActiveEqModuleId();
             syncEqBand(mid, index);
@@ -2096,7 +2543,8 @@ document.addEventListener('DOMContentLoaded', () => {
             store.activeEq === 'eq2' ? MODULE.EQ_DSP_2 :
                 store.activeEq === 'dynLow' ? 'DYNEQ_LOW' :
                     store.activeEq === 'dynHigh' ? 'DYNEQ_HIGH' :
-                        store.activeEq === 'eqLeft' ? 'EQ_LEFT' : 'EQ_RIGHT';
+                        store.activeEq === 'autoEq' ? MODULE.AUTO_EQ :
+                            store.activeEq === 'eqLeft' ? 'EQ_LEFT' : 'EQ_RIGHT';
         const activeAcc = document.querySelector(`.accordion[data-module-id="${accId}"].open`);
         if (!activeAcc) return;
 
@@ -2121,7 +2569,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const rebuildStructural = () => {
         unmountGraph();
 
-        const rebuildIds = [MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
+        const rebuildIds = [MODULE.ISF_1, MODULE.ISF_2, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
         let activeAcc = null;
 
         rebuildIds.forEach(id => {
@@ -2142,6 +2590,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     store.on('state:loaded', rebuildStructural);
     store.on('eq:structure-changed', rebuildStructural);
+    store.on('isf:instance-changed', (which) => {
+        store.graphMode = which;
+        if (eqGraph) eqGraph.redraw ? eqGraph.redraw() : null;
+    });
+
+    setInterval(() => {
+        if (!store.system.connected) return;
+        const isf1Open = document.querySelector(`.accordion[data-module-id="${MODULE.ISF_1}"].open`);
+        const isf2Open = document.querySelector(`.accordion[data-module-id="${MODULE.ISF_2}"].open`);
+        if (isf1Open || isf2Open) sendFrame(buildGetIsfState());
+    }, 500);
 
     if (isBrowser) {
         // Running in mobile browser, connect directly via WebSocket
