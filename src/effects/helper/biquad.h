@@ -7,7 +7,7 @@
 #define BIQUAD_H
 
 #include "dsp_types.h"
-#include "../utils/debug_log.h"
+#include "../../utils/debug_log.h"
 #include <esp_dsp.h>
 #include <string.h>
 
@@ -239,6 +239,8 @@ public:
     void reset();
 
     const float* getCoeffs() const { return _coeffs; }
+
+    void setState(float* state);
     const float* getState() const { return _state; }
 
 private:
@@ -246,6 +248,84 @@ private:
     float _coeffs[5];
     // State: w1L, w2L, w1R, w2R
     float _state[4];
+};
+
+class BiquadProcess {
+public:
+    /**
+     * Process two planar arrays (L and R separated) using ESP-DSP SIMD.
+     * @param inOutL Left channel buffer (in-place)
+     * @param inOutR Right channel buffer (in-place)
+     * @param numFrames Number of samples per channel
+     */
+    inline void IRAM_ATTR processPlanar(float* __restrict inOutL, float* __restrict inOutR, size_t numFrames, const float* coeffs, float* state) {
+        #if defined(CONFIG_IDF_TARGET_ESP32) // ESP32 not have SIMD-optimized biquad, so use interleaved processing as fallback
+            const float b0 = coeffs[0], b1 = coeffs[1], b2 = coeffs[2];
+            const float a1 = coeffs[3], a2 = coeffs[4];
+            float *sL = &state[0], *sR = &state[2];
+
+            for (size_t i = 0; i < numFrames; i++) {
+                float inL  = inOutL[i];
+                float outL = b0 * inL + sL[0];
+                sL[0]      = b1 * inL - a1 * outL + sL[1];
+                sL[1]      = b2 * inL - a2 * outL;
+                inOutL[i] = outL;
+
+                float inR  = inOutR[i];
+                float outR = b0 * inR + sR[0];
+                sR[0]      = b1 * inR - a1 * outR + sR[1];
+                sR[1]      = b2 * inR - a2 * outR;
+                inOutR[i] = outR;
+            }
+        #elif defined(CONFIG_IDF_TARGET_ESP32S3)// Use AES3-optimized biquad for best performance on ESP32-S3
+            dsps_biquad_f32_aes3(inOutL, inOutL, numFrames, coeffs, &state[0]);
+            dsps_biquad_f32_aes3(inOutR, inOutR, numFrames, coeffs, &state[2]);
+        #else 
+            dsps_biquad_f32(inOutL, inOutL, numFrames, coeffs, &state[0]);
+            dsps_biquad_f32(inOutR, inOutR, numFrames, coeffs, &state[2]);
+        #endif
+    }
+
+    /**
+     * Process a single planar array (e.g. just Left or just Right).
+     * @param inOut Buffer to process
+     * @param numFrames Number of samples
+     * @param channel 0 for Left state, 1 for Right state
+     */
+    inline void IRAM_ATTR processPlanarChannel(float* __restrict inOut, size_t numFrames, const float* coeffs, float* state,  int channel) {
+        #if defined(CONFIG_IDF_TARGET_ESP32)
+            float *s = &state[channel * 2];
+            for (size_t i = 0; i < numFrames; i++) {
+                float in  = inOut[i];
+                float out = coeffs[0] * in + s[0];
+                s[0]      = coeffs[1] * in - coeffs[3] * out + s[1];
+                s[1]      = coeffs[2] * in - coeffs[4] * out;
+                inOut[i]  = out;
+            }
+        #elif defined(CONFIG_IDF_TARGET_ESP32S3)
+            dsps_biquad_f32_aes3(inOut, inOut, numFrames, coeffs, &state[channel * 2]);
+        #else // Support for other variant in future: use default dsps_biquad_f32 which may be optimized for that target
+            dsps_biquad_f32(inOut, inOut, numFrames, coeffs, &state[channel * 2]);
+        #endif
+    }
+
+    /**
+     * Process a single sample for a specific channel.
+     */
+    __attribute__((always_inline)) inline float IRAM_ATTR processSample(float in, const float* coeffs, float* state, int channel) {
+        #if defined(CONFIG_IDF_TARGET_ESP32)
+            float *s  = &state[channel * 2];
+            float out = coeffs[0] * in + s[0];
+            s[0]      = coeffs[1] * in - coeffs[3] * out + s[1];
+            s[1]      = coeffs[2] * in - coeffs[4] * out;
+            return out;
+        #elif defined(CONFIG_IDF_TARGET_ESP32S3)
+            return dsps_biquad_sample_ae32(in, coeffs, &state[channel * 2]);
+        #else
+            return dsps_biquad_f32_sample(in, coeffs, &state[channel * 2]);
+        #endif  
+        return 0.0f; // Should never reach here, but silence on unsupported targets
+    }
 };
 
 #endif // BIQUAD_H

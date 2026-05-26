@@ -8,7 +8,7 @@
 
 #include <Preferences.h>
 #include "config.h"
-#include "../dsp/dsp_pipeline.h"
+#include "../effects/dsp_pipeline.h"
 
 class PresetManager {
 public:
@@ -30,6 +30,17 @@ public:
      * Check if a preset slot has saved data.
      */
     bool hasPreset(uint8_t slot);
+
+    /**
+     * Save the current preset slot index.
+     * @param slot 0..MAX_PRESET_SLOTS-1
+     */
+    void saveCurrentSlotIndex(uint8_t slot);
+
+    /**
+     * Get the current preset slot index.
+     */
+    uint8_t getCurrentSlotIndex();
 
 private:
     Preferences _prefs;

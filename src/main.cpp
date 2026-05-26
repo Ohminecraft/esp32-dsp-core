@@ -21,7 +21,7 @@
 #include "audio/audio_input.h"
 #include "audio/audio_output.h"
 #include "audio/audio_sync.h"
-#include "dsp/dsp_pipeline.h"
+#include "effects/dsp_pipeline.h"
 #include "control/uart_protocol.h"
 #include "control/param_controller.h"
 #include "control/preset_manager.h"
@@ -125,7 +125,9 @@ static void reinitPipeline(uint32_t newRateHz) {
         #ifdef SOFT_LATCH_SHUTDOWN
         stopAutoShutdownTimer();
         #endif
+        #ifdef MUTE_PIN
         digitalWrite(MUTE_PIN, !MUTE_PIN_LOGIC);
+        #endif
         if (g_audioTaskHandle) {
             vTaskResume(g_audioTaskHandle);
         }
@@ -135,7 +137,9 @@ static void reinitPipeline(uint32_t newRateHz) {
         #ifdef SOFT_LATCH_SHUTDOWN
         startAutoShutdownTimer();
         #endif
+        #ifdef MUTE_PIN
         digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
+        #endif
         // audioTask stays suspended
         LOG_INFO("SYNC", "Pipeline stopped: clock absent");
     }
@@ -231,7 +235,9 @@ static void toggleWifiShutdown() {
         LOG_INFO("SYS", "WiFi Transceiver is now fully OFF.");
     } else {
         LOG_INFO("SYS", "Double-press: Restarting to Initialize WiFi...");
+        #ifdef MUTE_PIN
         digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC); // Mute during reboot
+        #endif
         ESP.restart();
     }
 }
@@ -247,8 +253,10 @@ void controlTask(void* param) {
 
     uint32_t lastStatusMs = millis();
 
+    #ifdef MUTE_PIN
     pinMode(MUTE_PIN, OUTPUT);
     digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
+    #endif
 
     while (true) {
         #ifdef SOFT_LATCH_SHUTDOWN
@@ -373,8 +381,10 @@ void controlTask(void* param) {
             LOG_INFO("SYS", "Audio interfaces deinitialized.");
             vTaskDelete(g_audioTaskHandle);
             LOG_INFO("SYS", "Audio task stopped.");
+            #ifdef MUTE_PIN
             digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
             LOG_INFO("SYS", "Mute pin set.");
+            #endif
             vTaskDelete(g_syncTaskHandle);
             g_audioSync.clearHandle();
             LOG_INFO("SYS", "Audio synchronization stopped.");
@@ -432,12 +442,15 @@ void controlTask(void* param) {
                 (uint8_t)((s_fs >> 16) & 0xFF),
                 (uint8_t)((s_fs >> 24) & 0xFF)
             };
-            g_uart.sendFrame(CMD_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, 7);
+            if (g_webServer.isWsConnected()) {
+                g_uart.sendFrame(CMD_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, 7);
+            }
 
+            #ifndef DISABLE_PERF_LOG
             LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%)",
                 g_lastFrameUs, s_usage, (unsigned long)s_fs,
                 g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct);
-
+            #endif
             g_maxFrameUs = 0;
         }
 
@@ -533,22 +546,21 @@ void setup() {
     }
 
     // 4. Load preset
-    if (g_presetMgr.hasPreset(0)) {
-        LOG_INFO("INIT", "Auto-loading Preset Slot 0 from NVS");
-        g_presetMgr.loadPreset(0, g_pipeline);
-    } else {
-        LOG_INFO("INIT", "No saved preset. Enabling defaults...");
-        g_pipeline.getPostGain().enable();
-        g_pipeline.getPreGain().enable();
+    uint8_t currentSlot = g_presetMgr.getCurrentSlotIndex();
+    if (g_presetMgr.hasPreset(currentSlot)) {
+        LOG_INFO("INIT", "Auto-loading Preset Slot %d from NVS", currentSlot);
+        g_presetMgr.loadPreset(currentSlot, g_pipeline);
     }
 
     // 5.1. Init AudioSync — starts PCNT clock monitor on Core 0
     //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)
     LOG_INFO("INIT", "Initializing AudioSync clock monitor...");
-    g_audioSync.init(onRateChange);
-    g_isclockabsent = true;
+    //g_audioSync.init(onRateChange);
+    //g_isclockabsent = true;
+    g_pipelineReady = true; // Start audio task immediately for testing without AudioSync
 
     // 5.2. Create AudioSync monitor task (Core 0, Priority 5)
+    /*
     xTaskCreatePinnedToCore(
         g_audioSync.monitorTask,
         "SyncTask",
@@ -558,6 +570,7 @@ void setup() {
         &g_syncTaskHandle,
         SYNC_TASK_CORE
     );
+    */
 
     // 6. Create control task (Core 0)
     xTaskCreatePinnedToCore(

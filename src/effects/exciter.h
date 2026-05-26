@@ -7,7 +7,7 @@
 #define EXCITER_H
 
 #include "dsp_module.h"
-#include "biquad.h"
+#include "helper/biquad.h"
 #include "../utils/fixed_math.h"
 
 class Exciter : public DspModule {

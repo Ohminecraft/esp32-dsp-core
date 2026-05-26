@@ -167,6 +167,10 @@ void Biquad::designFromParams(const EQFilterParams& params, int32_t sampleRate) 
     design(type, f0, Q, gain_dB, (float)sampleRate);
 }
 
+void Biquad::setState(float* state) {
+    memcpy(_state, state, sizeof(_state));
+}
+
 void Biquad::reset() {
     memset(_state, 0, sizeof(_state));
 }

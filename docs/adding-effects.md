@@ -26,14 +26,14 @@ Each DSP module:
 
 ### Step 1: Create Module Header File
 
-Create `src/dsp/your_effect.h`:
+Create `src/effects/your_effect.h`:
 
 ```cpp
 #ifndef YOUR_EFFECT_H
 #define YOUR_EFFECT_H
 
 #include "dsp_module.h"
-#include "biquad.h"
+#include "helper/biquad.h"
 #include "../utils/fixed_math.h"
 
 // Forward declarations for friend access
@@ -79,7 +79,7 @@ private:
 
 ### Step 2: Implement Module
 
-Create `src/dsp/your_effect.cpp`:
+Create `src/effects/your_effect.cpp`:
 
 ```cpp
 #include "your_effect.h"
@@ -183,7 +183,7 @@ Edit `include/config.h`:
 
 The pipeline uses a `_chain[]` array that is built during initialization. Modules are processed by iterating through this chain.
 
-Edit `src/dsp/dsp_pipeline.h`:
+Edit `src/effects/dsp_pipeline.h`:
 
 ```cpp
 #include "your_effect.h"
@@ -206,7 +206,7 @@ public:
 };
 ```
 
-Edit `src/dsp/dsp_pipeline.cpp` - in the `init()` method:
+Edit `src/effects/dsp_pipeline.cpp` - in the `init()` method:
 
 ```cpp
 void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
@@ -477,14 +477,14 @@ Mỗi module DSP:
 
 ### Bước 1: Tạo File Header
 
-Tạo `src/dsp/your_effect.h`:
+Tạo `src/effects/your_effect.h`:
 
 ```cpp
 #ifndef YOUR_EFFECT_H
 #define YOUR_EFFECT_H
 
 #include "dsp_module.h"
-#include "biquad.h"
+#include "helper/biquad.h"
 #include "../utils/fixed_math.h"
 
 // Khai báo trước cho truy cập friend
@@ -530,7 +530,7 @@ private:
 
 ### Bước 2: Triển Khai Module
 
-Tạo `src/dsp/your_effect.cpp`:
+Tạo `src/effects/your_effect.cpp`:
 
 ```cpp
 #include "your_effect.h"
@@ -622,7 +622,7 @@ Chỉnh sửa `include/config.h`:
 
 Pipeline sử dụng array `_chain[]` được xây dựng trong quá trình khởi tạo. Các module được xử lý bằng cách lặp qua chuỗi này.
 
-Chỉnh sửa `src/dsp/dsp_pipeline.h`:
+Chỉnh sửa `src/effects/dsp_pipeline.h`:
 
 ```cpp
 #include "your_effect.h"
@@ -645,7 +645,7 @@ public:
 };
 ```
 
-Chỉnh sửa `src/dsp/dsp_pipeline.cpp` - trong method `init()`:
+Chỉnh sửa `src/effects/dsp_pipeline.cpp` - trong method `init()`:
 
 ```cpp
 void DspPipeline::init(int32_t sampleRate, int32_t numChannels) {
@@ -758,14 +758,14 @@ Kiểm tra:
 
 ### Step 1: Create Module Header File
 
-Create `src/dsp/your_effect.h`:
+Create `src/effects/your_effect.h`:
 
 ```cpp
 #ifndef YOUR_EFFECT_H
 #define YOUR_EFFECT_H
 
 #include "dsp_module.h"
-#include "biquad.h"
+#include "helper/biquad.h"
 
 class YourEffect : public DSPModule {
 private:
@@ -799,7 +799,7 @@ public:
 
 ### Step 2: Implement Module
 
-Create `src/dsp/your_effect.cpp`:
+Create `src/effects/your_effect.cpp`:
 
 ```cpp
 #include "your_effect.h"
@@ -896,7 +896,7 @@ void YourEffect::updateCoefficients(float freq, float q) {
 
 ### Step 3: Register Module in Pipeline
 
-Edit `src/dsp/dsp_pipeline.h`:
+Edit `src/effects/dsp_pipeline.h`:
 
 ```cpp
 #include "your_effect.h"
@@ -924,7 +924,7 @@ Define the module ID in `include/config.h`:
 
 ### Step 4: Add to Pipeline Order
 
-In `src/dsp/dsp_pipeline.cpp`, add to the processing chain:
+In `src/effects/dsp_pipeline.cpp`, add to the processing chain:
 
 ```cpp
 void DSPPipeline::process(float32_t* buffer, uint32_t samples) {
@@ -1178,14 +1178,14 @@ Mỗi module DSP:
 
 ### Bước 1: Tạo File Header
 
-Tạo `src/dsp/your_effect.h`:
+Tạo `src/effects/your_effect.h`:
 
 ```cpp
 #ifndef YOUR_EFFECT_H
 #define YOUR_EFFECT_H
 
 #include "dsp_module.h"
-#include "biquad.h"
+#include "helper/biquad.h"
 
 class YourEffect : public DSPModule {
 private:
@@ -1213,7 +1213,7 @@ public:
 
 ### Bước 2: Triển Khai Module
 
-Tạo `src/dsp/your_effect.cpp`:
+Tạo `src/effects/your_effect.cpp`:
 
 ```cpp
 #include "your_effect.h"
@@ -1271,7 +1271,7 @@ void YourEffect::updateCoefficients(float freq, float q) {
 
 ### Bước 3: Đăng Ký Module
 
-Chỉnh sửa `src/dsp/dsp_pipeline.h`:
+Chỉnh sửa `src/effects/dsp_pipeline.h`:
 
 ```cpp
 #include "your_effect.h"
@@ -1291,7 +1291,7 @@ public:
 
 ### Bước 4: Thêm vào Thứ Tự Pipeline
 
-Trong `src/dsp/dsp_pipeline.cpp`:
+Trong `src/effects/dsp_pipeline.cpp`:
 
 ```cpp
 void DSPPipeline::process(float32_t* buffer, uint32_t samples) {

@@ -38,6 +38,10 @@
 // EQ Configuration
 // ============================================================================
 
+#define ISF_MAX_PRESETS         5
+#define ISF_DEFAULT_RMS_MS      300
+#define ISF_DEFAULT_SLEW_MS     500
+
 #define MAX_EQ_BANDS            10      // Maximum EQ bands per module
 
 // ============================================================================
@@ -50,7 +54,7 @@
 // DSP Pipeline — Module Count
 // ============================================================================
 
-#define DSP_MODULE_COUNT        11      // Total modules in pipeline
+#define DSP_MODULE_COUNT        12      // Total modules in pipeline
 
 // Module IDs (UART protocol)
 #define MODULE_ID_PRE_GAIN      0x01
@@ -63,7 +67,8 @@
 #define MODULE_ID_DRC           0x08
 #define MODULE_ID_POST_GAIN     0x09
 #define MODULE_ID_LEFTRIGHT_EQ  0x0A
-#define MODULE_ID_AUTO_EQ       0x0B
+#define MODULE_ID_ISF_1         0x0B
+#define MODULE_ID_ISF_2         0x0C
 #define MODULE_ID_SYSTEM        0xF0
 
 // ============================================================================
@@ -102,13 +107,15 @@
 // Preset Configuration
 // ============================================================================
 
-#define MAX_PRESET_SLOTS        8
+#define MAX_PRESET_SLOTS        4
 
 // ============================================================================
 // Misc Configs
 // ============================================================================
 
-#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
+#define DISABLE_PERF_LOG
+
+//#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
 #define AUTO_SHUTDONW_TIMER_MS 1800000 // 30min
 #define SHUTDOWN_COUNTDOWN_MS 5000 // 5s
 

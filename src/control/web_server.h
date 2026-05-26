@@ -57,6 +57,9 @@ public:
     /** Number of currently connected WebSocket clients */
     uint8_t getClientCount() const;
 
+    /** true if at least one WS client is connected */
+    bool isWsConnected() const;
+
 private:
     AsyncWebServer  _server{80};
     AsyncWebSocket  _ws{"/ws"};
@@ -67,6 +70,8 @@ private:
 
     uint8_t* _wsRxBuf = nullptr;
     size_t   _wsRxBufSize = 0;
+
+    bool _isWsConnected = false;
 
     // Frame parser per-client state
     // (reuse UartProtocol's existing parser logic via a helper)

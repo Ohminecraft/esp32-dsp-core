@@ -64,20 +64,36 @@ class Store extends EventEmitter {
         // Dynamic Bass
         this.dynamicBass = { cutoffFreq: 80, gainBoost: 600, enhanced: 0, boostthreshold: -2400, neutralthreshold: -1600, clipthreshold: -800, clipattack: 600, cliprelease: 200 };
 
-        const autoEqFreqs = [63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
-        const autoEqTarget = [3, 2, 1, 0, 0, 0, -1, -2, -3];
-        this.autoEq = {
-            pregain: 0,
-            bands: autoEqFreqs.map((freq, i) => ({
-                enabled: true,
-                type: i === 0 ? 1 : (i === autoEqFreqs.length - 1 ? 2 : 0),
-                freq,
-                gain: autoEqTarget[i],
-                q: 1.414
-            })),
-            correction: Array.from({ length: 9 }, () => 0),
-            measured: Array.from({ length: 9 }, () => 0)
-        };
+        // ── ISF state ──────────────────────────────────────────────────
+        // Helper: create one ISF instance state
+        const makeIsfBand = () => ({
+            enabled: false, type: 0, freq: 1000, gain: 0, q: 0.707
+        });
+        const makeIsfPreset = (thresholdDb = -96) => ({
+            thresholdDb,
+            pregainDb: 0,
+            bands: Array.from({ length: 10 }, makeIsfBand),
+            numBands: 0
+        });
+        const makeIsfInstance = () => ({
+            numPresets: 1,
+            rmsMs: 300,
+            slewMs: 500,
+            overrideDb: null,           // null = auto RMS
+            presets: Array.from({ length: 5 }, (_, i) => makeIsfPreset(-96 + i * 5)),
+            // Runtime state from firmware (read-only)
+            currentLevelDb: -96,
+            slewIndex: 0,               // fractional
+            activeA: 0,
+            activeB: 0
+        });
+        this.isf1 = makeIsfInstance();
+        this.isf2 = makeIsfInstance();
+
+        // Active ISF tab: 'isf1' or 'isf2'
+        this._activeIsfInstance = 'isf1';
+        // Active preset index within the active ISF instance
+        this._activeIsfPreset = 0;
 
         // DRC — multi-band with crossover
         this.drc = {
@@ -151,7 +167,6 @@ class Store extends EventEmitter {
             case 'dynHigh': return this.dynamicEq.eqHigh;
             case 'eqLeft': return this.leftRightEq.eqLeft;
             case 'eqRight': return this.leftRightEq.eqRight;
-            case 'autoEq': return this.autoEq;
             default: return this.eq1;
         }
     }
@@ -164,9 +179,75 @@ class Store extends EventEmitter {
             case 'dynHigh': return MODULE.DYNAMIC_EQ;
             case 'eqLeft': return MODULE.LEFTRIGHT_EQ;
             case 'eqRight': return MODULE.LEFTRIGHT_EQ;
-            case 'autoEq': return MODULE.AUTO_EQ;
             default: return MODULE.EQ_DSP_1;
         }
+    }
+
+    // ─── ISF ──────────────────────────────────────────────────────
+
+    getActiveIsf() {
+        return this._activeIsfInstance === 'isf1' ? this.isf1 : this.isf2;
+    }
+
+    getIsfInstance(which) {
+        return which === 'isf1' ? this.isf1 : this.isf2;
+    }
+
+    getIsfModuleId(which) {
+        return (which === 'isf1') ? MODULE.ISF_1 : MODULE.ISF_2;
+    }
+
+    setActiveIsfInstance(which) {
+        this._activeIsfInstance = which;
+        this.emit('isf:instance-changed', which);
+    }
+
+    setActiveIsfPreset(idx) {
+        this._activeIsfPreset = idx;
+        this.emit('isf:preset-changed', idx);
+    }
+
+    getActiveIsfPreset() {
+        return this._activeIsfPreset;
+    }
+
+    /** Update ISF runtime state from firmware REPORT_ISF frame. */
+    updateIsfState(which, levelDb, slewIndex, activeA, activeB) {
+        const isf = this.getIsfInstance(which);
+        isf.currentLevelDb = levelDb;
+        isf.slewIndex      = slewIndex;
+        isf.activeA        = activeA;
+        isf.activeB        = activeB;
+        this.emit('isf:state-updated', which);
+    }
+
+    /** Update one ISF preset from firmware REPORT_ISF_PRESET. */
+    updateIsfPreset(which, presetIdx, preset) {
+        const isf = this.getIsfInstance(which);
+        if (presetIdx < 0 || presetIdx >= 5) return;
+        const target = isf.presets[presetIdx];
+        if (preset.thresholdDb !== undefined) target.thresholdDb = preset.thresholdDb;
+        if (preset.pregainDb   !== undefined) target.pregainDb   = preset.pregainDb;
+
+        if (preset.bands && Array.isArray(preset.bands)) {
+            target.bands.forEach(b => { b.enabled = false; });
+            preset.bands.forEach((fb, i) => {
+                if (i >= 5) return;
+                Object.assign(target.bands[i], fb);
+                target.bands[i].enabled = fb.enabled !== false;
+            });
+            target.numBands = target.bands.filter(b => b.enabled).length;
+        }
+        if (presetIdx >= isf.numPresets) isf.numPresets = presetIdx + 1;
+        this.emit('isf:preset-data-updated', which, presetIdx);
+    }
+
+    updateIsfEqBand(which, bandIdx, freqIn, gainIn) {
+        const isf = this.getIsfInstance(which);
+        const pIdx = this.getActiveIsfPreset ? this.getActiveIsfPreset() : 0;
+        const preset = isf.presets[pIdx];
+        Object.assign(preset.bands[bandIdx], { freq: freqIn, gain: gainIn });
+        this.emit('isf:band-dragging', store.graphMode, pIdx, bandIdx);
     }
 
     setActiveEq(which) {
@@ -176,7 +257,6 @@ class Store extends EventEmitter {
     }
 
     addEqBand(freq = 1000, gain = 0, q = 1.0, type = 0) {
-        if (this.activeEq === 'autoEq') return null;
         const eq = this.getActiveEqState();
         const slot = eq.bands.findIndex(b => !b.enabled);
         if (slot === -1) return null;  // All 10 slots in use
@@ -195,7 +275,6 @@ class Store extends EventEmitter {
     }
 
     removeEqBand(index) {
-        if (this.activeEq === 'autoEq') return;
         const eq = this.getActiveEqState();
         if (index < 0 || index >= eq.bands.length) return;
         eq.bands[index].enabled = false;
@@ -207,20 +286,6 @@ class Store extends EventEmitter {
 
     resetEqBands() {
         const eq = this.getActiveEqState();
-        if (this.activeEq === 'autoEq') {
-            const freqs = [63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
-            const target = [3, 2, 1, 0, 0, 0, -1, -2, -3];
-            eq.bands.forEach((b, i) => {
-                b.enabled = true;
-                b.type = i === 0 ? 1 : (i === eq.bands.length - 1 ? 2 : 0);
-                b.freq = freqs[i];
-                b.gain = target[i];
-                b.q = 1.414;
-            });
-            this.emit('eq:changed');
-            this.emit('eq:structure-changed');
-            return;
-        }
         eq.bands.forEach(b => {
             b.enabled = false;
             b.type = 0; b.freq = 1000; b.gain = 0; b.q = 0.707;

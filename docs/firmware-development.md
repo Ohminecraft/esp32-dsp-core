@@ -236,10 +236,10 @@ src/
 ├── audio/
 │   ├── audio_input.cpp   # I2S input implementation
 │   └── audio_output.cpp  # I2S output implementation
-├── dsp/
+├── effects/
 │   ├── dsp_pipeline.cpp  # Pipeline orchestrator
 │   ├── dsp_module.h      # Base class definition
-│   ├── noise_gate.cpp
+│   ├── eq.cpp            # Effect File
 │   ├── exciter.cpp
 │   └── ...
 ├── control/
@@ -270,7 +270,7 @@ Order includes logically:
 
 #include "config.h"        // Project headers
 #include "dsp_module.h"
-#include "biquad.h"
+#include "helper/biquad.h"
 
 #include "debug_log.h"     // Debug/utility headers
 ```
@@ -470,7 +470,7 @@ src/
 ├── audio/
 │   ├── audio_input.cpp   # Đầu vào âm thanh
 │   └── audio_output.cpp  # Đầu ra âm thanh
-├── dsp/
+├── effects/
 │   ├── dsp_pipeline.cpp  # Pipeline của module, chạy theo chain
 │   └── [các module]
 ├── control/
@@ -489,7 +489,7 @@ src/
 
 #include "config.h"        // Header của Project
 #include "dsp_module.h"
-#include "biquad.h"
+#include "helper/biquad.h"
 
 #include "debug_log.h"     // Header của Debug/tiện ích
 ```

@@ -21,7 +21,7 @@
 #define DRC_H
 
 #include "dsp_module.h"
-#include "biquad.h"
+#include "helper/biquad.h"
 #include "../utils/fixed_math.h"
 #include "../utils/dynamics_processor.h"
 #include "config.h"

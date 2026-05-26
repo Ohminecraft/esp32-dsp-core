@@ -54,6 +54,10 @@ uint8_t DspWebServer::getClientCount() const {
     return (uint8_t)_ws.count();
 }
 
+bool DspWebServer::isWsConnected() const {
+    return _isWsConnected;
+}
+
 // ── private: WebSocket setup ──────────────────────────────────────────────────
 
 void DspWebServer::_setupWebSocket() {
@@ -70,10 +74,12 @@ void DspWebServer::_onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* clie
         case WS_EVT_CONNECT:
             LOG_INFO(TAG, "WS client #%lu connected from %s",
                      client->id(), client->remoteIP().toString().c_str());
+            _isWsConnected = true;
             break;
 
         case WS_EVT_DISCONNECT:
             LOG_INFO(TAG, "WS client #%lu disconnected", client->id());
+            _isWsConnected = false;
             break;
 
         case WS_EVT_DATA: {
