@@ -219,18 +219,44 @@ void IRAM_ATTR IndexSelectableFilter::process(
     if (blendEnd > 1.0f) blendEnd = 1.0f;
 
     // ── 4. State handoff ─────────────────────────────────────────────────────
-    const int prevActiveA = _activeA;   // capture TRƯỚC khi state handoff đổi _activeA
+    //
+    // Biquad state = "ký ức" tín hiệu qua một bộ coefficients cụ thể.
+    // Khi cặp (A, B) thay đổi, phải tái sử dụng đúng state warm thay vì zero.
+    //
+    // 4 tình huống:
+    //   FORWARD  : slewIndex vượt lên (2.1→2.9): newA == _activeB
+    //              → promote stateB (đang warm cho preset mới của A) lên stateA
+    //              → zero stateB (preset mới của B = cold)
+    //
+    //   BACKWARD : slewIndex giảm xuống (2.1→1.9): newB == _activeA
+    //              → promote stateA (đang warm cho preset mới của B) sang stateB
+    //              → zero stateA (preset mới của A = cold)
+    //
+    //   JUMP     : thay đổi lớn, không có state hợp lệ → zero cả 2
+    //
+    //   B_ONLY   : chỉ B thay đổi, A giữ nguyên → zero stateB
+
+    enum class StepKind : uint8_t { NONE, FORWARD, BACKWARD, JUMP } stepKind = StepKind::NONE;
 
     if (newA != _activeA) {
         if (newA == _activeB) {
-            // Tiến về phía trước: B filter có history hợp lệ → promote B → A
+            // Forward crossing: stateB đang warm cho preset newA
+            stepKind = StepKind::FORWARD;
             memcpy(_stateA, _stateB, sizeof(_stateB));
-        } else {
-            // Nhảy xa: không có state nào hợp lệ
+            memset(_stateB, 0, sizeof(_stateB));
+        } else if (newB == _activeA) {
+            // Backward crossing: stateA đang warm cho preset newB
+            stepKind = StepKind::BACKWARD;
+            memcpy(_stateB, _stateA, sizeof(_stateA));
             memset(_stateA, 0, sizeof(_stateA));
+        } else {
+            // Jump xa: không có state hợp lệ nào
+            stepKind = StepKind::JUMP;
+            memset(_stateA, 0, sizeof(_stateA));
+            memset(_stateB, 0, sizeof(_stateB));
         }
-        memset(_stateB, 0, sizeof(_stateB));
     } else if (newB != _activeB) {
+        // Chỉ B thay đổi: stateB của preset cũ không hợp lệ với preset mới
         memset(_stateB, 0, sizeof(_stateB));
     }
 
@@ -239,24 +265,55 @@ void IRAM_ATTR IndexSelectableFilter::process(
 
     // ── 5. Blend & pregain ramp setup ────────────────────────────────────────
     //
-    // Vấn đề: blend là hằng số trong cả frame → tại ranh giới 2 frame liên tiếp,
-    // tỉ lệ mix nhảy bậc thang ngay lập tức → click mỗi frame trong khi transition.
+    // Mục tiêu: không có bước nhảy biên độ nào giữa cuối frame trước và đầu frame này.
     //
-    // Fix: ramp blend per-sample từ _prevBlend (cuối frame trước) đến blendEnd
-    // (cuối frame này). Làm tương tự với pgLin để không có bước nhảy pregain.
+    // FORWARD (blend mới reset về ~0):
+    //   blendStart = 0.0  — cặp (A,B) mới, A vừa được promote từ B cũ
+    //   pgLinAStart = _prevPgLinB — A mang state của old B, nên inherit pregain của B
+    //   pgLinBStart = pgLinB — B cold, blend ≈ 0 lúc đầu nên ít ảnh hưởng
     //
-    // Khi A vừa thay đổi (aChanged): blendStart = 0.0 vì cặp (A, B) mới,
-    // filter A đã được promote từ stateB (liên tục), B bắt đầu từ 0.
-    const bool  aChanged    = (newA != prevActiveA);
-    const float blendStart  = aChanged ? 0.0f : _prevBlend;
-    _prevBlend = blendEnd;
+    // BACKWARD (blend mới reset về ~1):
+    //   blendStart = 1.0  — tại điểm crossing, B chiếm 100%
+    //   pgLinAStart = pgLinA — A cold, (1-blend)≈0 lúc đầu nên ít ảnh hưởng
+    //   pgLinBStart = _prevPgLinA — B mang state của old A, inherit pregain của A
+    //
+    // JUMP: không ramp, dùng thẳng giá trị hiện tại
+    //
+    // NONE / B_ONLY: ramp bình thường từ giá trị frame trước
 
-    // Pregain: computed per-preset, sau đó applied per-sample trong mix loop
-    // (linear filter commutes with scaling → postgain ≡ pregain cho biquad)
+    float blendStart;
+    float pgLinAStart, pgLinBStart;
+
     const float pgLinA = db_to_linear_gain((float)_presets[newA].filters.getPregain() / 256.0f);
     const float pgLinB = db_to_linear_gain((float)_presets[newB].filters.getPregain() / 256.0f);
-    const float pgLinAStart = aChanged ? pgLinA : _prevPgLinA;
-    const float pgLinBStart = aChanged ? pgLinB : _prevPgLinB;
+
+    switch (stepKind) {
+        case StepKind::FORWARD:
+            blendStart  = 0.0f;
+            pgLinAStart = _prevPgLinB;   // A promoted từ old B → inherit pregain của B
+            pgLinBStart = pgLinB;        // B cold; blend ≈ 0 nên ít ảnh hưởng lúc đầu
+            break;
+
+        case StepKind::BACKWARD:
+            blendStart  = 1.0f;          // tại crossing, B=100% (biểu diễn (A,B) mới)
+            pgLinAStart = pgLinA;        // A cold; (1-blend) ≈ 0 nên ít ảnh hưởng lúc đầu
+            pgLinBStart = _prevPgLinA;   // B promoted từ old A → inherit pregain của A
+            break;
+
+        case StepKind::JUMP:
+            blendStart  = blendEnd;      // không ramp — tránh transient dài từ state sai
+            pgLinAStart = pgLinA;
+            pgLinBStart = pgLinB;
+            break;
+
+        default:  // NONE hoặc B_ONLY
+            blendStart  = _prevBlend;
+            pgLinAStart = _prevPgLinA;
+            pgLinBStart = _prevPgLinB;
+            break;
+    }
+
+    _prevBlend  = blendEnd;
     _prevPgLinA = pgLinA;
     _prevPgLinB = pgLinB;
 

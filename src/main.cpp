@@ -569,7 +569,7 @@ void setup() {
         &g_syncTaskHandle,
         SYNC_TASK_CORE
     );
-
+    
     // 6. Create control task (Core 0)
     xTaskCreatePinnedToCore(
         controlTask,

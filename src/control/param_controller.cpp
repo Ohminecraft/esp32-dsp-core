@@ -505,6 +505,7 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
 
     eq->setPregain(pregainQ88);
     eq->setBand(bandIdx, params);
+    LOG_INFO(TAG, "PARAMETRIC_EQ: eq:%d pregain:%f dB, bandIdx:%d, type:%d, freq:%d Hz, gain:%f dB, Q:%f", (cmd.moduleId == MODULE_ID_EQ_DSP_1) ? 1 : 2, (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
     _uart->sendAck(cmd.moduleId, 0);
 }
 
@@ -524,9 +525,11 @@ void ParamController::handleSetDynEqBand(const UartCommand& cmd, bool isHigh) {
     if (isHigh) {
         deq.getEqHigh().setPregain(pregainQ88);
         deq.setEqHighBand(bandIdx, params);
+        LOG_INFO(TAG, "DYN_EQ_BAND_HIGH: pregain:%f dB, bandIdx:%d, type:%d, freq:%d, gain:%f dB, Q:%f", (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
     } else {
         deq.getEqLow().setPregain(pregainQ88);
         deq.setEqLowBand(bandIdx, params);
+        LOG_INFO(TAG, "DYN_EQ_BAND_LOW: pregain:%f dB, bandIdx:%d, type:%d, freq:%d, gain:%f dB Q:%f", (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
     }
     _uart->sendAck(cmd.moduleId, 0);
 }
