@@ -201,7 +201,7 @@ static void saveIsfInstance(ISFInstanceData& data,
         ISFPresetData& pd = data.presets[p];
         pd.thresholdDb = preset.thresholdDb;
         pd.pregainDb   = preset.filters.getPregain();
-        for (int b = 0; b < ISF_MAX_BANDS; b++) {
+        for (int b = 0; b < MAX_EQ_BANDS; b++) {
             EQFilterParams currentBandPreset = preset.filters.getBandParams(b);
             pd.bands[b].enabled = currentBandPreset.enabled;
             pd.bands[b].type    = currentBandPreset.type;

@@ -126,8 +126,8 @@ private:
 
     // ── Crossfade state (two parallel filter banks) ───────────────────────────
     // Layout: state[band][ch*2 + delay_tap], matches Biquad._state convention
-    float   _stateA[ISF_MAX_BANDS][4]; // w0L,w1L,w0R,w1R for preset A
-    float   _stateB[ISF_MAX_BANDS][4]; // same for preset B
+    float   _stateA[MAX_EQ_BANDS][4]; // w0L,w1L,w0R,w1R for preset A
+    float   _stateB[MAX_EQ_BANDS][4]; // same for preset B
     int     _activeA = 0;
     int     _activeB = 0;
 

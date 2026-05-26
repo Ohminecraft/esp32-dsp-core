@@ -278,11 +278,11 @@ public:
                 inOutR[i] = outR;
             }
         #elif defined(CONFIG_IDF_TARGET_ESP32S3)// Use AES3-optimized biquad for best performance on ESP32-S3
-            dsps_biquad_f32_aes3(inOutL, inOutL, numFrames, coeffs, &state[0]);
-            dsps_biquad_f32_aes3(inOutR, inOutR, numFrames, coeffs, &state[2]);
+            dsps_biquad_f32_aes3(inOutL, inOutL, numFrames, const_cast<float*>(coeffs), &state[0]);
+            dsps_biquad_f32_aes3(inOutR, inOutR, numFrames, const_cast<float*>(coeffs), &state[2]);
         #else 
-            dsps_biquad_f32(inOutL, inOutL, numFrames, coeffs, &state[0]);
-            dsps_biquad_f32(inOutR, inOutR, numFrames, coeffs, &state[2]);
+            dsps_biquad_f32(inOutL, inOutL, numFrames, const_cast<float*>(coeffs), &state[0]);
+            dsps_biquad_f32(inOutR, inOutR, numFrames, const_cast<float*>(coeffs), &state[2]);
         #endif
     }
 
@@ -303,9 +303,9 @@ public:
                 inOut[i]  = out;
             }
         #elif defined(CONFIG_IDF_TARGET_ESP32S3)
-            dsps_biquad_f32_aes3(inOut, inOut, numFrames, coeffs, &state[channel * 2]);
+            dsps_biquad_f32_aes3(inOut, inOut, numFrames, const_cast<float*>(coeffs), &state[channel * 2]);
         #else // Support for other variant in future: use default dsps_biquad_f32 which may be optimized for that target
-            dsps_biquad_f32(inOut, inOut, numFrames, coeffs, &state[channel * 2]);
+            dsps_biquad_f32(inOut, inOut, numFrames, const_cast<float*>(coeffs), &state[channel * 2]);
         #endif
     }
 
@@ -320,9 +320,9 @@ public:
             s[1]      = coeffs[2] * in - coeffs[4] * out;
             return out;
         #elif defined(CONFIG_IDF_TARGET_ESP32S3)
-            return dsps_biquad_sample_ae32(in, coeffs, &state[channel * 2]);
+            return dsps_biquad_sample_ae32(in, const_cast<float*>(coeffs), &state[channel * 2]);
         #else
-            return dsps_biquad_f32_sample(in, coeffs, &state[channel * 2]);
+            return dsps_biquad_f32_sample(in, const_cast<float*>(coeffs), &state[channel * 2]);
         #endif  
         return 0.0f; // Should never reach here, but silence on unsupported targets
     }
