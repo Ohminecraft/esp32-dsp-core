@@ -1,10 +1,38 @@
-# ESP32 DSP Core
+<h1 align="center">ESP32 DSP Core</h1>
+
+<p align="center">
+  High Performance DSP Engine for ESP32
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/-Arduino-00979D?style=for-the-badge&logo=Arduino&logoColor=white">
+
+  <img src="https://img.shields.io/badge/espressif-E7352C.svg?style=for-the-badge&logo=espressif&logoColor=white">
+
+  <img src="https://img.shields.io/badge/PlatformIO-Compatible-orange?style=for-the-badge&logo=platformio&logoColor=white">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/github/license/Ohminecraft/esp32-dsp-core?style=for-the-badge">
+
+  <img src="https://img.shields.io/github/stars/Ohminecraft/esp32-dsp-core?style=for-the-badge">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Ohminecraft/esp32-dsp-core/actions/workflows/build.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/Ohminecraft/esp32-dsp-core/build.yml?style=for-the-badge&label=Build%20Passing">
+  </a>
+
+  <a href="https://github.com/Ohminecraft/esp32-dsp-core/releases">
+    <img src="https://img.shields.io/github/v/release/Ohminecraft/esp32-dsp-core?style=for-the-badge&label=Build%20Release">
+  </a>
+</p>
 
 > **Languages**: [English](#english) | [Tiếng Việt](#tiếng-việt)
 
 A high-performance real-time audio digital signal processing (DSP) framework for ESP32/ESP32-S3. This project provides a modular signal chain, professional-grade audio algorithms, and a dual-transport control interface (USB Serial & WiFi WebSocket).
 
-**Status**: ✅ Stable & High-Performance | **Max Sample Rate Support**: 96 kHz | **Latency**: 2.67ms | **Transport**: UART + WebSocket
+**Max Sample Rate Support**: 96 kHz | **Latency**: 2.67ms | **Transport**: UART + WebSocket
 
 ---
 
