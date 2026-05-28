@@ -42,8 +42,12 @@ public:
      */
     uint8_t getCurrentSlotIndex();
 
+    const uint8_t getCurrentPresetIndex() const { return currentpresetidx; };
+
+
 private:
     Preferences _prefs;
+    uint8_t currentpresetidx = 0;
 
     String getSlotKey(uint8_t slot);
     void saveDefault(uint8_t slot);

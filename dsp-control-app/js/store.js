@@ -113,10 +113,10 @@ class Store extends EventEmitter {
         };
 
         // PreGain
-        this.preGain = { gainDb: 0, mute: false };
+        this.preGain = { gainDb: 0, mute: false, mono: false };
 
         // PostGain
-        this.postGain = { gainDb: 0, mute: false };
+        this.postGain = { gainDb: 0, mute: false, mono: false };
 
 
         // System

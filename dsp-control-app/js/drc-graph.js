@@ -30,9 +30,11 @@ export class DRCGraph {
     _onResize() {
         const parent = this._canvas.parentElement;
         if (!parent) return;
-        const dpr = window.devicePixelRatio || 1;
         const w   = parent.clientWidth;
         const h   = parent.clientHeight;
+        if (w < 10 || h < 10) return; // parent is hidden or collapsed
+
+        const dpr = window.devicePixelRatio || 1;
         this._canvas.width  = w * dpr;
         this._canvas.height = h * dpr;
         this._canvas.style.width  = `${w}px`;
@@ -47,9 +49,12 @@ export class DRCGraph {
         const ctx  = this._ctx;
         const W    = this._canvas.width  / (window.devicePixelRatio || 1);
         const H    = this._canvas.height / (window.devicePixelRatio || 1);
+        if (W < 10 || H < 10) return; // skip drawing if canvas is too small or hidden
+
         const pad  = this._padding;
         const plotW = W - pad.left - pad.right;
         const plotH = H - pad.top  - pad.bottom;
+        if (plotW <= 0 || plotH <= 0) return;
 
         this._thresholdDb = thresholdDb;
         this._ratio       = ratio;
@@ -197,5 +202,97 @@ export class DRCGraph {
         drawLegendItem(legendX, legendY,      '#e84040',   [5, 3], `Threshold ${thresholdDb.toFixed(1)} dB`);
         drawLegendItem(legendX, legendY + 18, 'rgba(200,210,230,0.4)', [4, 4], '1:1');
         drawLegendItem(legendX, legendY + 36, '#22cc55',   [],      `Ratio ${ratio.toFixed(0)}:1`);
+
+        // Save base image for live meter overlay (putImageData = no full redraw needed)
+        this._baseImageData = ctx.getImageData(0, 0, this._canvas.width, this._canvas.height);
+        this._dbToX = dbToX;
+        this._dbToY = dbToY;
+        this._plotW = plotW;
+        this._plotH = plotH;
+    }
+
+    /**
+     * Overlay the live operating point on the compression curve.
+     * Called from renderDrcMeter() every ~500ms without redrawing the full graph.
+     *
+     * @param {number} gainDb   Current gain reduction in dB for active band (≤ 0)
+     */
+    updateLiveMeter(gainDb) {
+        if (!this._baseImageData || !this._dbToX) return;
+
+        const ctx  = this._ctx;
+        const dpr  = window.devicePixelRatio || 1;
+        const pad  = this._padding;
+        const dbToX = this._dbToX;
+        const dbToY = this._dbToY;
+
+        // Restore the static base graph
+        ctx.putImageData(this._baseImageData, 0, 0);
+
+        const th    = this._thresholdDb ?? -15;
+        const ratio = this._ratio       ?? 4;
+        const slope = 1 - 1 / ratio;    // slopeAbove = (1 − 1/R)
+
+        // Reverse the compression transfer function to get input level:
+        //   gainDb = (th - inputDb) * slope   →   inputDb = th - gainDb / slope
+        const isCompressing = gainDb < -0.2 && slope > 0.001;
+        const inputDb  = isCompressing
+            ? Math.max(-this._rangeDb, Math.min(0, th - gainDb / slope))
+            : null;
+        const outputDb = inputDb !== null
+            ? (inputDb <= th ? inputDb : th + (inputDb - th) / ratio)
+            : null;
+
+        if (inputDb === null) return;   // no compression → nothing to show
+
+        const ox = dbToX(inputDb);
+        const oy = dbToY(outputDb);
+
+        // ── Crosshair lines ─────────────────────────────────────────────
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 204, 51, 0.55)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+
+        // Vertical: x-axis → operating point
+        ctx.beginPath();
+        ctx.moveTo(ox, pad.top + this._plotH);
+        ctx.lineTo(ox, oy);
+        ctx.stroke();
+
+        // Horizontal: y-axis → operating point
+        ctx.beginPath();
+        ctx.moveTo(pad.left, oy);
+        ctx.lineTo(ox, oy);
+        ctx.stroke();
+
+        ctx.setLineDash([]);
+
+        // ── GR bar on right edge ────────────────────────────────────────
+        // Full bar height = plotH, fill from top proportional to |gainDb|/rangeDb
+        const grBarX  = pad.left + this._plotW + 4;
+        const grBarW  = 5;
+        const grFill  = Math.min(1, Math.abs(gainDb) / this._rangeDb) * this._plotH;
+        ctx.fillStyle = 'rgba(255,204,51,0.18)';
+        ctx.fillRect(grBarX, pad.top, grBarW, this._plotH);
+        ctx.fillStyle = '#ffcc33';
+        ctx.fillRect(grBarX, pad.top, grBarW, grFill);
+
+        // ── Operating point dot ─────────────────────────────────────────
+        ctx.shadowColor = '#ffcc33';
+        ctx.shadowBlur  = 10;
+        ctx.fillStyle   = '#ffcc33';
+        ctx.beginPath();
+        ctx.arc(ox, oy, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // ── GR label near dot ───────────────────────────────────────────
+        ctx.fillStyle  = '#ffcc33';
+        ctx.font       = 'bold 10px Inter, sans-serif';
+        ctx.textAlign  = ox > pad.left + this._plotW * 0.75 ? 'right' : 'left';
+        ctx.fillText(`GR ${gainDb.toFixed(1)} dB`, ox + (ctx.textAlign === 'left' ? 8 : -8), oy - 7);
+
+        ctx.restore();
     }
 }

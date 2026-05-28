@@ -29,6 +29,14 @@ public:
     void setReleaseTime(int32_t ms);
     void setPregain(int32_t gain_q412);
 
+    // ---- Runtime state getters (for live meter) ----
+    float getEnvLinear() const { return _state.envelope;   }  // 0..1 linear peak
+    float getGainDb()    const {
+        // gainLinear → dB: log2 approximation không dùng powf
+        float g = _state.gainLinear;
+        return (g > 0.0f) ? (20.0f * log10f(g)) : -96.0f;
+    }
+
 private:
     // ── Raw parameter storage (written by setters) ──
     int32_t _thresholdDbInt;

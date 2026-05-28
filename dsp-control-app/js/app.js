@@ -9,7 +9,8 @@ import {
     buildFrame, buildEnableModule, buildDisableModule,
     buildSetParam, buildSetEqBand, buildSetDynEqBand,
     buildSetDynEqThresholds, buildSavePreset, buildLoadPreset,
-    buildGetAllState, buildSetIsfPreset, buildSetIsfConfig, buildGetIsfState,
+    buildGetAllState, buildGetModuleMeter,
+    buildSetIsfPreset, buildSetIsfConfig, buildGetIsfState,
     buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
     dbToQ88, dbToQ31, qToQ610,
     leToInt16, leToInt32,
@@ -342,16 +343,13 @@ parser.onFrame((frame) => {
         if (isFetchingState) {
             isFetchingState = false;
             
-            // Rebuild the entire parameter UI
-            buildAccordionModules();
-            buildBottomBar();
-            
-            // Force Graph to redraw everything
-            store.emit('eq:changed');
-            store.emit('state:loaded');
-            store.emit('eq:structure-changed');
-            
-            showStatus('State synchronized successfully!', 'ok');
+            setTimeout(() => {
+                buildAccordionModules();
+                store.emit('eq:changed');
+                store.emit('state:loaded');
+                store.emit('eq:structure-changed');
+                showStatus('State synchronized successfully!', 'ok');
+            }, 0);
         }
     }
     else if (frame.cmd === CMD.ACK_RESPONSE && frame.data[0] === 0xFF) {
@@ -375,8 +373,16 @@ parser.onFrame((frame) => {
         const val = readInt32(frame.data, 1);
 
         switch (frame.moduleId) {
-            case MODULE.PRE_GAIN: if (pIndex === 0) store.updateParam('preGain', 'gainDb', val); break;
-            case MODULE.POST_GAIN: if (pIndex === 0) store.updateParam('postGain', 'gainDb', val); break;
+            case MODULE.PRE_GAIN:
+                if (pIndex === 0) store.updateParam('preGain', 'gainDb', val);
+                else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
+                else if (pIndex === 2) store.updateParam('preGain', 'mono', val !== 0);
+                break;
+            case MODULE.POST_GAIN:
+                if (pIndex === 0) store.updateParam('postGain', 'gainDb', val);
+                else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
+                else if (pIndex === 2) store.updateParam('postGain', 'mono', val !== 0);
+                break;
             case MODULE.COMPANDER:
                 if (pIndex === 0) store.updateParam('compander', 'threshold', val);
                 else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val);
@@ -489,18 +495,6 @@ parser.onFrame((frame) => {
         store.updateIsfState(which, levelDb, slewIdx, activeA, activeB);
         renderIsfLevelMeter(which, levelDb, slewIdx, activeA, activeB);
     }
-    else if (frame.cmd === CMD.REPORT_ISF_PRESET && frame.data.length >= 5) {
-        // Data: preset_idx(1)+threshold(2)+pregain(2)
-        const d = frame.data;
-        const moduleId  = frame.moduleId;
-        const which     = (moduleId === MODULE.ISF_1) ? 'isf1' : 'isf2';
-        const presetIdx = d[0];
-        const threshDb  = leToInt16(d, 1) / 256;
-        const pregainDb = leToInt16(d, 3) / 256;
-        
-        store.updateIsfPreset(which, presetIdx, { thresholdDb: threshDb, pregainDb});
-        store.emit("isf:preset-data-update", which, presetIdx);
-    }
     else if (frame.cmd === CMD.REPORT_ISF_BAND_PER_PRESET && frame.data.length >= 10) {
         const d = frame.data;
         const moduleId  = frame.moduleId;
@@ -511,6 +505,49 @@ parser.onFrame((frame) => {
         const changes = { enabled: d[2] === 1, type: d[3], freq: (d[4] | (d[5] << 8)), gain: leToInt16(d, 6) / 256, q: leToInt16(d, 8) / 1024};
         Object.assign(isf.presets[presetIdx].bands[bandIdx], changes);
         isf.presets[presetIdx].numBands = isf.presets[presetIdx].bands.filter(x => x.enabled).length;
+        store.emit("isf:preset-data-update", which, presetIdx);
+    }
+    else if (frame.cmd == CMD.CURRENT_PRESET_INDEX && frame.data.length >= 1) {
+        store.setActivePreset(frame.data[0]);
+    }
+    // ── Live meter reports ───────────────────────────────────────────────────
+    else if (frame.cmd === CMD.REPORT_DYNBASS && frame.data.length >= 4 && !isFetchingState) {
+        const energyDb = leToInt16(frame.data, 0) / 256;  // Q8.8 → float dB
+        const alpha    = leToInt16(frame.data, 2) / 256;  // Q8.8 → float [-1..1]
+        renderDynBassMeter(energyDb, alpha);
+    }
+    else if (frame.cmd === CMD.REPORT_DYNEQ && frame.data.length >= 6 && !isFetchingState) {
+        const energyDb  = leToInt16(frame.data, 0) / 256;
+        const alphaLow  = leToInt16(frame.data, 2) / 256;
+        const alphaHigh = leToInt16(frame.data, 4) / 256;
+        renderDynEqMeter(energyDb, alphaLow, alphaHigh);
+    }
+    else if (frame.cmd === CMD.REPORT_COMPANDER && frame.data.length >= 4 && !isFetchingState) {
+        // envLinear Q1.14 (0..16384 = 0..1.0), gainDb Q8.8
+        const envLinear = (frame.data[0] | (frame.data[1] << 8)) / 16384;
+        const gainDb    = leToInt16(frame.data, 2) / 256;
+        renderCompanderMeter(envLinear, gainDb);
+    }
+    else if (frame.cmd === CMD.REPORT_DRC && frame.data.length >= 8 && !isFetchingState) {
+        // 4 × int16 Q8.8 gain reduction dB (bands 0-2 + fullband)
+        const gains = [
+            leToInt16(frame.data, 0) / 256,
+            leToInt16(frame.data, 2) / 256,
+            leToInt16(frame.data, 4) / 256,
+            leToInt16(frame.data, 6) / 256,
+        ];
+        renderDrcMeter(gains);
+    }
+    else if (frame.cmd === CMD.REPORT_ISF_PRESET && frame.data.length >= 5) {
+        // Data: preset_idx(1)+threshold(2)+pregain(2)
+        const d = frame.data;
+        const moduleId  = frame.moduleId;
+        const which     = (moduleId === MODULE.ISF_1) ? 'isf1' : 'isf2';
+        const presetIdx = d[0];
+        const threshDb  = leToInt16(d, 1) / 256;
+        const pregainDb = leToInt16(d, 3) / 256;
+        
+        store.updateIsfPreset(which, presetIdx, { thresholdDb: threshDb, pregainDb});
         store.emit("isf:preset-data-update", which, presetIdx);
     }
     else if (frame.cmd === CMD.WIFI_GET_STATUS && frame.data.length >= 2) {
@@ -683,6 +720,7 @@ function buildAccordionModules() {
 function buildModuleBody(body, mod) {
     switch (mod.id) {
         case MODULE.COMPANDER:
+            body.appendChild(buildGrMeter({ id: 'compander', label: 'Gain Reduction' }));
             addSlider(body, 'Threshold', -6000, 0, 100, 'dB',
                 () => store.compander.threshold,
                 (v) => { store.compander.threshold = v; sendFrame(buildSetParam(MODULE.COMPANDER, 0, v)); },
@@ -716,6 +754,15 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.DYNAMIC_BASS:
+            body.appendChild(buildDynMeter({
+                id:     'dynbass',
+                label:  'Bass Level',
+                zones:  [
+                    { id: 'dynbass-zone-boost', label: 'Boost',   color: 'var(--accent)' },
+                    { id: 'dynbass-zone-flat',  label: 'Neutral', color: 'var(--accent-green)' },
+                    { id: 'dynbass-zone-clip',  label: 'Protect', color: 'var(--accent-red)' },
+                ]
+            }));
             addSlider(body, 'Cutoff Freq', 30, 300, 5, 'Hz',
                 () => store.dynamicBass.cutoffFreq,
                 (v) => { store.dynamicBass.cutoffFreq = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 0, v)); });
@@ -775,6 +822,15 @@ function buildModuleBody(body, mod) {
             break;
 
         case 'DYNEQ_THRESH': {
+            body.appendChild(buildDynMeter({
+                id:     'dyneq',
+                label:  'Signal Level',
+                zones:  [
+                    { id: 'dyneq-zone-low',  label: 'EQ Low',  color: 'var(--accent)' },
+                    { id: 'dyneq-zone-flat', label: 'Neutral', color: 'var(--accent-green)' },
+                    { id: 'dyneq-zone-high', label: 'EQ High', color: 'var(--accent-orange)' },
+                ]
+            }));
             const dbFmt = (v) => `${(v / 100).toFixed(2)} dB`;
 
             // Build sliders and wire cross-constraints:
@@ -876,21 +932,34 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.DRC:
+            body.appendChild(buildGrMeter({ id: 'drc', label: 'Gain Reduction', multiband: true }));
             buildDrcPanel(body);
             break;
 
         case MODULE.PRE_GAIN:
-            addSlider(body, 'Gain', -6000, 1800, 25, 'dB',
+            addSlider(body, 'Gain', -9600, 2400, 25, 'dB',
                 () => store.preGain.gainDb,
                 (v) => { store.preGain.gainDb = v; sendFrame(buildSetParam(MODULE.PRE_GAIN, 0, v)); },
                 null, 0.01);
+            addSwitch(body, 'Mute',
+                () => store.postGain.mute,
+                (v) => { store.postGain.mute = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 1, v ? 1 : 0)); });
+            addSwitch(body, 'Mono',
+                () => store.preGain.mono,
+                (v) => { store.preGain.mono = v; sendFrame(buildSetParam(MODULE.PRE_GAIN, 2, v ? 1 : 0)); });
             break;
 
         case MODULE.POST_GAIN:
-            addSlider(body, 'Gain', -6000, 1800, 25, 'dB',
+            addSlider(body, 'Gain', -9600, 2400, 25, 'dB',
                 () => store.postGain.gainDb,
                 (v) => { store.postGain.gainDb = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 0, v)); },
                 null, 0.01);
+            addSwitch(body, 'Mute',
+                () => store.postGain.mute,
+                (v) => { store.postGain.mute = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 1, v ? 1 : 0)); });
+            addSwitch(body, 'Mono',
+                () => store.postGain.mono,
+                (v) => { store.postGain.mono = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 2, v ? 1 : 0)); });
             break;
     }
 }
@@ -1553,6 +1622,216 @@ function exportEqToCpp(eqContextTarget) {
 }
 
 
+// ─── Live Meter Widgets ───────────────────────────────────────────────────────
+//
+// buildDynMeter — level bar + zone indicator pills (Dynamic Bass & Dynamic EQ)
+//   opts.id     : unique prefix for element IDs
+//   opts.label  : label text
+//   opts.zones  : [{ id, label, color }] — zone indicator pills
+//
+// buildGrMeter — gain reduction bar(s) (Compander & DRC)
+//   opts.id        : unique prefix
+//   opts.label     : label text
+//   opts.multiband : if true, render 4 bars (B/M/H/Full)
+
+function buildDynMeter(opts) {
+    const wrap = document.createElement('div');
+    wrap.className = 'lm-wrap';
+
+    // Label + level value
+    const head = document.createElement('div');
+    head.className = 'lm-head';
+    const lbl = document.createElement('span');
+    lbl.className = 'lm-label';
+    lbl.textContent = opts.label;
+    const val = document.createElement('span');
+    val.className = 'lm-value';
+    val.id = `lm-${opts.id}-db`;
+    val.textContent = '-- dB';
+    head.appendChild(lbl);
+    head.appendChild(val);
+    wrap.appendChild(head);
+
+    // Level bar track
+    const track = document.createElement('div');
+    track.className = 'lm-track';
+    const fill = document.createElement('div');
+    fill.className = 'lm-fill';
+    fill.id = `lm-${opts.id}-fill`;
+    track.appendChild(fill);
+    wrap.appendChild(track);
+
+    // Zone pills
+    if (opts.zones && opts.zones.length) {
+        const pills = document.createElement('div');
+        pills.className = 'lm-zones';
+        opts.zones.forEach(z => {
+            const pill = document.createElement('span');
+            pill.className = 'lm-zone-pill';
+            pill.id = z.id;
+            pill.textContent = z.label;
+            pill.dataset.color = z.color;
+            pills.appendChild(pill);
+        });
+        wrap.appendChild(pills);
+    }
+
+    return wrap;
+}
+
+function buildGrMeter(opts) {
+    const wrap = document.createElement('div');
+    wrap.className = 'lm-wrap';
+
+    const head = document.createElement('div');
+    head.className = 'lm-head';
+    const lbl = document.createElement('span');
+    lbl.className = 'lm-label';
+    lbl.textContent = opts.label;
+    const val = document.createElement('span');
+    val.className = 'lm-value lm-value-red';
+    val.id = `lm-${opts.id}-gr`;
+    val.textContent = '0.0 dB';
+    head.appendChild(lbl);
+    head.appendChild(val);
+    wrap.appendChild(head);
+
+    if (opts.multiband) {
+        // 4 bars: Low / Mid / High / Full
+        const bandNames = ['Low', 'Mid', 'High', 'Full'];
+        const rows = document.createElement('div');
+        rows.className = 'lm-gr-rows';
+        bandNames.forEach((name, i) => {
+            const row = document.createElement('div');
+            row.className = 'lm-gr-row';
+            const rowLbl = document.createElement('span');
+            rowLbl.className = 'lm-gr-row-label';
+            rowLbl.textContent = name;
+            const track = document.createElement('div');
+            track.className = 'lm-track lm-track-sm';
+            const fill = document.createElement('div');
+            fill.className = 'lm-fill lm-fill-red';
+            fill.id = `lm-${opts.id}-fill-${i}`;
+            track.appendChild(fill);
+            const rowVal = document.createElement('span');
+            rowVal.className = 'lm-gr-row-val';
+            rowVal.id = `lm-${opts.id}-val-${i}`;
+            rowVal.textContent = '0.0';
+            row.appendChild(rowLbl);
+            row.appendChild(track);
+            row.appendChild(rowVal);
+            rows.appendChild(row);
+        });
+        wrap.appendChild(rows);
+    } else {
+        const track = document.createElement('div');
+        track.className = 'lm-track';
+        const fill = document.createElement('div');
+        fill.className = 'lm-fill lm-fill-red';
+        fill.id = `lm-${opts.id}-fill`;
+        track.appendChild(fill);
+        wrap.appendChild(track);
+    }
+
+    return wrap;
+}
+
+// ─── Render functions — called from frame handler ─────────────────────────────
+
+function renderDynBassMeter(energyDb, alpha) {
+    const fill  = document.getElementById('lm-dynbass-fill');
+    const valEl = document.getElementById('lm-dynbass-db');
+    if (!fill || !valEl) return;
+
+    // Level bar: map -60..0 dBFS → 0..100%
+    const pct = Math.max(0, Math.min(100, (energyDb + 60) / 60 * 100));
+    fill.style.width = `${pct}%`;
+    fill.style.background = energyDb > -6  ? 'var(--accent-red)'
+                          : energyDb > -18 ? 'var(--accent-orange)'
+                          :                  'var(--accent-green)';
+    valEl.textContent = `${energyDb.toFixed(1)} dB`;
+
+    // Zone pills: alpha [-1..+1]
+    //   alpha > 0.05  → Boost active
+    //   |alpha| < 0.05 → Neutral
+    //   alpha < -0.05 → Protect active
+    const boostPill  = document.getElementById('dynbass-zone-boost');
+    const flatPill   = document.getElementById('dynbass-zone-flat');
+    const clipPill   = document.getElementById('dynbass-zone-clip');
+    if (!boostPill) return;
+
+    const setActive = (el, active) => {
+        el.style.background = active ? el.dataset.color : '';
+        el.style.color      = active ? '#fff' : '';
+        el.style.opacity    = active ? '1'   : '0.35';
+    };
+    setActive(boostPill, alpha >  0.05);
+    setActive(flatPill,  Math.abs(alpha) <= 0.05);
+    setActive(clipPill,  alpha < -0.05);
+}
+
+function renderDynEqMeter(energyDb, alphaLow, alphaHigh) {
+    const fill  = document.getElementById('lm-dyneq-fill');
+    const valEl = document.getElementById('lm-dyneq-db');
+    if (!fill || !valEl) return;
+
+    const pct = Math.max(0, Math.min(100, (energyDb + 60) / 60 * 100));
+    fill.style.width = `${pct}%`;
+    fill.style.background = energyDb > -6  ? 'var(--accent-red)'
+                          : energyDb > -18 ? 'var(--accent-orange)'
+                          :                  'var(--accent-green)';
+    valEl.textContent = `${energyDb.toFixed(1)} dB`;
+
+    const alphaFlat = Math.max(0, 1 - alphaLow - alphaHigh);
+    const lowPill  = document.getElementById('dyneq-zone-low');
+    const flatPill = document.getElementById('dyneq-zone-flat');
+    const highPill = document.getElementById('dyneq-zone-high');
+    if (!lowPill) return;
+
+    const setActive = (el, active, strength) => {
+        el.style.background = active ? el.dataset.color : '';
+        el.style.color      = active ? '#fff' : '';
+        el.style.opacity    = active ? String(0.4 + strength * 0.6) : '0.35';
+    };
+    setActive(lowPill,  alphaLow  > 0.02, alphaLow);
+    setActive(flatPill, alphaFlat > 0.5,  alphaFlat);
+    setActive(highPill, alphaHigh > 0.02, alphaHigh);
+}
+
+function renderCompanderMeter(envLinear, gainDb) {
+    const fill  = document.getElementById('lm-compander-fill');
+    const valEl = document.getElementById('lm-compander-gr');
+    if (!fill || !valEl) return;
+
+    // GR bar: gainDb is negative (reduction) → map 0..-24 dB → 0..100%
+    const grPct = Math.max(0, Math.min(100, (-gainDb) / 24 * 100));
+    fill.style.width = `${grPct}%`;
+    valEl.textContent = gainDb <= 0
+        ? `${gainDb.toFixed(1)} dB`
+        : `+${gainDb.toFixed(1)} dB`;
+}
+
+function renderDrcMeter(gains) {
+    // gains[0..3]: gain reduction dB per band (negative = reduction)
+    const grLabel = document.getElementById('lm-drc-gr');
+    if (grLabel) grLabel.textContent = `${gains[3].toFixed(1)} dB`;
+
+    gains.forEach((g, i) => {
+        const fill = document.getElementById(`lm-drc-fill-${i}`);
+        const val  = document.getElementById(`lm-drc-val-${i}`);
+        if (!fill) return;
+        const pct  = Math.max(0, Math.min(100, (-g) / 24 * 100));
+        fill.style.width = `${pct}%`;
+        if (val) val.textContent = g.toFixed(1);
+    });
+
+    // Update operating point on the compression curve graph
+    if (drcGraph) {
+        const activeBand = store.drc.activeBand ?? 3;
+        drcGraph.updateLiveMeter(gains[activeBand]);
+    }
+}
+
 // ─── ISF Panel ───────────────────────────────────────────────────────
 
 /**
@@ -2203,44 +2482,21 @@ function renderWifiList() {
     });
 }
 
-function buildBottomBar() {
-    for (let i = 0; i < 4; i++) {
-        const btn = document.getElementById(`preset-${i}`);
-        if (!btn) continue;
-        btn.addEventListener('click', () => {
-            isFetchingState = true;
-            store.setActivePreset(i);
-            sendFrame(buildLoadPreset(i));
-            showStatus(`Synchronizing Preset ${i + 1}...`, 'info');
-        });
-        btn.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            store.setActivePreset(i);
-            sendFrame(buildSavePreset(i));
-            showStatus(`Saved preset ${i + 1}`, 'ok');
-        });
-    }
 
-    document.getElementById('btn-save-preset').addEventListener('click', () => {
-        const idx = store.system.activePreset;
-        sendFrame(buildSavePreset(idx));
-        showStatus(`Saved to preset ${idx + 1}`, 'ok');
-    });
-
-    store.on('preset:active-changed', (idx) => {
-        for (let i = 0; i < 4; i++) {
-            const btn = document.getElementById(`preset-${i}`);
-            if (btn) btn.classList.toggle('active', i === idx);
-        }
-    });
-
-    // Initial highlight
-    const initialPreset = store.system.activePreset;
-    for (let i = 0; i < 4; i++) {
-        const btn = document.getElementById(`preset-${i}`);
-        if (btn) btn.classList.toggle('active', i === initialPreset);
-    }
+function buildPresetLoad(idx) {
+    store.setActivePreset(idx);
+    MODULE_ORDER.forEach(id => store.setModuleEnabled(id, false));
+    isFetchingState = true;
+    sendFrame(buildLoadPreset(idx));
+    showStatus(`Synchronizing Preset ${idx + 1}...`, 'info');
 }
+
+function buildPresetSave(event, idx) {
+    event.preventDefault();
+    store.setActivePreset(idx);
+    sendFrame(buildSavePreset(idx));
+}
+
 
 // ─── Init ────────────────────────────────────────────────────────────
 
@@ -2514,7 +2770,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Build UI
     buildAccordionModules();
-    buildBottomBar();
     updateStatusUI();
 
     // EQ Graph
@@ -2595,12 +2850,55 @@ document.addEventListener('DOMContentLoaded', () => {
         if (eqGraph) eqGraph.redraw ? eqGraph.redraw() : null;
     });
 
+    const btn1 = document.getElementById(`preset-0`);
+    const btn2 = document.getElementById(`preset-1`);
+    const btn3 = document.getElementById(`preset-2`);
+    const btn4 = document.getElementById(`preset-3`);
+    btn1.addEventListener('click', () => { buildPresetLoad(0); });
+    btn2.addEventListener('click', () => { buildPresetLoad(1); });
+    btn3.addEventListener('click', () => { buildPresetLoad(2); });
+    btn4.addEventListener('click', () => { buildPresetLoad(3); });
+
+    btn1.addEventListener('contextmenu', (e) => { buildPresetSave(e, 0); });
+    btn2.addEventListener('contextmenu', (e) => { buildPresetSave(e, 1); });
+    btn3.addEventListener('contextmenu', (e) => { buildPresetSave(e, 2); });
+    btn4.addEventListener('contextmenu', (e) => { buildPresetSave(e, 3); });
+
+    document.getElementById('btn-save-preset').addEventListener('click', () => {
+        const idx = store.system.activePreset;
+        sendFrame(buildSavePreset(idx));
+        showStatus(`Saved to preset ${idx + 1}`, 'ok');
+    });
+
+    store.on('preset:active-changed', (idx) => {
+        for (let i = 0; i < 4; i++) {
+            const btn = document.getElementById(`preset-${i}`);
+            if (btn) btn.classList.toggle('active', i === idx);
+        }
+    });
+
     setInterval(() => {
         if (!store.system.connected) return;
+
+        // ISF: firmware pushes data, client requests every 100ms
         const isf1Open = document.querySelector(`.accordion[data-module-id="${MODULE.ISF_1}"].open`);
         const isf2Open = document.querySelector(`.accordion[data-module-id="${MODULE.ISF_2}"].open`);
         if (isf1Open || isf2Open) sendFrame(buildGetIsfState());
-    }, 500);
+
+        // Dynamic module meters — only poll when the accordion is open
+        // Each returns a REPORT_* frame that renderXxxMeter() handles
+        const dynModules = [
+            { moduleId: MODULE.DYNAMIC_BASS, domId: MODULE.DYNAMIC_BASS },
+            // Dynamic EQ meter shown on the threshold sub-tab (DYNEQ_THRESH)
+            { moduleId: MODULE.DYNAMIC_EQ,   domId: 'DYNEQ_THRESH' },
+            { moduleId: MODULE.COMPANDER,    domId: MODULE.COMPANDER },
+            { moduleId: MODULE.DRC,          domId: MODULE.DRC },
+        ];
+        dynModules.forEach(({ moduleId, domId }) => {
+            const isOpen = document.querySelector(`.accordion[data-module-id="${domId}"].open`);
+            if (isOpen) sendFrame(buildGetModuleMeter(moduleId));
+        });
+    }, 100);
 
     if (isBrowser) {
         // Running in mobile browser, connect directly via WebSocket

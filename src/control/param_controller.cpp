@@ -73,6 +73,63 @@ void ParamController::handleCommand(const UartCommand& cmd) {
         case CMD_GET_ISF_STATE:
             handleGetIsfState(cmd);
             break;
+        case CMD_GET_MODULE_METER: {
+            if (cmd.dataLen < 1) break;
+            const uint8_t modId = cmd.data[0];
+
+            if (modId == MODULE_ID_DYNAMIC_BASS) {
+                // REPORT_DYNBASS: energyDb(int16 Q8.8) + alpha(int16 Q8.8)
+                const int16_t eDb = (int16_t)(_pipeline->getDynamicBass().getEnergyDb() * 256.0f);
+                const int16_t alp = (int16_t)(_pipeline->getDynamicBass().getAlpha()    * 256.0f);
+                uint8_t d[4] = {
+                    (uint8_t)(eDb     & 0xFF), (uint8_t)((eDb >> 8) & 0xFF),
+                    (uint8_t)(alp     & 0xFF), (uint8_t)((alp >> 8) & 0xFF)
+                };
+                _uart->sendFrame(CMD_REPORT_DYNBASS, MODULE_ID_DYNAMIC_BASS, d, sizeof(d));
+            }
+
+            else if (modId == MODULE_ID_DYNAMIC_EQ) {
+                // REPORT_DYNEQ: energyDb(int16 Q8.8) + alphaLow(int16 Q8.8) + alphaHigh(int16 Q8.8)
+                const DynamicEQ& deq = _pipeline->getDynamicEq();
+                const int16_t eDb  = (int16_t)(deq.getEnergyDb()  * 256.0f);
+                const int16_t aLow = (int16_t)(deq.getAlphaLow()  * 256.0f);
+                const int16_t aHi  = (int16_t)(deq.getAlphaHigh() * 256.0f);
+                uint8_t d[6] = {
+                    (uint8_t)(eDb  & 0xFF), (uint8_t)((eDb  >> 8) & 0xFF),
+                    (uint8_t)(aLow & 0xFF), (uint8_t)((aLow >> 8) & 0xFF),
+                    (uint8_t)(aHi  & 0xFF), (uint8_t)((aHi  >> 8) & 0xFF)
+                };
+                _uart->sendFrame(CMD_REPORT_DYNEQ, MODULE_ID_DYNAMIC_EQ, d, sizeof(d));
+            }
+
+            else if (modId == MODULE_ID_COMPANDER) {
+                // REPORT_COMPANDER: envLinear(uint16 Q1.14) + gainDb(int16 Q8.8)
+                // Q1.14: 0..1.0 → 0..16384, clamp tại 16383
+                const Compander& comp   = _pipeline->getCompander();
+                const float      envLin = comp.getEnvLinear();
+                const float      gainDb = comp.getGainDb();
+                const uint16_t   envQ   = (uint16_t)(envLin >= 1.0f ? 16383 : (uint16_t)(envLin * 16384.0f));
+                const int16_t    gQ88   = (int16_t)(gainDb * 256.0f);
+                uint8_t d[4] = {
+                    (uint8_t)(envQ & 0xFF), (uint8_t)((envQ >> 8) & 0xFF),
+                    (uint8_t)(gQ88 & 0xFF), (uint8_t)((gQ88 >> 8) & 0xFF)
+                };
+                _uart->sendFrame(CMD_REPORT_COMPANDER, MODULE_ID_COMPANDER, d, sizeof(d));
+            }
+
+            else if (modId == MODULE_ID_DRC) {
+                // REPORT_DRC: 4 × gainDb(int16 Q8.8) — bands 0(Low), 1(Mid), 2(High), 3(Full)
+                const DRC& drc = _pipeline->getDrc();
+                uint8_t d[8];
+                for (int b = 0; b < 4; b++) {
+                    const int16_t gQ88 = (int16_t)(drc.getBandGainDb((uint8_t)b) * 256.0f);
+                    d[b * 2]     = (uint8_t)(gQ88 & 0xFF);
+                    d[b * 2 + 1] = (uint8_t)((gQ88 >> 8) & 0xFF);
+                }
+                _uart->sendFrame(CMD_REPORT_DRC, MODULE_ID_DRC, d, sizeof(d));
+            }
+            break;
+        }
 
         case CMD_SAVE_PRESET:
             if (cmd.dataLen >= 1) {
@@ -84,7 +141,12 @@ void ParamController::handleCommand(const UartCommand& cmd) {
             if (cmd.dataLen >= 1) {
                 bool ok = _presetMgr->loadPreset(cmd.data[0], *_pipeline);
                 _presetMgr->saveCurrentSlotIndex(cmd.data[0]);
-                _uart->sendAck(cmd.moduleId, ok ? 0 : 1);
+                if (ok) {
+                    // Thay vì sendAck, gửi toàn bộ state ngay (bao gồm ACK ở cuối)
+                    handleGetAllState(cmd);
+                } else {
+                    _uart->sendAck(cmd.moduleId, 1);
+                }
             }
             break;
         case CMD_GET_ALL_STATE:
@@ -306,8 +368,6 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     uint8_t maskPkt[2] = { (uint8_t)(mask & 0xFF), (uint8_t)(mask >> 8) };
     _uart->sendFrame(CMD_REPORT_ENABLE_MASK, MODULE_ID_SYSTEM, maskPkt, 2);
 
-    
-
     // --- Send ISF presets for both instances ---
     // (UI needs to know preset configs on connect)
     for (uint8_t inst = 0; inst < 2; inst++) {
@@ -366,7 +426,11 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
 
     // Volume
     sendPkt(MODULE_ID_POST_GAIN, 0, _pipeline->getPostGain()._gainDb);
+    sendPkt(MODULE_ID_POST_GAIN, 1,  _pipeline->getPostGain().isMuted() ? 1 : 0);
+    sendPkt(MODULE_ID_POST_GAIN, 2, _pipeline->getPostGain().isMono()   ? 1 : 0);
     sendPkt(MODULE_ID_PRE_GAIN, 0, _pipeline->getPreGain()._gainDb);
+    sendPkt(MODULE_ID_PRE_GAIN, 1, _pipeline->getPreGain().isMuted() ? 1 : 0);
+    sendPkt(MODULE_ID_PRE_GAIN, 2, _pipeline->getPreGain().isMono()  ? 1 : 0);
 
     // CP
     sendPkt(MODULE_ID_COMPANDER, 0, _pipeline->getCompander()._thresholdDbInt);
@@ -445,6 +509,9 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     sendEq(CMD_SET_DYNEQ_LOW_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqLow);
     sendEq(CMD_SET_DYNEQ_HIGH_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqHigh);
 
+    pkt[0] = _presetMgr->getCurrentPresetIndex();
+    _uart->sendFrame(CMD_GET_CURRENT_PRESET_INDEX, MODULE_ID_SYSTEM, pkt, 1);
+
     // Tell host we're done
     _uart->sendAck(MODULE_ID_SYSTEM, 0);
     _uart->endBatch();
@@ -489,11 +556,6 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
     // pregain(2) + band(1) + enabled(1) + type(1) + freq(2) + gain(2) + Q(2) = 11 bytes
     if (cmd.dataLen < 11) { _uart->sendAck(cmd.moduleId, 1); return; }
 
-    ParametricEQ* eq = nullptr;
-    if      (cmd.moduleId == MODULE_ID_EQ_DSP_1)  eq = &_pipeline->getEqDsp_1();
-    else if (cmd.moduleId == MODULE_ID_EQ_DSP_2)  eq = &_pipeline->getEqDsp_2();
-    else { _uart->sendAck(cmd.moduleId, 1); return; }
-
     int16_t pregainQ88 = extractInt16(&cmd.data[0]);
     uint8_t bandIdx    = cmd.data[2];
     EQFilterParams params;
@@ -503,9 +565,29 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
     params.gain    = extractInt16(&cmd.data[7]);
     params.Q       = extractUint16(&cmd.data[9]);
 
-    eq->setPregain(pregainQ88);
-    eq->setBand(bandIdx, params);
-    LOG_INFO(TAG, "PARAMETRIC_EQ: eq:%d pregain:%f dB, bandIdx:%d, type:%d, freq:%d Hz, gain:%f dB, Q:%f", (cmd.moduleId == MODULE_ID_EQ_DSP_1) ? 1 : 2, (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
+    ParametricEQ *eq = nullptr;
+    uint8_t realBand = bandIdx;
+    if (cmd.moduleId == MODULE_ID_EQ_DSP_1) {
+        eq = &_pipeline->getEqDsp_1();
+        eq->setPregain(pregainQ88);
+    } else if (cmd.moduleId == MODULE_ID_EQ_DSP_2) {
+        eq = &_pipeline->getEqDsp_2();
+        eq->setPregain(pregainQ88); // q8.8 format;
+    } else if (cmd.moduleId == MODULE_ID_LEFTRIGHT_EQ) {
+        if (bandIdx & 0x80) {
+            eq = &_pipeline->getLeftRightEq().getEqRight();
+            realBand = bandIdx & 0x7F;
+        } else {
+            eq = &_pipeline->getLeftRightEq().getEqLeft();
+        }
+        eq->setPregain(pregainQ88);
+    }
+    if (eq && realBand < MAX_EQ_BANDS) {
+        eq->setBand(realBand, params); // q8.8 format
+    } else {
+        _uart->sendAck(cmd.moduleId, 1); return;
+    }
+    LOG_INFO(TAG, "PARAMETRIC_EQ: eq:%s pregain:%f dB, bandIdx:%d, type:%d, freq:%d Hz, gain:%f dB, Q:%f", (cmd.moduleId == MODULE_ID_LEFTRIGHT_EQ) ? "Left/Right" : (cmd.moduleId == MODULE_ID_EQ_DSP_1) ? "1" : "2", (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
     _uart->sendAck(cmd.moduleId, 0);
 }
 
@@ -556,10 +638,12 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
         case MODULE_ID_PRE_GAIN:
             if (paramId == 0) _pipeline->getPreGain().setGainDb((int16_t)value);
             else if (paramId == 1) _pipeline->getPreGain().setMute(value != 0);
+            else if (paramId == 2) _pipeline->getPreGain().setMono(value != 0);
             break;
         case MODULE_ID_POST_GAIN:
             if (paramId == 0) _pipeline->getPostGain().setGainDb((int16_t)value);
             else if (paramId == 1) _pipeline->getPostGain().setMute(value != 0);
+            else if (paramId == 2) _pipeline->getPostGain().setMono(value != 0);
             break;
         case MODULE_ID_COMPANDER:
             switch (paramId) {
@@ -590,6 +674,36 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
                 case 7: _pipeline->getDynamicBass().setClipRelease(value);        break;
             }
             break;
+        case MODULE_ID_DRC: {
+            DRC &drc = _pipeline->getDrc();
+
+            // ── Global params (paramId 0x10 - 0x1F) ────────────────────────
+            if (paramId == 0x10) { drc.setMode((DRCMode)value);                   break; }
+            if (paramId == 0x11) { drc.setCrossoverType((DRCCrossoverType)value); break; }
+            if (paramId == 0x12) { drc.setCrossoverFreq(0, value);                break; }
+            if (paramId == 0x13) { drc.setCrossoverFreq(1, value);                break; }
+            if (paramId == 0x14) { drc.setCrossoverQ(0, value);                   break; }
+            if (paramId == 0x15) { drc.setCrossoverQ(1, value);                   break; }
+
+            // ── Per-band params (paramId 0x20 - 0x3F) ──────────────────────
+            // Encoding: paramId = 0x20 + band*8 + param
+            //   band 0 → 0x20-0x27, band 1 → 0x28-0x2F
+            //   band 2 → 0x30-0x37, band 3 (fullband) → 0x38-0x3F
+            // param: 0=threshold, 1=ratio, 2=attack, 3=release, 4=pregain
+            if (paramId >= 0x20 && paramId <= 0x3F) {
+                uint8_t band  = (paramId - 0x20) >> 3;  // 0-3
+                uint8_t param = (paramId - 0x20) & 0x07; // 0-4
+                switch (param) {
+                    case 0: drc.setThreshold(band, value);    break;
+                    case 1: drc.setRatio(band, value);        break;
+                    case 2: drc.setAttackTime(band, value);   break;
+                    case 3: drc.setReleaseTime(band, value);  break;
+                    case 4: drc.setPregain(band, value);      break;
+                    default: _uart->sendError(0x04); return;
+                }
+            }
+            break;
+        }
         default:
             LOG_WARN(TAG, "SET_PARAM: unhandled moduleId 0x%02X", cmd.moduleId);
             _uart->sendAck(cmd.moduleId, 1);
