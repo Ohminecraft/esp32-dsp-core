@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-#define FIRMWARE_VERSION "1.4"
+#define FIRMWARE_VERSION "1.4.1-hotfix"
 
 // ============================================================================
 // Audio Configuration
