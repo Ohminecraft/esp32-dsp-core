@@ -75,6 +75,14 @@ public:
     void setReleaseTime(uint8_t band, int32_t ms);
     void setPregain(uint8_t band, int32_t gain_q412);
 
+    // ---- Runtime state getters (for live meter) ----
+    // gainDb cho từng band (0-2 = sub-bands, 3 = fullband), âm = gain reduction
+    float getBandGainDb(uint8_t band) const {
+        if (band >= MAX_BANDS) return 0.0f;
+        float g = _bands[band].state.gainLinear;
+        return (g > 0.0f) ? (20.0f * log10f(g)) : -96.0f;
+    }
+
 private:
     static const int MAX_BANDS = 4;  // [0]=band1 [1]=band2 [2]=band3 [3]=fullband
 

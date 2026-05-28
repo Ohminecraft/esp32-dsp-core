@@ -35,6 +35,13 @@ export const CMD = {
     REPORT_ISF_PRESET: 0x42, // Push ISF preset data
     REPORT_ISF_BAND_PER_PRESET: 0x43,
     REPORT_ENABLE_MASK: 0x44,
+    CURRENT_PRESET_INDEX: 0x45,
+    // Live meter reports — sent by firmware when UI polls GET_MODULE_METER
+    REPORT_DYNBASS:   0x46, // energyDb(int16 Q8.8) + alpha(int16 Q8.8)
+    REPORT_DYNEQ:     0x47, // energyDb(int16 Q8.8) + alphaLow(int16 Q8.8) + alphaHigh(int16 Q8.8)
+    REPORT_COMPANDER: 0x48, // envLinear(int16 Q1.14) + gainDb(int16 Q8.8)
+    REPORT_DRC:       0x49, // band0GainDb(int16 Q8.8) × 4 bands
+    GET_MODULE_METER: 0x4A, // Request one meter report; data[0]=moduleId
     ACK_RESPONSE: 0xFE,
     ERROR: 0xFF
 };
@@ -165,8 +172,14 @@ export function buildLoadPreset(slot) { return buildFrame(CMD.LOAD_PRESET, MODUL
 export function buildSetInputSource(src) { return buildFrame(CMD.SET_INPUT_SOURCE, MODULE.SYSTEM, [src]); }
 export function buildSetOutputSource(src) { return buildFrame(CMD.SET_OUTPUT_SOURCE, MODULE.SYSTEM, [src]); }
 
+/** Request GET_MODULE_ALIVE, deprecated, see above */
 export function buildGetAllState() {
     return buildFrame(CMD.GET_ALL_STATE, MODULE.SYSTEM);
+}
+
+/** Request a live meter snapshot for one dynamic module. */
+export function buildGetModuleMeter(moduleId) {
+    return buildFrame(CMD.GET_MODULE_METER, MODULE.SYSTEM, [moduleId]);
 }
 
 // ─── ISF Builders ──────────────────────────────────────────────────────

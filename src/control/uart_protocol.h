@@ -44,6 +44,12 @@ class AsyncWebSocketClient;
 #define CMD_REPORT_ISF_PRESET          0x42
 #define CMD_REPORT_ISF_BAND_PER_PRESET 0x43
 #define CMD_REPORT_ENABLE_MASK         0x44
+#define CMD_GET_CURRENT_PRESET_INDEX   0x45
+#define CMD_REPORT_DYNBASS             0x46
+#define CMD_REPORT_DYNEQ               0x47
+#define CMD_REPORT_COMPANDER           0x48
+#define CMD_REPORT_DRC                 0x49
+#define CMD_GET_MODULE_METER           0x4A
 
 #define CMD_ACK_RESPONSE 0xFE
 #define CMD_ERROR 0xFF

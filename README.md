@@ -60,7 +60,7 @@ ESP32 DSP Core is a professional audio platform featuring:
 ├─────────────────────────────┬───────────────────────────────┤
 │  Core 0 (Control & Web)     │  Core 1 (Audio DSP)           │
 │  ├─ WebSocket Server        │  ├─ I2S Input (96kHz)         │
-│  ├─ UART Protocol Handler   │  ├─ DSP Pipeline (10 modules) │
+│  ├─ UART Protocol Handler   │  ├─ DSP Pipeline (12 modules) │
 │  ├─ Clock Monitor (PCNT)    │  ├─ Sample Rate Auto-Sync     │
 │  └─ NVS Preset Manager      │  └─ I2S Output (Master)       │
 └──────────────┬──────────────┴───────────────────────────────┘
@@ -74,7 +74,7 @@ ESP32 DSP Core is a professional audio platform featuring:
 ```
 
 ### Signal Chain
-`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → Left/Right EQ → Multi-band DRC → Post Gain → OUTPUT`
+`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → ISF EQ 1 → ISF EQ 2 → EQ1 → EQ2 → Left/Right EQ → Multi-band DRC → Post Gain → OUTPUT`
 
 ---
 
@@ -110,7 +110,7 @@ Serve the control interface directly from the ESP32 SPIFFS.
 
 ESP32 DSP Core là một framework xử lý âm thanh kỹ thuật số (DSP) hiệu năng cao, chạy real-time trên dòng chip ESP32/ESP32-S3. Dự án cung cấp chuỗi xử lý modular, các thuật toán âm thanh chuyên nghiệp và giao diện điều khiển kép (USB Serial & WiFi WebSocket).
 
-**Trạng thái**: ✅ Hoàn thiện & Hiệu năng cao | **Tần số mẫu**: 96 kHz (Tự động đồng bộ) | **Độ trễ**: 2.67ms | **Kết nối**: UART + WebSocket
+**Tần số mẫu tối đa**: 96 kHz (Tự động đồng bộ) | **Độ trễ**: 2.67ms | **Kết nối**: UART + WebSocket
 
 ### 🎯 Điểm nổi bật
 - **Xử lý Song nhân**: Core 1 dành riêng cho audio; Core 0 xử lý kết nối và hệ thống.

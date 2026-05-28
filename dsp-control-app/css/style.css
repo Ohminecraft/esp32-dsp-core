@@ -1104,6 +1104,75 @@ body {
     min-width: 90px; flex-shrink: 0;
 }
 
+/* ── Generic Live Meter (Dynamic Bass, Dynamic EQ, Compander, DRC) ── */
+.lm-wrap {
+    background: var(--bg-input);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    padding: 8px 10px 10px;
+    margin-bottom: 10px;
+}
+.lm-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 5px;
+}
+.lm-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-dim);
+}
+.lm-value {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+    color: var(--accent-dark); background: var(--accent-light);
+    padding: 1px 6px; border-radius: var(--radius-sm); min-width: 52px;
+    text-align: center;
+}
+.lm-value-red {
+    color: #fff; background: var(--accent-red);
+}
+.lm-track {
+    height: 6px; background: var(--bg-surface);
+    border-radius: 3px; border: 1px solid var(--border-light);
+    overflow: hidden; margin-bottom: 6px;
+}
+.lm-track-sm { height: 4px; margin-bottom: 0; flex: 1; }
+.lm-fill {
+    height: 100%; width: 0%;
+    background: var(--accent-green);
+    border-radius: 3px;
+    transition: width 0.12s ease, background 0.15s ease;
+}
+.lm-fill-red { background: var(--accent-red); }
+
+/* Zone pills row (Dynamic Bass / Dynamic EQ) */
+.lm-zones {
+    display: flex; gap: 5px; flex-wrap: wrap;
+}
+.lm-zone-pill {
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.4px; padding: 2px 8px;
+    border-radius: 20px;
+    border: 1px solid var(--border-light);
+    background: transparent;
+    color: var(--text-secondary);
+    opacity: 0.35;
+    transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+    user-select: none;
+}
+
+/* Multi-band GR rows (DRC) */
+.lm-gr-rows { display: flex; flex-direction: column; gap: 3px; }
+.lm-gr-row {
+    display: flex; align-items: center; gap: 6px;
+}
+.lm-gr-row-label {
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    color: var(--text-dim); min-width: 26px; flex-shrink: 0;
+}
+.lm-gr-row-val {
+    font-family: var(--font-mono); font-size: 9px;
+    color: var(--text-secondary); min-width: 30px; text-align: right; flex-shrink: 0;
+}
+
 /* Tabs */
 .isf-tabs-wrap { display: flex; flex-direction: column; }
 .isf-tab-actions { display: flex; gap: 6px; margin-bottom: 6px; }

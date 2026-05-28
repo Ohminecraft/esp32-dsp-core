@@ -48,6 +48,8 @@ struct PresetData {
     uint16_t en_mask;       // Chain enable bits (now 12 bits for 12 modules)
     int16_t  vol_db;
     int16_t  pre_vol_db;
+    int8_t   vol_mono;      // 0 = stereo, 1 = mono
+    int8_t   pre_vol_mono;  // 0 = stereo, 1 = mono
 
     // ── Compander ─────────────────────────────────────────────────────────────
     int32_t cp_thresholdDb, cp_ratioBelow, cp_ratioAbove;
@@ -252,6 +254,8 @@ void PresetManager::saveDefault(uint8_t slot) {
     pd.en_mask    = (1u << 0) | (1u << 11);
     pd.vol_db     = 0;
     pd.pre_vol_db = 0;
+    pd.vol_mono   = 0;
+    pd.pre_vol_mono = 0;
 
     // Compander defaults
     pd.cp_thresholdDb  = -2000;
@@ -338,6 +342,8 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.en_mask    = mask;
     pd.vol_db     = pipeline.getPostGain()._gainDb;
     pd.pre_vol_db = pipeline.getPreGain()._gainDb;
+    pd.vol_mono   = pipeline.getPostGain().isMono() ? 1 : 0;
+    pd.pre_vol_mono = pipeline.getPreGain().isMono() ? 1 : 0;
 
     // Compander
     pd.cp_thresholdDb = pipeline.getCompander()._thresholdDbInt;
@@ -464,6 +470,8 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
 
     pipeline.getPostGain().setGainDb(pd.vol_db);
     pipeline.getPreGain().setGainDb(pd.pre_vol_db);
+    pipeline.getPostGain().setMono(pd.vol_mono != 0);
+    pipeline.getPreGain().setMono(pd.pre_vol_mono != 0);
 
     pipeline.getCompander().setThreshold(pd.cp_thresholdDb);
     pipeline.getCompander().setRatioBelow(pd.cp_ratioBelow);
@@ -525,6 +533,8 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     // ISF
     loadIsfInstance(pipeline.getIsf1(), pd.isf1, pipeline.getIsf1()._sampleRate);
     loadIsfInstance(pipeline.getIsf2(), pd.isf2, pipeline.getIsf2()._sampleRate);
+
+    currentpresetidx = slot;
 
     LOG_INFO(TAG, "Loaded preset from slot %d", slot);
     return true;

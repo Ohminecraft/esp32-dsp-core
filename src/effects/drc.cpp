@@ -95,36 +95,75 @@ void DRC::recalcBand(uint8_t band) {
 }
 
 // ============================================================================
-// designCrossover — Linkwitz-Riley LP/HP filter pair
+// designCrossover — crossover LP/HP filter pair per SDK DRC init table
 //
-// LR2 (order=2):
-//   LP: 2nd-order Butterworth LP → one Biquad stage
-//   HP: 2nd-order Butterworth HP → one Biquad stage
-//   Sum LP+HP = flat (LR property)
+//   DRC_CF_NONE : fullband mode, crossover không dùng (không gọi hàm này)
+//   DRC_CF_B1   : 1st-order Butterworth (ORDER1 biquad), single stage
+//   DRC_CF_LR2  : 2nd-order Linkwitz-Riley = 1 Butterworth biquad Q=0.7071
+//   DRC_CF_LR4  : 4th-order Linkwitz-Riley = 2 cascaded Butterworth Q=0.7071
+//   DRC_CF_Q4   : 4th-order Q-controlled   = 2 cascaded biquads với q_l/q_h
+//                 Q từ UI ở dạng Q6.10 (717 = 0.70) → chia 1024 để lấy float
 //
-// LR4 (order=4):
-//   LP: two cascaded LR2 LP stages
-//   HP: two cascaded LR2 HP stages
+//   B1 và LR2 chỉ dùng stage[0]; stage[1] bypass (LP@20kHz / HP@1Hz).
+//   LR4 và Q4  dùng cả stage[0] và stage[1] (cascaded).
+//
+// Bảng sử dụng theo SDK (xem DRC init doc):
+//   q_l, q_h   : chỉ đọc khi cf_type == DRC_CF_Q4
+//   fc[0]      : dùng khi mode có ít nhất 2 band
+//   fc[1]      : chỉ dùng khi mode có 3 band
 // ============================================================================
 void DRC::designCrossover(uint8_t idx) {
     if (idx >= DRC_MAX_CROSSOVERS) return;
 
-    const float fc = (float)_fc[idx];
-    const float fs = (float)_sampleRate;
+    const float fc  = (float)_fc[idx];
+    const float fs  = (float)_sampleRate;
+    // Q6.10 → float: 717 = 0.70, 1024 = 1.0 (chỉ dùng với DRC_CF_Q4)
+    const float qLp = (float)_qLp / 1024.0f;
+    const float qHp = (float)_qHp / 1024.0f;
 
-    // LR2: Butterworth LP/HP (Q=0.7071 for maximally flat)
-    // The two Biquads sum flat regardless of Q when using standard LR design.
-    _xoverLp[idx][0].design(EQ_FILTER_TYPE_LOW_PASS,  fc, 0.7071f, 0.0f, fs);
-    _xoverHp[idx][0].design(EQ_FILTER_TYPE_HIGH_PASS, fc, 0.7071f, 0.0f, fs);
+    switch (_cfType) {
 
-    if (_cfType == DRC_CF_LR4) {
-        // Second stage: same fc for LR4 (two cascaded LR2 = LR4)
-        _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  fc, 0.7071f, 0.0f, fs);
-        _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS, fc, 0.7071f, 0.0f, fs);
-    } else {
-        // Bypass second stage (unity gain): coeffs b0=1, rest=0
-        _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  20000.0f, 0.7071f, 0.0f, fs);
-        _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS, 1.0f,     0.7071f, 0.0f, fs);
+        case DRC_CF_B1:
+            // 1st-order: single ORDER1 biquad, stage[1] bypass
+            _xoverLp[idx][0].design(EQ_FILTER_TYPE_LOW_PASS_ORDER1,  fc, 0.7071f, 0.0f, fs);
+            _xoverHp[idx][0].design(EQ_FILTER_TYPE_HIGH_PASS_ORDER1, fc, 0.7071f, 0.0f, fs);
+            _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  20000.0f, 0.7071f, 0.0f, fs);
+            _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS,     1.0f, 0.7071f, 0.0f, fs);
+            break;
+
+        case DRC_CF_LR2:
+            // 2nd-order LR: 1 Butterworth biquad Q=0.7071, stage[1] bypass
+            _xoverLp[idx][0].design(EQ_FILTER_TYPE_LOW_PASS,  fc, 0.7071f, 0.0f, fs);
+            _xoverHp[idx][0].design(EQ_FILTER_TYPE_HIGH_PASS, fc, 0.7071f, 0.0f, fs);
+            _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  20000.0f, 0.7071f, 0.0f, fs);
+            _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS,     1.0f, 0.7071f, 0.0f, fs);
+            break;
+
+        case DRC_CF_LR4:
+            // 4th-order LR: 2 cascaded Butterworth biquads Q=0.7071
+            _xoverLp[idx][0].design(EQ_FILTER_TYPE_LOW_PASS,  fc, 0.7071f, 0.0f, fs);
+            _xoverHp[idx][0].design(EQ_FILTER_TYPE_HIGH_PASS, fc, 0.7071f, 0.0f, fs);
+            _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  fc, 0.7071f, 0.0f, fs);
+            _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS, fc, 0.7071f, 0.0f, fs);
+            break;
+
+        case DRC_CF_Q4:
+            // 4th-order Q-controlled: 2 cascaded biquads với q_l và q_h từ UI
+            // SDK: q_l cho LP path, q_h cho HP path; cả 2 stage dùng cùng Q
+            _xoverLp[idx][0].design(EQ_FILTER_TYPE_LOW_PASS,  fc, qLp, 0.0f, fs);
+            _xoverHp[idx][0].design(EQ_FILTER_TYPE_HIGH_PASS, fc, qHp, 0.0f, fs);
+            _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  fc, qLp, 0.0f, fs);
+            _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS, fc, qHp, 0.0f, fs);
+            break;
+
+        case DRC_CF_NONE:
+        default:
+            // Fullband mode — không có crossover, bypass toàn bộ
+            _xoverLp[idx][0].design(EQ_FILTER_TYPE_LOW_PASS,  20000.0f, 0.7071f, 0.0f, fs);
+            _xoverHp[idx][0].design(EQ_FILTER_TYPE_HIGH_PASS,     1.0f, 0.7071f, 0.0f, fs);
+            _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  20000.0f, 0.7071f, 0.0f, fs);
+            _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS,     1.0f, 0.7071f, 0.0f, fs);
+            break;
     }
 }
 
@@ -225,13 +264,15 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
     memcpy(_subBandPtr[0], samples, frameStereo * sizeof(float));
 
     // ── 1st crossover: LP → band0, HP → band1 (and band2 if 3-band) ──
+    // Stage[1] chỉ active khi cf_type là LR4 hoặc Q4 (2 cascaded stages)
+    const bool needsTwoStages = (_cfType == DRC_CF_LR4 || _cfType == DRC_CF_Q4);
     {
         // LP path for band0
         for (size_t i = 0; i < numSamples; i++) {
             for (int ch = 0; ch < _numChannels; ch++) {
                 float s = _subBandPtr[0][i * _numChannels + ch];
                 s = _xoverLp[0][0].processSample(s, ch);
-                if (_cfType == DRC_CF_LR4) s = _xoverLp[0][1].processSample(s, ch);
+                if (needsTwoStages) s = _xoverLp[0][1].processSample(s, ch);
                 _subBandPtr[0][i * _numChannels + ch] = s;
             }
         }
@@ -242,7 +283,7 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
             for (int ch = 0; ch < _numChannels; ch++) {
                 float s = _subBandPtr[1][i * _numChannels + ch];
                 s = _xoverHp[0][0].processSample(s, ch);
-                if (_cfType == DRC_CF_LR4) s = _xoverHp[0][1].processSample(s, ch);
+                if (needsTwoStages) s = _xoverHp[0][1].processSample(s, ch);
                 _subBandPtr[1][i * _numChannels + ch] = s;
             }
         }
@@ -259,13 +300,13 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
                 // Mid band (LP of HP)
                 float sMid = _subBandPtr[1][i * _numChannels + ch];
                 sMid = _xoverLp[1][0].processSample(sMid, ch);
-                if (_cfType == DRC_CF_LR4) sMid = _xoverLp[1][1].processSample(sMid, ch);
+                if (needsTwoStages) sMid = _xoverLp[1][1].processSample(sMid, ch);
                 _subBandPtr[1][i * _numChannels + ch] = sMid;
 
                 // High band (HP of HP)
                 float sHi = _subBandPtr[2][i * _numChannels + ch];
                 sHi = _xoverHp[1][0].processSample(sHi, ch);
-                if (_cfType == DRC_CF_LR4) sHi = _xoverHp[1][1].processSample(sHi, ch);
+                if (needsTwoStages) sHi = _xoverHp[1][1].processSample(sHi, ch);
                 _subBandPtr[2][i * _numChannels + ch] = sHi;
             }
         }
