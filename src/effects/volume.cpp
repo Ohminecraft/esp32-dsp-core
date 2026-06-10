@@ -15,12 +15,11 @@ void IRAM_ATTR VolumeControl::process(float* __restrict samples, size_t numSampl
     if (!_enabled) return;
 
     if (_mono && _numChannels == 2) {
-        // Mono mode: Sum Left and Right, average them, and apply gain
         float gainStep = (_targetGain - _currentGain) / (float)numSamples;
         for (size_t i = 0; i < numSamples; i++) {
             float l = samples[i * 2];
             float r = samples[i * 2 + 1];
-            float mono = 0.707f * l + 0.707f * r;
+            float mono = (l + r) * 0.5f; // Convert to mono by averaging L and R
 
             samples[i * 2]     = mono * _currentGain;
             samples[i * 2 + 1] = mono * _currentGain;

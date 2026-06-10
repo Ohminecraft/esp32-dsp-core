@@ -22,6 +22,7 @@
 
 #include "dsp_module.h"
 #include "helper/biquad.h"
+#include "../utils/psram.h"
 #include "../utils/fixed_math.h"
 #include "../utils/dynamics_processor.h"
 #include "config.h"
@@ -49,6 +50,14 @@ struct DRCBand {
 
     // ── Run-time state ──────────────────────────────────────────────
     EnvelopeState state;
+
+    // ── Per-band lookahead delay buffer ──────────────────────────────
+    // Allocated in PSRAM to avoid DRAM overflow (~7.7 KB per band × 4).
+    static constexpr int DRC_LOOKAHEAD_MAX = 960; // 10ms @ 96kHz
+    float   lookaheadMs      = 0.0f;
+    int     lookaheadSamples = 0;
+    int     laWriteIdx       = 0;
+    float*  laDelayBuf       = nullptr; // PSRAM: (DRC_LOOKAHEAD_MAX+1)*2 floats
 };
 
 class DRC : public DspModule {
@@ -74,6 +83,9 @@ public:
     void setAttackTime(uint8_t band, int32_t ms);
     void setReleaseTime(uint8_t band, int32_t ms);
     void setPregain(uint8_t band, int32_t gain_q412);
+    // Lookahead: 0.0 = disabled (no latency). Typical: 3–8 ms.
+    // band: 0-2 = sub-bands, 3 = fullband. Flushes the band's delay buffer on change.
+    void setLookahead(uint8_t band, float ms);
 
     // ---- Runtime state getters (for live meter) ----
     // gainDb cho từng band (0-2 = sub-bands, 3 = fullband), âm = gain reduction

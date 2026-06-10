@@ -114,8 +114,10 @@
 // ============================================================================
 
 #define DISABLE_PERF_LOG
-
+//#define ONLY_SERIAL
+#define USING_TRIGGERS
 #define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
+
 #define AUTO_SHUTDONW_TIMER_MS 1800000 // 30min
 #define SHUTDOWN_COUNTDOWN_MS 5000 // 5s
 
@@ -123,7 +125,7 @@
 // More features can be added here in future (e.g., double-click, long-press) if needed.
 // Can customize gpio and timing parameters in web app or electron app (future).
 #define TRIGGER_GPIO_ACTIVE_LEVEL   HIGH    // Active state level (HIGH/LOW)
-#define TRIGGER_SINGLE_DURATION_MS  200     // Duration for single click (ms)
+#define TRIGGER_SINGLE_DURATION_MS  1100    // Duration for single click (ms)
 #define TRIGGER_TRIPLE_DURATION_MS  4000    // Duration for triple click (ms)
 
 #define MUTE_PIN_LOGIC LOW

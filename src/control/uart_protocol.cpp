@@ -123,6 +123,7 @@ void UartProtocol::sendFrame(uint8_t cmd, uint8_t moduleId, const uint8_t* data,
     Serial2.write(crc);
 
     // ── Dual output: broadcast to WebSocket clients ────────────────────────
+    #ifndef ONLY_SERIAL
     if (_ws && _ws->count() > 0) {
         size_t totalLen = 7 + dataLen; 
         
@@ -149,6 +150,7 @@ void UartProtocol::sendFrame(uint8_t cmd, uint8_t moduleId, const uint8_t* data,
             }
         }
     }
+    #endif
 }
 
 void UartProtocol::startBatch() {

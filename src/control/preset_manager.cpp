@@ -54,6 +54,7 @@ struct PresetData {
     // ── Compander ─────────────────────────────────────────────────────────────
     int32_t cp_thresholdDb, cp_ratioBelow, cp_ratioAbove;
     int32_t cp_attackMs, cp_releaseMs, cp_pregainQ412;
+    int32_t cp_lookaheadMs10; // ms × 10 (e.g. 50 = 5.0ms); 0 = disabled
 
     // ── Exciter ───────────────────────────────────────────────────────────────
     int32_t ex_cutoffFreq, ex_dry, ex_wet;
@@ -66,6 +67,7 @@ struct PresetData {
     // ── DRC ───────────────────────────────────────────────────────────────────
     int32_t drc_thresholdDb, drc_ratio, drc_attackMs, drc_releaseMs, drc_pregainQ412;
     int32_t drc_mode;
+    int32_t drc_lookaheadMs10[4]; // per-band ms×10; index 3 = fullband
 
     // ── EQ1 / EQ2 ─────────────────────────────────────────────────────────────
     int16_t        eq1_pregain_q88;
@@ -264,6 +266,7 @@ void PresetManager::saveDefault(uint8_t slot) {
     pd.cp_attackMs     = 10;
     pd.cp_releaseMs    = 200;
     pd.cp_pregainQ412  = 4096;
+    pd.cp_lookaheadMs10 = 0;  // disabled by default
 
     // Exciter defaults
     pd.ex_cutoffFreq = 3000;
@@ -286,6 +289,7 @@ void PresetManager::saveDefault(uint8_t slot) {
     pd.drc_releaseMs   = 160;
     pd.drc_pregainQ412 = 4096;
     pd.drc_mode        = DRC_MODE_FULLBAND;
+    memset(pd.drc_lookaheadMs10, 0, sizeof(pd.drc_lookaheadMs10)); // disabled by default
 
     // DynEQ defaults
     pd.deq_lowThresh  = -4000;
@@ -352,6 +356,7 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.cp_attackMs    = pipeline.getCompander()._attackMs;
     pd.cp_releaseMs   = pipeline.getCompander()._releaseMs;
     pd.cp_pregainQ412 = pipeline.getCompander()._pregainQ412;
+    pd.cp_lookaheadMs10 = (int32_t)(pipeline.getCompander()._lookaheadMs * 10.0f + 0.5f);
 
     // Exciter
     pd.ex_cutoffFreq = pipeline.getExciter()._fCut;
@@ -375,6 +380,8 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.drc_releaseMs   = pipeline.getDrc()._bands[3].releaseMs;
     pd.drc_pregainQ412 = pipeline.getDrc()._bands[3].pregainQ412;
     pd.drc_mode        = (int32_t)pipeline.getDrc()._mode;
+    for (int b = 0; b < 4; b++)
+        pd.drc_lookaheadMs10[b] = (int32_t)(pipeline.getDrc()._bands[b].lookaheadMs * 10.0f + 0.5f);
 
     // EQ1 / EQ2
     pd.eq1_pregain_q88 = pipeline.getEqDsp_1().getPregain();
@@ -455,6 +462,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     if (pd.cp_ratioAbove  < 100) pd.cp_ratioAbove = 400;
     if (pd.cp_attackMs    <= 0) pd.cp_attackMs    = 10;
     if (pd.cp_releaseMs   <= 0) pd.cp_releaseMs   = 100;
+    if (pd.cp_lookaheadMs10 < 0) pd.cp_lookaheadMs10 = 0;
     if (pd.drc_pregainQ412 <= 0) pd.drc_pregainQ412 = 4096;
     if (pd.drc_ratio       < 100) pd.drc_ratio = 400;
     if (pd.drc_attackMs   <= 0) pd.drc_attackMs  = 5;
@@ -479,6 +487,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     pipeline.getCompander().setAttackTime(pd.cp_attackMs);
     pipeline.getCompander().setReleaseTime(pd.cp_releaseMs);
     pipeline.getCompander().setPregain(pd.cp_pregainQ412);
+    pipeline.getCompander().setLookahead((float)pd.cp_lookaheadMs10 / 10.0f);
 
     pipeline.getExciter().setCutoffFreq(pd.ex_cutoffFreq);
     pipeline.getExciter().setDry(pd.ex_dry);
@@ -521,6 +530,8 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     pipeline.getDrc().setReleaseTime(3, pd.drc_releaseMs);
     pipeline.getDrc().setPregain(3, pd.drc_pregainQ412);
     pipeline.getDrc().setMode((DRCMode)pd.drc_mode);
+    for (int b = 0; b < 4; b++)
+        pipeline.getDrc().setLookahead((uint8_t)b, (float)pd.drc_lookaheadMs10[b] / 10.0f);
 
     pipeline.getLeftRightEq().getEqLeft().setPregain(pd.eql_pregain_q88);
     for (int i = 0; i < MAX_EQ_BANDS; i++)

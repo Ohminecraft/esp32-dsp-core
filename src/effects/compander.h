@@ -8,6 +8,7 @@
 
 #include "dsp_module.h"
 #include "../utils/fixed_math.h"
+#include "../utils/psram.h"
 #include "../utils/dynamics_processor.h"
 
 class Compander : public DspModule {
@@ -28,6 +29,10 @@ public:
     void setAttackTime(int32_t ms);
     void setReleaseTime(int32_t ms);
     void setPregain(int32_t gain_q412);
+    // Lookahead: delay signal by N ms so gain is ready before transient arrives.
+    // 0.0 = disabled (no latency). Typical: 3–8 ms.
+    // Changing this value calls reset() internally to flush the delay buffer.
+    void setLookahead(float ms);
 
     // ---- Runtime state getters (for live meter) ----
     float getEnvLinear() const { return _state.envelope;   }  // 0..1 linear peak
@@ -56,6 +61,15 @@ private:
 
     // ── Run-time state ──
     EnvelopeState _state;
+
+    // ── Lookahead delay buffer ──────────────────────────────────────────────
+    // Allocated in PSRAM via PSRAM_MALLOC to avoid DRAM overflow (~7.7 KB).
+    // _lookaheadSamples = 0 → disabled, no latency, path giống cũ.
+    static constexpr int COMP_LOOKAHEAD_MAX = 960; // 10ms @ 96kHz
+    float   _lookaheadMs      = 0.0f;
+    int     _lookaheadSamples = 0;
+    int     _laWriteIdx       = 0;
+    float*  _laDelayBuf       = nullptr; // PSRAM: (COMP_LOOKAHEAD_MAX+1)*2 floats
 
     void recalcCoeffs();
 };

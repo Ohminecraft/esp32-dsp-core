@@ -39,7 +39,8 @@ class AsyncWebSocketClient;
 #define CMD_WIFI_SET_AP     0x12  // No data — switch back to AP mode
 #define CMD_WIFI_GET_STATUS 0x13  // No data — reply with mode/IP/SSID/RSSI
 
-#define CMD_REPORT_CPU_USAGE           0x40
+#define CMD_GET_REPORT_CPU_USAGE       0x39
+#define CMD_SEND_REPORT_CPU_USAGE      0x40
 #define CMD_REPORT_ISF                 0x41 
 #define CMD_REPORT_ISF_PRESET          0x42
 #define CMD_REPORT_ISF_BAND_PER_PRESET 0x43

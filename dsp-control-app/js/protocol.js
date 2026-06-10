@@ -30,7 +30,8 @@ export const CMD = {
     WIFI_SET_STA: 0x11,
     WIFI_SET_AP: 0x12,
     WIFI_GET_STATUS: 0x13,
-    REPORT_CPU_USAGE: 0x40,
+    GET_REPORT_CPU_USAGE: 0x39, // Request CPU usage report
+    SEND_REPORT_CPU_USAGE: 0x40,
     REPORT_ISF: 0x41,       // Push ISF state
     REPORT_ISF_PRESET: 0x42, // Push ISF preset data
     REPORT_ISF_BAND_PER_PRESET: 0x43,
@@ -117,7 +118,6 @@ export function buildFrame(cmd, moduleId, data = []) {
 export function buildEnableModule(moduleId) { return buildFrame(CMD.ENABLE_MODULE, moduleId); }
 export function buildDisableModule(moduleId) { return buildFrame(CMD.DISABLE_MODULE, moduleId); }
 export function buildGetModuleStatus(moduleId) { return buildFrame(CMD.GET_MODULE_STATUS, moduleId); }
-//export function buildGetSystemAlive() { return buildFrame(CMD.GET_SYSTEM_ALIVE, MODULE.SYSTEM); }
 
 export function buildSetParam(moduleId, paramId, value) {
     // Data: paramId(1B) + value(4B LE)
@@ -180,6 +180,26 @@ export function buildGetAllState() {
 /** Request a live meter snapshot for one dynamic module. */
 export function buildGetModuleMeter(moduleId) {
     return buildFrame(CMD.GET_MODULE_METER, MODULE.SYSTEM, [moduleId]);
+}
+
+/**
+ * Set lookahead time for Compander or DRC.
+ *
+ * Encoding: ms × 10 → int32  (0.1ms resolution)
+ *   e.g. 5.0ms → value 50,  0.5ms → value 5,  0 → disabled
+ *
+ * Compander: paramId = 6
+ * DRC band:  paramId = pBase + 5  (pBase = 0x20 + bandIdx*8)
+ *
+ * @param {number} moduleId  MODULE.COMPANDER or MODULE.DRC
+ * @param {number} paramId   6 for Compander; (0x20+band*8+5) for DRC band
+ * @param {number} ms        lookahead in ms (float, e.g. 5.0)
+ */
+export function buildSetLookahead(moduleId, paramId, ms) {
+    // Clamp: 0 = off, max 10ms (matches COMP_LOOKAHEAD_MAX / DRC_LOOKAHEAD_MAX at 96kHz)
+    const clamped = Math.max(0, Math.min(100, ms)); // 100 = 10.0ms
+    const value   = Math.round(clamped * 10);       // ×10 → int32
+    return buildSetParam(moduleId, paramId, value);
 }
 
 // ─── ISF Builders ──────────────────────────────────────────────────────

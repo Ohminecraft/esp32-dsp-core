@@ -18,8 +18,7 @@
 #include "pin_config.h"
 #include "dsp_types.h"
 
-#include "audio/audio_input.h"
-#include "audio/audio_output.h"
+#include "audio/audio_io.h"
 #include "audio/audio_sync.h"
 #include "effects/dsp_pipeline.h"
 #include "control/uart_protocol.h"
@@ -35,8 +34,7 @@
 // ============================================================================
 
 static DspPipeline     g_pipeline;
-static AudioInput      g_audioInput;
-static AudioOutput     g_audioOutput;
+static AudioIO         g_audioIO;
 static AudioSync       g_audioSync;
 static UartProtocol    g_uart;
 static ParamController g_paramCtrl;
@@ -103,7 +101,7 @@ static void stopAutoShutdownTimer() {
 
 static void reinitPipeline(uint32_t newRateHz) {
     g_pipelineReady = false;
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(105));
 
     if (g_audioTaskHandle) {
         vTaskSuspend(g_audioTaskHandle);
@@ -111,10 +109,9 @@ static void reinitPipeline(uint32_t newRateHz) {
 
     if (newRateHz > 0 && newRateHz != g_lastReinitSampleRate) {
         g_lastReinitSampleRate = newRateHz;
-        g_audioInput.reinit(newRateHz);
-        g_audioOutput.reinit((int32_t)newRateHz);
+        g_audioIO.reinit(newRateHz);
         g_pipeline.init((int32_t)newRateHz, DSP_NUM_CHANNELS);
-        g_presetMgr.loadPreset(0, g_pipeline);
+        g_presetMgr.loadPreset(g_presetMgr.getCurrentSlotIndex(), g_pipeline);
     }
 
     g_currentSampleRate = (newRateHz > 0) ? newRateHz : g_currentSampleRate;
@@ -178,6 +175,7 @@ static void onRateChange(ClockState state, uint32_t rateHz) {
 
 void IRAM_ATTR audioTask(void* param) {
     LOG_INFO("AUDIO", "Audio task started on core %d", xPortGetCoreID());
+    size_t sampleReadSize = 0;
 
     while (true) {
         // Pipeline not ready (reinit in progress or clock absent) — spin wait.
@@ -189,20 +187,19 @@ void IRAM_ATTR audioTask(void* param) {
         }
 
         // 1. Read input frame from Source (I2S or USB) into g_audioBuf
-        size_t samplesRead = g_audioInput.readFrame(g_audioBuf, DSP_FRAME_SIZE);
+        sampleReadSize = g_audioIO.readFrame(g_audioBuf, DSP_FRAME_SIZE);
+        if (sampleReadSize == 0) continue; // Read timeout or error — skip processing and try again
 
-        if (samplesRead > 0) {
-            // 2. DSP pipeline
-            uint32_t startUs = micros();
-            g_pipeline.processFrame(g_audioBuf, samplesRead);
-            uint32_t elapsed = micros() - startUs;
+        // 2. DSP pipeline
+        uint32_t startUs = micros();
+        g_pipeline.processFrame(g_audioBuf, sampleReadSize);
+        uint32_t elapsed = micros() - startUs;
 
-            g_lastFrameUs = elapsed;
-            if (elapsed > g_maxFrameUs) g_maxFrameUs = elapsed;
+        g_lastFrameUs = elapsed;
+        if (elapsed > g_maxFrameUs) g_maxFrameUs = elapsed;
 
-            // 3. Write output frame to PCM5102A
-            g_audioOutput.writeFrame(g_audioBuf, samplesRead);
-        }
+        // 3. Write output frame to PCM5102A
+        g_audioIO.writeFrame(g_audioBuf, sampleReadSize);
     }
 }
 
@@ -211,6 +208,8 @@ void IRAM_ATTR audioTask(void* param) {
 // ============================================================================
 
 volatile bool g_wifiShutdownActive = false;
+
+#ifndef ONLY_SERIAL
 
 static void toggleWifiShutdown() {
     g_wifiShutdownActive = !g_wifiShutdownActive;
@@ -242,15 +241,22 @@ static void toggleWifiShutdown() {
     }
 }
 
+#endif // ONLY_SERIAL
+
 // ============================================================================
 // Control Task (Core 0, Priority 5)
 // ============================================================================
+
+volatile uint16_t s_cpu_usage = 0;
+volatile uint8_t  s_heapPct = 0;
+volatile uint32_t s_fs = 0;
 
 void controlTask(void* param) {
     LOG_INFO("CTRL", "Control task started on core %d", xPortGetCoreID());
     LOG_INFO("INIT", "System Ready, CPU: %lu MHz, Free Heap: %lu bytes",
              (unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFreeHeap());
 
+    uint32_t lastPerfMonitorMs = millis();
     uint32_t lastStatusMs = millis();
 
     #ifdef MUTE_PIN
@@ -338,6 +344,7 @@ void controlTask(void* param) {
             g_paramCtrl.handleCommand(g_uart.getCommand());
         }
 
+        #ifndef ONLY_SERIAL
         // Web server housekeeping
         g_webServer.loop();
         g_wifiMgr.loop();
@@ -372,12 +379,12 @@ void controlTask(void* param) {
             delay(100);
             ESP.restart();
         }
+        #endif // ONLY_SERIAL
 
         #ifdef SOFT_LATCH_SHUTDOWN
         if (g_userShutdownRequest) {
             LOG_INFO("SYS", "Initiating shutdown sequence...");
-            g_audioInput.deinit();
-            g_audioOutput.deinit();
+            g_audioIO.deinit();
             LOG_INFO("SYS", "Audio interfaces deinitialized.");
             vTaskDelete(g_audioTaskHandle);
             LOG_INFO("SYS", "Audio task stopped.");
@@ -388,6 +395,7 @@ void controlTask(void* param) {
             vTaskDelete(g_syncTaskHandle);
             g_audioSync.clearHandle();
             LOG_INFO("SYS", "Audio synchronization stopped.");
+            #ifndef ONLY_SERIAL
             if (!g_wifiShutdownActive) {
                 WiFi.status() == WL_CONNECTED ? WiFi.disconnect(true) : WiFi.softAPdisconnect(true);
                 WiFi.mode(WIFI_OFF);
@@ -395,6 +403,7 @@ void controlTask(void* param) {
             } else {
                 LOG_INFO("SYS", "WiFi Transceiver already OFF.");
             }
+            #endif
             g_statusLED.fadeOff();
             LOG_INFO("SYS", "Status LED turned off.");
             delay(300);
@@ -405,15 +414,11 @@ void controlTask(void* param) {
         }
         #endif
 
-        // Periodic status report (every 2s)
         uint32_t nowMs = millis();
 
-        // Cache values for LED update outside the timer block
-        static float s_usage = 0;
-        static uint8_t s_heapPct = 100;
-        static uint32_t s_fs = 0;
+        static float s_usage = 0.0f;
 
-        if (nowMs - lastStatusMs >= 2000) {
+        if (nowMs - lastStatusMs >= 500) {
             lastStatusMs = nowMs;
 
             // Use current dynamic sample rate for budget calculation
@@ -429,27 +434,18 @@ void controlTask(void* param) {
 
             s_usage = g_isclockabsent ? 0 : s_usage;
 
-            uint16_t cpu10  = (uint16_t)(s_usage * 10.0f);
+            s_cpu_usage = (uint16_t)(s_usage * 10.0f);
 
             s_heapPct = (uint8_t)((float)ESP.getFreeHeap() / ESP.getHeapSize() * 100.0f);
+        }
 
-            uint8_t data[7] = {
-                (uint8_t)(cpu10 & 0xFF),
-                (uint8_t)((cpu10 >> 8) & 0xFF),
-                s_heapPct,
-                (uint8_t)(s_fs & 0xFF),
-                (uint8_t)((s_fs >> 8) & 0xFF),
-                (uint8_t)((s_fs >> 16) & 0xFF),
-                (uint8_t)((s_fs >> 24) & 0xFF)
-            };
-            if (g_webServer.isWsConnected()) {
-                g_uart.sendFrame(CMD_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, 7);
-            }
+        if (nowMs - lastPerfMonitorMs >= 2000) {
+            lastPerfMonitorMs = nowMs;
 
             #ifndef DISABLE_PERF_LOG
-            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%)",
+            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%), Write timeout count: %lu, Read timeout count: %lu",
                 g_lastFrameUs, s_usage, (unsigned long)s_fs,
-                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct);
+                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct, g_audioIO.getWriteTimeouts(), g_audioIO.getReadTimeouts());
             #endif
             g_maxFrameUs = 0;
         }
@@ -473,12 +469,6 @@ void setup() {
         pinMode(POWER_PIN_OFF, INPUT_PULLUP);
         delay(10); 
 
-        /*
-        if (digitalRead(POWER_PIN_OFF) == HIGH) {
-            digitalWrite(POWER_PIN_OUT, LOW);
-            while(true) { }
-        }
-            */
         digitalWrite(POWER_PIN_OUT, HIGH);
         g_statusLED.off();
     #endif
@@ -518,18 +508,21 @@ void setup() {
     // 2. Init audio I/O at default rate, output in master mode initially
     //    (QCC5125 may not be clocking yet at boot)
     LOG_INFO("INIT", "Initializing audio I/O...");
-    g_audioInput.init(DSP_SAMPLE_RATE_DEFAULT, DSP_NUM_CHANNELS);
-    g_audioOutput.init(DSP_SAMPLE_RATE_DEFAULT, DSP_NUM_CHANNELS);
+    g_audioIO.init(DSP_SAMPLE_RATE_DEFAULT, DSP_NUM_CHANNELS);
 
     // 3. Init control layer
     LOG_INFO("INIT", "Initializing UART control...");
     g_uart.init();
     g_presetMgr.init();
 
+    #ifndef ONLY_SERIAL
     LOG_INFO("INIT", "Initializing WiFi & Web Server...");
     g_wifiMgr.init();
+    #endif
     
-    g_paramCtrl.init(&g_pipeline, &g_audioInput, &g_audioOutput, &g_uart, &g_presetMgr, &g_wifiMgr);
+    g_paramCtrl.init(&g_pipeline, &g_uart, &g_presetMgr, &g_wifiMgr);
+
+    #ifndef ONLY_SERIAL
     g_webServer.init(&g_wifiMgr, &g_uart, &g_paramCtrl);
 
     // Load WiFi shutdown state from NVS
@@ -544,6 +537,7 @@ void setup() {
         WiFi.disconnect(true);
         WiFi.mode(WIFI_OFF);
     }
+    #endif
 
     // 4. Load preset
     uint8_t currentSlot = g_presetMgr.getCurrentSlotIndex();

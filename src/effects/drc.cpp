@@ -24,6 +24,12 @@
 // init
 // ============================================================================
 void DRC::init(int32_t sampleRate, int32_t numChannels) {
+    // Giữ lại lookaheadMs trước khi init — SR có thể đổi (44.1k/48k/96k)
+    // recalcBand() sẽ tính lại lookaheadSamples = lookaheadMs * newSampleRate
+    float savedLookaheadMs[MAX_BANDS];
+    for (int i = 0; i < MAX_BANDS; i++)
+        savedLookaheadMs[i] = _bands[i].lookaheadMs;
+
     DspModule::init(sampleRate, numChannels);
 
     _mode        = DRC_MODE_FULLBAND;
@@ -45,6 +51,12 @@ void DRC::init(int32_t sampleRate, int32_t numChannels) {
         _bands[i].state.envelope   = 0.0f;
         _bands[i].state.gainLinear = 1.0f;
         _bands[i].state.decimCount = 0;
+        _bands[i].lookaheadMs = savedLookaheadMs[i];
+        // Alloc PSRAM buffer một lần cho mỗi band
+        if (_bands[i].laDelayBuf == nullptr) {
+            size_t sz = (DRCBand::DRC_LOOKAHEAD_MAX + 1) * 2 * sizeof(float);
+            _bands[i].laDelayBuf = (float*)PSRAM_MALLOC(sz);
+        }
         recalcBand(i);
     }
 
@@ -62,6 +74,10 @@ void DRC::init(int32_t sampleRate, int32_t numChannels) {
 void DRC::reset() {
     for (int i = 0; i < MAX_BANDS; i++) {
         _bands[i].state.reset();
+        if (_bands[i].laDelayBuf) {
+            memset(_bands[i].laDelayBuf, 0, (DRCBand::DRC_LOOKAHEAD_MAX + 1) * 2 * sizeof(float));
+        }
+        _bands[i].laWriteIdx = 0;
     }
     for (int c = 0; c < DRC_MAX_CROSSOVERS; c++) {
         for (int s = 0; s < 2; s++) {
@@ -92,6 +108,14 @@ void DRC::recalcBand(uint8_t band) {
     b.pregain      = (float)b.pregainQ412 / 4096.0f;
     b.attackCoeff  = DynamicsProcessor::calcCoeff(_sampleRate, b.attackMs);
     b.releaseCoeff = DynamicsProcessor::calcCoeff(_sampleRate, b.releaseMs);
+
+    // Lookahead: ms → samples, clamp vào [0, DRC_LOOKAHEAD_MAX]
+    if (b.lookaheadMs <= 0.0f) {
+        b.lookaheadSamples = 0;
+    } else {
+        int s = (int)(b.lookaheadMs * 0.001f * (float)_sampleRate + 0.5f);
+        b.lookaheadSamples = (s > DRCBand::DRC_LOOKAHEAD_MAX) ? DRCBand::DRC_LOOKAHEAD_MAX : s;
+    }
 }
 
 // ============================================================================
@@ -185,6 +209,11 @@ int DRC::getNumBands() const {
 // applyBandDRC — compression for a single band buffer, in-place
 //   buf: interleaved stereo float (L,R,L,R,...)
 //   numSamples: number of FRAMES (pairs)
+//
+// Lookahead: khi b.lookaheadSamples > 0, mỗi sample được ghi vào circular
+// buffer trước, level detection chạy trên tín hiệu hiện tại, còn output
+// lấy từ sample đã delay → compressor kịp react trước transient.
+// Khi lookaheadSamples = 0, path giống cũ, không overhead buffer.
 // ============================================================================
 void IRAM_ATTR DRC::applyBandDRC(DRCBand& b, float* buf, size_t numSamples) {
     float envelope   = b.state.envelope;
@@ -195,37 +224,85 @@ void IRAM_ATTR DRC::applyBandDRC(DRCBand& b, float* buf, size_t numSamples) {
     const float slopeAbove   = b.slopeAbove;
     const float attackCoeff  = b.attackCoeff;
     const float releaseCoeff = b.releaseCoeff;
+    const int   numCh        = _numChannels;
+    const int   lookahead    = b.lookaheadSamples;
+    const int   bufSize      = DRCBand::DRC_LOOKAHEAD_MAX + 1;
 
-    for (size_t i = 0; i < numSamples; i++) {
-        const int base = (int)(i * _numChannels);
+    if (lookahead > 0 && b.laDelayBuf != nullptr) {
+        int writeIdx = b.laWriteIdx;
 
-        // ── Peak detection with pregain applied first ──
-        float peak = 0.0f;
-        for (int ch = 0; ch < _numChannels; ch++) {
-            float s = buf[base + ch] * pregain;
-            float a = fast_abs(s);
-            if (a > peak) peak = a;
-        }
+        for (size_t i = 0; i < numSamples; i++) {
+            const int base = (int)(i * numCh);
 
-        // ── Envelope follower ──
-        const float coeff = (peak > envelope) ? attackCoeff : releaseCoeff;
-        envelope = envelope_follow(envelope, peak, coeff);
+            // 1. Ghi sample HIỆN TẠI vào delay buffer
+            b.laDelayBuf[writeIdx * 2]     = buf[base];
+            b.laDelayBuf[writeIdx * 2 + 1] = (numCh > 1) ? buf[base + 1] : buf[base];
 
-        // ── Decimated gain computation ──
-        if (++b.state.decimCount >= DRC_DECIM) {
-            b.state.decimCount = 0;
-            const float envDb = fast_linear_to_db(envelope);
-            float gainDb = 0.0f;
-            if (envDb > thresholdDb) {
-                gainDb = (thresholdDb - envDb) * slopeAbove;
+            // 2. Đọc sample ĐÃ DELAY (lookahead samples trước)
+            int readIdx = writeIdx - lookahead;
+            if (readIdx < 0) readIdx += bufSize;
+            const float dL = b.laDelayBuf[readIdx * 2];
+            const float dR = b.laDelayBuf[readIdx * 2 + 1];
+
+            // 3. Peak detection + pregain trên tín hiệu HIỆN TẠI
+            float peak = 0.0f;
+            for (int ch = 0; ch < numCh; ch++) {
+                float a = fast_abs(buf[base + ch] * pregain);
+                if (a > peak) peak = a;
             }
-            gainLinear = fast_db_to_gain(gainDb);
+
+            // 4. Envelope follower
+            const float coeff = (peak > envelope) ? attackCoeff : releaseCoeff;
+            envelope = envelope_follow(envelope, peak, coeff);
+
+            // 5. Decimated gain computation
+            if (++b.state.decimCount >= DRC_DECIM) {
+                b.state.decimCount = 0;
+                const float envDb = fast_linear_to_db(envelope);
+                float gainDb = 0.0f;
+                if (envDb > thresholdDb)
+                    gainDb = (thresholdDb - envDb) * slopeAbove;
+                gainLinear = fast_db_to_gain(gainDb);
+            }
+
+            // 6. Apply gain lên tín hiệu ĐÃ DELAY
+            const float totalGain = pregain * gainLinear;
+            buf[base]     = dL * totalGain;
+            if (numCh > 1) buf[base + 1] = dR * totalGain;
+
+            if (++writeIdx >= bufSize) writeIdx = 0;
         }
 
-        // ── Apply gain ──
-        const float totalGain = pregain * gainLinear;
-        for (int ch = 0; ch < _numChannels; ch++) {
-            buf[base + ch] *= totalGain;
+        b.laWriteIdx = writeIdx;
+
+    } else {
+        // ── No-lookahead path (original behaviour, zero overhead) ────────────
+        for (size_t i = 0; i < numSamples; i++) {
+            const int base = (int)(i * numCh);
+
+            float peak = 0.0f;
+            for (int ch = 0; ch < numCh; ch++) {
+                float s = buf[base + ch] * pregain;
+                float a = fast_abs(s);
+                if (a > peak) peak = a;
+            }
+
+            const float coeff = (peak > envelope) ? attackCoeff : releaseCoeff;
+            envelope = envelope_follow(envelope, peak, coeff);
+
+            if (++b.state.decimCount >= DRC_DECIM) {
+                b.state.decimCount = 0;
+                const float envDb = fast_linear_to_db(envelope);
+                float gainDb = 0.0f;
+                if (envDb > thresholdDb)
+                    gainDb = (thresholdDb - envDb) * slopeAbove;
+                gainLinear = fast_db_to_gain(gainDb);
+            }
+
+            const float totalGain = pregain * gainLinear;
+            for (int ch = 0; ch < numCh; ch++) {
+                buf[base + ch] *= totalGain;
+            }
         }
     }
 
@@ -408,4 +485,17 @@ void DRC::setPregain(uint8_t band, int32_t gain_q412) {
     if (gain_q412 < 1) gain_q412 = 4096;
     _bands[band].pregainQ412 = gain_q412;
     recalcBand(band);
+}
+
+void DRC::setLookahead(uint8_t band, float ms) {
+    if (band >= MAX_BANDS) return;
+    DRCBand& b = _bands[band];
+    b.lookaheadMs = (ms < 0.0f) ? 0.0f : ms;
+    recalcBand(band);  // tính lại lookaheadSamples từ ms * sampleRate
+    // Flush delay buffer tránh stale data
+    if (b.laDelayBuf) {
+        memset(b.laDelayBuf, 0, (DRCBand::DRC_LOOKAHEAD_MAX + 1) * 2 * sizeof(float));
+    }
+    b.laWriteIdx = 0;
+    b.state.reset();
 }

@@ -45,7 +45,7 @@ void IRAM_ATTR Exciter::process(float* __restrict samples, size_t numSamples) {
 
             // 2. Extract treble (> fCut) for harmonic generation
             float treble   = _trebleHpf.processSample(in, ch);
-            float harmonic = soft_clip_cubic(treble * 0.8f);   // Soft saturation = sparkle
+            float harmonic = soft_clip_cubic(treble * 0.9f);   // Soft saturation = sparkle
 
             // 3. Recombine
             //    - bass:    always 100% (not touched by any slider)

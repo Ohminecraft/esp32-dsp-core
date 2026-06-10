@@ -41,8 +41,8 @@ static const char* TAG = "AudioSync";
 static constexpr int16_t PCNT_HIGH_LIMIT = 20000;
 static constexpr int16_t PCNT_LOW_LIMIT  = -1;
 
-// Rate tolerance: ±5%
-static constexpr float RATE_TOLERANCE = 0.05f;
+// Rate tolerance: ±6%
+static constexpr float RATE_TOLERANCE = 0.06f;
 
 // ---------------------------------------------------------------------------
 // Static members
@@ -64,7 +64,7 @@ static portMUX_TYPE        s_mux = portMUX_INITIALIZER_UNLOCKED;
 // PCNT overflow ISR
 // ---------------------------------------------------------------------------
 
-static bool IRAM_ATTR pcntOverflowCb(pcnt_unit_handle_t,
+static bool pcntOverflowCb(pcnt_unit_handle_t,
                                       const pcnt_watch_event_data_t*,
                                       void*) {
     // portENTER_CRITICAL_ISR is safe to call from IRAM ISR context
