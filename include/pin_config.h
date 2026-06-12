@@ -72,7 +72,7 @@
 
 // I2S Input/Output Full
 #define I2S_IN_OUT_BCK_PIN         26      // BCK
-#define I2S_IN_OUT_WS_PIN          10      // WS 
+#define I2S_IN_OUT_WS_PIN          25      // WS 
 #define I2S_IN_OUT_DATA_OUT_PIN    22      // DOUT
 #define I2S_IN_OUT_DATA_IN_PIN     35      // DIN
 

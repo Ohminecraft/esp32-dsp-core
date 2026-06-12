@@ -34,7 +34,6 @@ private:
     void handleEnableDisable(const UartCommand& cmd, bool enable);
     void handleSetParam(const UartCommand& cmd);
     void handleSetEqBand(const UartCommand& cmd);
-    void handleSetDynEqBand(const UartCommand& cmd, bool isHigh);
     void handleSetDynEqThresholds(const UartCommand& cmd);
     void handleGetAllState(const UartCommand& cmd);
     void handleWifiScan(const UartCommand& cmd);

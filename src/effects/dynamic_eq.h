@@ -101,10 +101,6 @@ public:
     // -------------------------------------------------------------------------
     ParametricEQ& getEqLow()  { return _eqLow;  }
     ParametricEQ& getEqHigh() { return _eqHigh; }
-
-    void setEqLowBand (uint8_t band, const EQFilterParams& params);
-    void setEqHighBand(uint8_t band, const EQFilterParams& params);
-
 private:
     // ---- Inner EQ engines ------------------------------------------------
     ParametricEQ _eqLow;

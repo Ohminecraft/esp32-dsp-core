@@ -518,11 +518,11 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
 
     pipeline.getDynamicEq().getEqLow().setPregain(pd.deq_low_pregain_q88);
     for (int i = 0; i < MAX_EQ_BANDS; i++)
-        pipeline.getDynamicEq().setEqLowBand(i, pd.deq_low_bands[i]);
+        pipeline.getDynamicEq().getEqLow().setBand(i, pd.deq_low_bands[i]);
 
     pipeline.getDynamicEq().getEqHigh().setPregain(pd.deq_high_pregain_q88);
     for (int i = 0; i < MAX_EQ_BANDS; i++)
-        pipeline.getDynamicEq().setEqHighBand(i, pd.deq_high_bands[i]);
+        pipeline.getDynamicEq().getEqHigh().setBand(i, pd.deq_high_bands[i]);
 
     pipeline.getDrc().setThreshold(3, pd.drc_thresholdDb);
     pipeline.getDrc().setRatio(3, pd.drc_ratio);

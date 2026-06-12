@@ -97,9 +97,11 @@ void IndexSelectableFilter::setPreset(uint8_t index, const ISFPreset& preset, ui
     if (type == ISF_SET_BAND) {
         _presets[index].filters.setBand(bandIdx, preset.filters.getBandParams(bandIdx));
     } else if (type == ISF_SET_COMMON) {
+        _presets[index].filters.setPregain(preset.filters.getPregain());
         _presets[index].thresholdDb = preset.thresholdDb;
         _presets[index].valid       = true;
     } else {
+        _presets[index].filters.setPregain(preset.filters.getPregain());
         _presets[index].thresholdDb = preset.thresholdDb;
         _presets[index].valid       = true;
         for (int b = 0; b < MAX_EQ_BANDS; b++) {
@@ -144,10 +146,15 @@ void IRAM_ATTR IndexSelectableFilter::applyPreset(
     float* __restrict bufL,
     float* __restrict bufR,
     size_t numSamples)
-{
+{   
+    if (preset.filters._pregain != 1.0f) {
+        for (int i = 0; i < numSamples; i++) {
+            bufL[i] *= preset.filters._pregain;
+            bufR[i] *= preset.filters._pregain;
+        }
+    }
     for (int b = 0; b < MAX_EQ_BANDS; b++) {
-        const EQFilterParams& p = preset.filters.getBandParams(b);
-        if (!p.enabled) continue;
+        if (!preset.filters.getBandParams(b).enabled) continue;
         Biquad filter = preset.filters._filters[b];
         BiquadProcess process_filter;
         float* st = stateBank[b];

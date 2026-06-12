@@ -88,7 +88,7 @@ void AudioIO::initI2S() {
     i2s_chan_config_t chan_cfg = {};
     chan_cfg.id            = I2S_INPUT_OUTPUT_FULL_PORT;
     chan_cfg.role          = I2S_ROLE_SLAVE;     // QCC5125 is master
-    chan_cfg.dma_desc_num  = 6;                  // DMA ring buffer has 6 descriptors (buffers)
+    chan_cfg.dma_desc_num  = 8;                  // DMA ring buffer has 8 descriptors (buffers)
     chan_cfg.dma_frame_num = DSP_FRAME_SIZE;
     chan_cfg.auto_clear    = true;               // zero-fill TX on underrun → no noise
 

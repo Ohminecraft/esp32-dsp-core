@@ -35,13 +35,6 @@
  * Parameters for one biquad band inside a preset.
  * Mirror of EQFilterParams but with guaranteed size for UART packing.
  */
-struct ISFBandParams {
-    bool     enabled = false;
-    uint8_t  type    = 0;       // EQFilterType
-    uint16_t f0      = 1000;    // Hz
-    int16_t  gain    = 0;       // Q8.8 dB
-    uint16_t Q       = 724;     // Q6.10 (0.707 * 1024)
-};
 
 /**
  * One preset = one complete EQ curve active at a given loudness range.

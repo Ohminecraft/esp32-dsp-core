@@ -218,9 +218,9 @@ void IRAM_ATTR DynamicEQ::process(float* __restrict samples, size_t numSamples) 
     // ------------------------------------------------------------------
     // 6. Copy input to static dry buffer (never stack-allocate here)
     // ------------------------------------------------------------------
-    float* dryBuf  = _scratchpad->buf1;
-    float* wetLow  = _scratchpad->buf2;
-    float* wetHigh = _scratchpad->buf3;
+    float* dryBuf    = _scratchpad->buf1;
+    float* wetLow    = _scratchpad->buf2;
+    float* wetHigh   = _scratchpad->buf3;
     
     memcpy(dryBuf, samples, totalSamples * sizeof(float));
 
@@ -236,7 +236,18 @@ void IRAM_ATTR DynamicEQ::process(float* __restrict samples, size_t numSamples) 
     // ------------------------------------------------------------------
     if (needLow) {
         memcpy(wetLow, dryBuf, totalSamples * sizeof(float));
-        _eqLow.processInternal(wetLow, numSamples);
+        if (_eqLow._pregain != 1.0f) {
+            for (int i = 0; i < totalSamples; i++) {
+                wetLow[i] *= _eqLow._pregain;
+            }
+        }
+        for (int b = 0; b < MAX_EQ_BANDS; b++) {
+            if (!_eqLow._params[b].enabled) continue;
+            for (int i = 0; i < numSamples; i++) {
+                wetLow[i * _numChannels]     = _eqLow._filters[b].processSample(wetLow[i * _numChannels], 0);
+                wetLow[i * _numChannels + 1] = _eqLow._filters[b].processSample(wetLow[i * _numChannels + 1], 1);
+            }
+        }
         float a = _alphaLow;
         for (size_t i = 0; i < totalSamples; i++) {
             samples[i] += wetLow[i] * a;
@@ -248,7 +259,18 @@ void IRAM_ATTR DynamicEQ::process(float* __restrict samples, size_t numSamples) 
     // ------------------------------------------------------------------
     if (needHigh) {
         memcpy(wetHigh, dryBuf, totalSamples * sizeof(float));
-        _eqHigh.processInternal(wetHigh, numSamples);
+        if (_eqHigh._pregain != 1.0f) {
+            for (int i = 0; i < totalSamples; i++) {
+                wetHigh[i] *= _eqHigh._pregain;
+            }
+        }
+        for (int b = 0; b < MAX_EQ_BANDS; b++) {
+            if (!_eqHigh._params[b].enabled) continue;
+            for (int i = 0; i < numSamples; i++) {
+                wetHigh[i * _numChannels]     = _eqHigh._filters[b].processSample(wetHigh[i * _numChannels], 0);
+                wetHigh[i * _numChannels + 1] = _eqHigh._filters[b].processSample(wetHigh[i * _numChannels + 1], 1);
+            }
+        }
         float a = _alphaHigh;
         for (size_t i = 0; i < totalSamples; i++) {
             samples[i] += wetHigh[i] * a;
@@ -279,12 +301,4 @@ void DynamicEQ::setAttackTime(int32_t ms) {
 void DynamicEQ::setReleaseTime(int32_t ms) {
     _releaseMs = ms;
     recalcCoeffs();
-}
-
-void DynamicEQ::setEqLowBand(uint8_t band, const EQFilterParams& params) {
-    _eqLow.setBand(band, params);
-}
-
-void DynamicEQ::setEqHighBand(uint8_t band, const EQFilterParams& params) {
-    _eqHigh.setBand(band, params);
 }

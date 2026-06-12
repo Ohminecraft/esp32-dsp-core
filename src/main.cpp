@@ -9,7 +9,7 @@
  *   Serial (USB):          Debug output
  *
  * Pipeline order:
- *   INPUT → Compander → Exciter → DynamicEQ → EQ1 → EQ2 → LeftRightEQ → DRC → Volume → OUTPUT
+ *   INPUT → Compander → Exciter → DynamicEQ → ISF EQ 1 → ISF EQ 2 → EQ1 → EQ2 → LeftRightEQ → DRC → Volume → OUTPUT
  */
 
 #include <Arduino.h>
@@ -477,6 +477,9 @@ void setup() {
         pinMode(TRIGGER_GPIO_PIN, OUTPUT);
         digitalWrite(TRIGGER_GPIO_PIN, !TRIGGER_GPIO_ACTIVE_LEVEL);
     #endif
+
+    pinMode(MUTE_PIN, OUTPUT);
+    digitalWrite(MUTE_PIN, LOW);
 
     #ifdef SOFT_LATCH_SHUTDOWN
         esp_timer_create_args_t shutdown_timer_args = {

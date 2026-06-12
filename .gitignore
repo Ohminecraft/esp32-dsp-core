@@ -8,4 +8,3 @@ include/embedded_ui.h
 dist/
 *.exe
 .last_web_ui_hash
-.agents/
