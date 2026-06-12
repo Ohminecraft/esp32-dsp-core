@@ -6,16 +6,19 @@
 #ifndef PARAM_CONTROLLER_H
 #define PARAM_CONTROLLER_H
 
-#include "../audio/audio_input.h"
-#include "../audio/audio_output.h"
+#include "../audio/audio_io.h"
 #include "../effects/dsp_pipeline.h"
 #include "preset_manager.h"
 #include "uart_protocol.h"
 #include "wifi_manager.h"
 
+extern volatile uint16_t s_cpu_usage;
+extern volatile uint8_t  s_heapPct;
+extern volatile uint32_t s_fs;
+
 class ParamController {
 public:
-    void init(DspPipeline* pipeline, AudioInput* input, AudioOutput* output,
+    void init(DspPipeline* pipeline,
               UartProtocol* uart, PresetManager* presetMgr,
               WiFiManager* wifiMgr = nullptr);
 
@@ -23,8 +26,6 @@ public:
 
 private:
     DspPipeline*   _pipeline;
-    AudioInput*    _input;
-    AudioOutput*   _output;
     UartProtocol*  _uart;
     PresetManager* _presetMgr;
     WiFiManager*   _wifiMgr = nullptr;
@@ -33,7 +34,6 @@ private:
     void handleEnableDisable(const UartCommand& cmd, bool enable);
     void handleSetParam(const UartCommand& cmd);
     void handleSetEqBand(const UartCommand& cmd);
-    void handleSetDynEqBand(const UartCommand& cmd, bool isHigh);
     void handleSetDynEqThresholds(const UartCommand& cmd);
     void handleGetAllState(const UartCommand& cmd);
     void handleWifiScan(const UartCommand& cmd);

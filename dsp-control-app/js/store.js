@@ -55,7 +55,8 @@ class Store extends EventEmitter {
         // Compander
         this.compander = {
             threshold: -2000, ratioBelow: 100, ratioAbove: 400,
-            attackMs: 10, releaseMs: 100, pregain: 4096
+            attackMs: 10, releaseMs: 100, pregain: 4096,
+            lookaheadMs: 0  // 0 = disabled; unit: ms × 10 (e.g. 50 = 5.0ms)
         };
 
         // Exciter
@@ -105,10 +106,10 @@ class Store extends EventEmitter {
             qHp: 717,          // Q HP (Q6.10)
             activeBand: 3,     // which band is shown in UI (3 = fullband)
             bands: [
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096 },
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096 },
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096 },
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 160, pregain: 4096 }  // fullband
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 },
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 },
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 },
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 160, pregain: 4096, lookaheadMs: 0 }  // fullband
             ]
         };
 

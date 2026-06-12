@@ -15,6 +15,7 @@ class ParametricEQ : public DspModule {
     friend class ParamController;
     friend class LeftRightEQ;
     friend class IndexSelectableFilter;
+    friend class DynamicEQ;
 public:
     ParametricEQ() : _pregain(1.0f) {}
 

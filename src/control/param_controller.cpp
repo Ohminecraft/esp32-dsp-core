@@ -21,12 +21,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 void ParamController::init(
-    DspPipeline* pipeline, AudioInput* input, AudioOutput* output,
-    UartProtocol* uart, PresetManager* presetMgr, WiFiManager* wifiMgr)
+    DspPipeline* pipeline, UartProtocol* uart, PresetManager* presetMgr, WiFiManager* wifiMgr)
 {
     _pipeline  = pipeline;
-    _input     = input;
-    _output    = output;
     _uart      = uart;
     _presetMgr = presetMgr;
     _wifiMgr   = wifiMgr;
@@ -51,10 +48,10 @@ void ParamController::handleCommand(const UartCommand& cmd) {
             handleSetEqBand(cmd);
             break;
         case CMD_SET_DYNEQ_LOW_BAND:
-            handleSetDynEqBand(cmd, false);
+            handleSetEqBand(cmd);
             break;
         case CMD_SET_DYNEQ_HIGH_BAND:
-            handleSetDynEqBand(cmd, true);
+            handleSetEqBand(cmd);
             break;
         case CMD_SET_DYNEQ_THRESH:
             handleSetDynEqThresholds(cmd);
@@ -77,7 +74,7 @@ void ParamController::handleCommand(const UartCommand& cmd) {
             if (cmd.dataLen < 1) break;
             const uint8_t modId = cmd.data[0];
 
-            if (modId == MODULE_ID_DYNAMIC_BASS) {
+            if (modId == MODULE_ID_DYNAMIC_BASS && _pipeline->getDynamicBass().isEnabled()) {
                 // REPORT_DYNBASS: energyDb(int16 Q8.8) + alpha(int16 Q8.8)
                 const int16_t eDb = (int16_t)(_pipeline->getDynamicBass().getEnergyDb() * 256.0f);
                 const int16_t alp = (int16_t)(_pipeline->getDynamicBass().getAlpha()    * 256.0f);
@@ -88,7 +85,7 @@ void ParamController::handleCommand(const UartCommand& cmd) {
                 _uart->sendFrame(CMD_REPORT_DYNBASS, MODULE_ID_DYNAMIC_BASS, d, sizeof(d));
             }
 
-            else if (modId == MODULE_ID_DYNAMIC_EQ) {
+            else if (modId == MODULE_ID_DYNAMIC_EQ && _pipeline->getDynamicEq().isEnabled()) {
                 // REPORT_DYNEQ: energyDb(int16 Q8.8) + alphaLow(int16 Q8.8) + alphaHigh(int16 Q8.8)
                 const DynamicEQ& deq = _pipeline->getDynamicEq();
                 const int16_t eDb  = (int16_t)(deq.getEnergyDb()  * 256.0f);
@@ -102,7 +99,7 @@ void ParamController::handleCommand(const UartCommand& cmd) {
                 _uart->sendFrame(CMD_REPORT_DYNEQ, MODULE_ID_DYNAMIC_EQ, d, sizeof(d));
             }
 
-            else if (modId == MODULE_ID_COMPANDER) {
+            else if (modId == MODULE_ID_COMPANDER && _pipeline->getCompander().isEnabled()) {
                 // REPORT_COMPANDER: envLinear(uint16 Q1.14) + gainDb(int16 Q8.8)
                 // Q1.14: 0..1.0 → 0..16384, clamp tại 16383
                 const Compander& comp   = _pipeline->getCompander();
@@ -117,7 +114,7 @@ void ParamController::handleCommand(const UartCommand& cmd) {
                 _uart->sendFrame(CMD_REPORT_COMPANDER, MODULE_ID_COMPANDER, d, sizeof(d));
             }
 
-            else if (modId == MODULE_ID_DRC) {
+            else if (modId == MODULE_ID_DRC && _pipeline->getDrc().isEnabled()) {
                 // REPORT_DRC: 4 × gainDb(int16 Q8.8) — bands 0(Low), 1(Mid), 2(High), 3(Full)
                 const DRC& drc = _pipeline->getDrc();
                 uint8_t d[8];
@@ -153,10 +150,26 @@ void ParamController::handleCommand(const UartCommand& cmd) {
             handleGetAllState(cmd);
             break;
 
+        case CMD_GET_REPORT_CPU_USAGE: {
+            uint8_t data[7] = {
+                (uint8_t)(s_cpu_usage & 0xFF),
+                (uint8_t)((s_cpu_usage >> 8) & 0xFF),
+                s_heapPct,
+                (uint8_t)(s_fs & 0xFF),
+                (uint8_t)((s_fs >> 8) & 0xFF),
+                (uint8_t)((s_fs >> 16) & 0xFF),
+                (uint8_t)((s_fs >> 24) & 0xFF)
+            };
+            _uart->sendFrame(CMD_SEND_REPORT_CPU_USAGE, MODULE_ID_SYSTEM, data, sizeof(data));
+            break;
+        }
+
+        #ifndef ONLY_SERIAL
         case CMD_WIFI_SCAN:   handleWifiScan(cmd);      break;
         case CMD_WIFI_SET_STA: handleWifiSetSTA(cmd);   break;
         case CMD_WIFI_SET_AP:  handleWifiSetAP(cmd);    break;
         case CMD_WIFI_GET_STATUS: handleWifiGetStatus(cmd); break;
+        #endif
 
         default:
             LOG_WARN(TAG, "Unknown command: 0x%02X", cmd.cmd);
@@ -439,6 +452,8 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     sendPkt(MODULE_ID_COMPANDER, 3, _pipeline->getCompander()._attackMs);
     sendPkt(MODULE_ID_COMPANDER, 4, _pipeline->getCompander()._releaseMs);
     sendPkt(MODULE_ID_COMPANDER, 5, _pipeline->getCompander()._pregainQ412);
+    // Lookahead: float ms → ms×10 as int32
+    sendPkt(MODULE_ID_COMPANDER, 6, (int32_t)(_pipeline->getCompander()._lookaheadMs * 10.0f + 0.5f));
 
     // EX
     sendPkt(MODULE_ID_EXCITER, 0, _pipeline->getExciter()._fCut);
@@ -465,6 +480,11 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
         sendPkt(MODULE_ID_DRC, 0x38 + 2, drc._bands[3].attackMs);
         sendPkt(MODULE_ID_DRC, 0x38 + 3, drc._bands[3].releaseMs);
         sendPkt(MODULE_ID_DRC, 0x38 + 4, drc._bands[3].pregainQ412);
+        // Lookahead per band: pBase+5, ms×10 as int32
+        for (int b = 0; b < 4; b++) {
+            int32_t laVal = (int32_t)(drc._bands[b].lookaheadMs * 10.0f + 0.5f);
+            sendPkt(MODULE_ID_DRC, (uint8_t)(0x20 + b * 8 + 5), laVal);
+        }
     }
 
     // EQ bands
@@ -581,38 +601,27 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
             eq = &_pipeline->getLeftRightEq().getEqLeft();
         }
         eq->setPregain(pregainQ88);
+    } else if (cmd.moduleId == MODULE_ID_DYNAMIC_EQ) {
+        if (cmd.cmd == CMD_SET_DYNEQ_LOW_BAND) {
+            eq = &_pipeline->getDynamicEq().getEqLow();
+        } else if (cmd.cmd == CMD_SET_DYNEQ_HIGH_BAND) {
+            eq = &_pipeline->getDynamicEq().getEqHigh();
+        }
+        eq->setPregain(pregainQ88);
+     } else {
+        _uart->sendAck(cmd.moduleId, 1); return;
     }
     if (eq && realBand < MAX_EQ_BANDS) {
         eq->setBand(realBand, params); // q8.8 format
     } else {
         _uart->sendAck(cmd.moduleId, 1); return;
     }
-    LOG_INFO(TAG, "PARAMETRIC_EQ: eq:%s pregain:%f dB, bandIdx:%d, type:%d, freq:%d Hz, gain:%f dB, Q:%f", (cmd.moduleId == MODULE_ID_LEFTRIGHT_EQ) ? "Left/Right" : (cmd.moduleId == MODULE_ID_EQ_DSP_1) ? "1" : "2", (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
-    _uart->sendAck(cmd.moduleId, 0);
-}
-
-void ParamController::handleSetDynEqBand(const UartCommand& cmd, bool isHigh) {
-    if (cmd.dataLen < 11) { _uart->sendAck(cmd.moduleId, 1); return; }
-
-    int16_t pregainQ88 = extractInt16(&cmd.data[0]);
-    uint8_t bandIdx    = cmd.data[2];
-    EQFilterParams params;
-    params.enabled = cmd.data[3] != 0;
-    params.type    = cmd.data[4];
-    params.f0      = extractUint16(&cmd.data[5]);
-    params.gain    = extractInt16(&cmd.data[7]);
-    params.Q       = extractUint16(&cmd.data[9]);
-
-    DynamicEQ& deq = _pipeline->getDynamicEq();
-    if (isHigh) {
-        deq.getEqHigh().setPregain(pregainQ88);
-        deq.setEqHighBand(bandIdx, params);
-        LOG_INFO(TAG, "DYN_EQ_BAND_HIGH: pregain:%f dB, bandIdx:%d, type:%d, freq:%d, gain:%f dB, Q:%f", (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
-    } else {
-        deq.getEqLow().setPregain(pregainQ88);
-        deq.setEqLowBand(bandIdx, params);
-        LOG_INFO(TAG, "DYN_EQ_BAND_LOW: pregain:%f dB, bandIdx:%d, type:%d, freq:%d, gain:%f dB Q:%f", (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
-    }
+    LOG_INFO(TAG, "PARAMETRIC_EQ: eq:%s pregain:%f dB, bandIdx:%d, type:%d, freq:%d Hz, gain:%f dB, Q:%f",
+        (cmd.moduleId == MODULE_ID_LEFTRIGHT_EQ) ? "Left/Right" :
+        (cmd.moduleId == MODULE_ID_DYNAMIC_EQ && cmd.cmd == CMD_SET_DYNEQ_LOW_BAND) ? "DynamicEQ LOW" :
+        (cmd.moduleId == MODULE_ID_DYNAMIC_EQ && cmd.cmd == CMD_SET_DYNEQ_HIGH_BAND) ? "DynamicEQ HIGH" :
+        (cmd.moduleId == MODULE_ID_EQ_DSP_1) ? "1" : "2",
+        (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
     _uart->sendAck(cmd.moduleId, 0);
 }
 
@@ -653,6 +662,7 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
                 case 3: _pipeline->getCompander().setAttackTime(value);  break;
                 case 4: _pipeline->getCompander().setReleaseTime(value); break;
                 case 5: _pipeline->getCompander().setPregain(value);     break;
+                case 6: _pipeline->getCompander().setLookahead((float)value / 10.0f); break; // ms×10 → ms
             }
             break;
         case MODULE_ID_EXCITER:
@@ -699,6 +709,7 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
                     case 2: drc.setAttackTime(band, value);   break;
                     case 3: drc.setReleaseTime(band, value);  break;
                     case 4: drc.setPregain(band, value);      break;
+                    case 5: drc.setLookahead(band, (float)value / 10.0f); break; // ms×10 → ms
                     default: _uart->sendError(0x04); return;
                 }
             }

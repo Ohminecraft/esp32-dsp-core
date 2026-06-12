@@ -40,11 +40,16 @@ void AudioOutput::init(int32_t sampleRate, int32_t numChannels) {
  * @param sampleRate   New rate in Hz. Pass 0 to keep last known rate.
  */
 void AudioOutput::reinit(int32_t sampleRate) {
-    deinit();
     if (sampleRate > 0) _sampleRate = sampleRate;
     // Always MASTER — output BCK/WS (GPIO25/26) are separate from input (GPIO4/5).
     // ESP32 generates clock for PCM5102A at the rate detected by AudioSync.
-    initI2SOutput();
+    i2s_channel_disable(_txHandle);
+    i2s_std_clk_config_t m_new_clk_cfg = {};
+    m_new_clk_cfg.sample_rate_hz = (uint32_t)_sampleRate;
+    m_new_clk_cfg.clk_src        = I2S_CLK_SRC_DEFAULT;
+    m_new_clk_cfg.mclk_multiple  = I2S_MCLK_MULTIPLE_512;
+    i2s_channel_reconfig_std_clock(_txHandle, &m_new_clk_cfg);
+    i2s_channel_enable(_txHandle);
     LOG_INFO(TAG, "Reinit: %ld Hz (master)", (long)_sampleRate);
 }
 
@@ -61,7 +66,7 @@ void AudioOutput::initI2SOutput() {
     i2s_chan_config_t m_tx_chan_cfg = {};
     m_tx_chan_cfg.id            = I2S_OUTPUT_PORT;
     m_tx_chan_cfg.role          = I2S_ROLE_MASTER;
-    m_tx_chan_cfg.dma_desc_num  = 8;
+    m_tx_chan_cfg.dma_desc_num  = 6;
     m_tx_chan_cfg.dma_frame_num = DSP_FRAME_SIZE;
     m_tx_chan_cfg.auto_clear    = true;   // Zero-fill DMA on underrun
     m_tx_chan_cfg.intr_priority = 2;
@@ -98,15 +103,16 @@ void AudioOutput::initI2SOutput() {
 // Write
 // ---------------------------------------------------------------------------
 
+static int32_t g_txBuf[DSP_FRAME_SAMPLES];
+
 size_t IRAM_ATTR AudioOutput::writeFrame(const float* __restrict buffer, size_t numSamples) {
     const size_t totalSamples = numSamples * _numChannels;
     if (totalSamples > DSP_FRAME_SAMPLES) return 0;
 
     size_t bytesWritten = 0;
 
-    int32_t buf_to_write[DSP_FRAME_SAMPLES];
     for (size_t i = 0; i < totalSamples; i++) {
-        buf_to_write[i] = floatToI32Sat(buffer[i]);
+        g_txBuf[i] = floatToI32Sat(buffer[i]);
     }
     // Swap L/R channels for PCM1808
     /*
@@ -117,9 +123,9 @@ size_t IRAM_ATTR AudioOutput::writeFrame(const float* __restrict buffer, size_t 
     }
     */
 
-    esp_err_t err = i2s_channel_write(_txHandle, buf_to_write,
+    esp_err_t err = i2s_channel_write(_txHandle, g_txBuf,
                                       totalSamples * sizeof(int32_t),
-                                      &bytesWritten, pdMS_TO_TICKS(45));
+                                      &bytesWritten, pdMS_TO_TICKS(20));
     if (err != ESP_OK) return 0;
 
     return bytesWritten / (sizeof(int32_t) * _numChannels);

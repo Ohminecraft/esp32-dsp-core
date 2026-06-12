@@ -9,7 +9,7 @@ import {
     buildFrame, buildEnableModule, buildDisableModule,
     buildSetParam, buildSetEqBand, buildSetDynEqBand,
     buildSetDynEqThresholds, buildSavePreset, buildLoadPreset,
-    buildGetAllState, buildGetModuleMeter,
+    buildGetAllState, buildGetModuleMeter, buildSetLookahead,
     buildSetIsfPreset, buildSetIsfConfig, buildGetIsfState,
     buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
     dbToQ88, dbToQ31, qToQ610,
@@ -113,6 +113,7 @@ async function connectSerial() {
         const isValid = await probePort(port);
         if (isValid) {
             await window.serialAPI.connect(port, 115200);
+            document.getElementById('btn-wifi-config').style.display = '';
             onConnected(port);
         } else {
             showStatus(`Error: Device at ${port} is not recognized as a DSP Core.`, 'error');
@@ -390,6 +391,7 @@ parser.onFrame((frame) => {
                 else if (pIndex === 3) store.updateParam('compander', 'attackMs', val);
                 else if (pIndex === 4) store.updateParam('compander', 'releaseMs', val);
                 else if (pIndex === 5) store.updateParam('compander', 'pregain', val);
+                else if (pIndex === 6) store.updateParam('compander', 'lookaheadMs', val / 10); // ms×10 → ms
                 break;
             case MODULE.EXCITER:
                 if (pIndex === 0) store.updateParam('exciter', 'cutoffFreq', val);
@@ -422,6 +424,7 @@ parser.onFrame((frame) => {
                         else if (param === 2) drcBand.attackMs = val;
                         else if (param === 3) drcBand.releaseMs = val;
                         else if (param === 4) drcBand.pregain = val;
+                        else if (param === 5) drcBand.lookaheadMs = val / 10; // ms×10 → ms
                     }
                 }
                 break;
@@ -476,7 +479,7 @@ parser.onFrame((frame) => {
         store.updateParam('dynamicEq', 'attackMs', leToInt32(frame.data, 12));
         store.updateParam('dynamicEq', 'releaseMs', leToInt32(frame.data, 16));
     }
-    else if (frame.cmd === CMD.REPORT_CPU_USAGE && frame.data.length >= 7) {
+    else if (frame.cmd === CMD.SEND_REPORT_CPU_USAGE && frame.data.length >= 7) {
         const cpu10 = frame.data[0] | (frame.data[1] << 8);
         const heapPct = frame.data[2];
         const fs = readInt32(frame.data, 3);
@@ -739,6 +742,13 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Release', 10, 2000, 1, 'ms',
                 () => store.compander.releaseMs,
                 (v) => { store.compander.releaseMs = v; sendFrame(buildSetParam(MODULE.COMPANDER, 4, v)); });
+            addSlider(body, 'Lookahead', 0, 100, 1, 'ms',
+                () => store.compander.lookaheadMs,
+                (v) => {
+                    store.compander.lookaheadMs = v;
+                    // paramId 6, encoding: ms × 10 → int32
+                    sendFrame(buildSetLookahead(MODULE.COMPANDER, 6, v));
+                }, null, 0.1);
             break;
 
         case MODULE.EXCITER:
@@ -1155,6 +1165,13 @@ function buildDrcPanel(container) {
         addSlider(bandControls, 'Release', 10, 2000, 1, 'ms',
             () => band.releaseMs,
             (v) => { band.releaseMs = v; sendFrame(buildSetParam(MODULE.DRC, pBase + 3, v)); });
+        addSlider(bandControls, 'Lookahead', 0, 100, 1, 'ms',
+            () => band.lookaheadMs,
+            (v) => {
+                band.lookaheadMs = v;
+                // pBase + 5: band-specific lookahead, encoding ms × 10 → int32
+                sendFrame(buildSetLookahead(MODULE.DRC, pBase + 5, v));
+            }, null, 0.1);
     };
 
     const renderTabs = () => {
@@ -2879,8 +2896,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setInterval(() => {
         if (!store.system.connected) return;
+        sendFrame(buildFrame(CMD.GET_REPORT_CPU_USAGE, MODULE.SYSTEM));
+    }, 2000);
 
-        // ISF: firmware pushes data, client requests every 100ms
+    setInterval(() => {
+        if (!store.system.connected) return;
+
+        // ISF: firmware pushes data, client requests every 300ms
         const isf1Open = document.querySelector(`.accordion[data-module-id="${MODULE.ISF_1}"].open`);
         const isf2Open = document.querySelector(`.accordion[data-module-id="${MODULE.ISF_2}"].open`);
         if (isf1Open || isf2Open) sendFrame(buildGetIsfState());
@@ -2898,7 +2920,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isOpen = document.querySelector(`.accordion[data-module-id="${domId}"].open`);
             if (isOpen) sendFrame(buildGetModuleMeter(moduleId));
         });
-    }, 100);
+    }, 300);
 
     if (isBrowser) {
         // Running in mobile browser, connect directly via WebSocket
