@@ -47,7 +47,7 @@ class Store extends EventEmitter {
         // Dynamic EQ
         this.dynamicEq = {
             lowThresh: -4000, normalThresh: -2000, highThresh: -600,
-            attackMs: 50, releaseMs: 200,
+            attackMs: 50, releaseMs: 200, lookaheadMs: 0,
             eqLow: makeEqState(),
             eqHigh: makeEqState()
         };
@@ -63,7 +63,7 @@ class Store extends EventEmitter {
         this.exciter = { cutoffFreq: 3000, dry: 100, wet: 30 };
 
         // Dynamic Bass
-        this.dynamicBass = { cutoffFreq: 80, gainBoost: 600, enhanced: 0, boostthreshold: -2400, neutralthreshold: -1600, clipthreshold: -800, clipattack: 600, cliprelease: 200 };
+        this.dynamicBass = { cutoffFreq: 80, gainBoost: 600, enhanced: 0, boostthreshold: -2400, neutralthreshold: -1600, clipthreshold: -800, clipattack: 600, cliprelease: 200, lookaheadMs: 0 };
 
         // ── ISF state ──────────────────────────────────────────────────
         // Helper: create one ISF instance state
@@ -80,8 +80,9 @@ class Store extends EventEmitter {
             numPresets: 1,
             rmsMs: 300,
             slewMs: 500,
+            lookaheadMs: 0,
             overrideDb: null,           // null = auto RMS
-            presets: Array.from({ length: 5 }, (_, i) => makeIsfPreset(-96 + i * 5)),
+            presets: Array.from({ length: 10 }, (_, i) => makeIsfPreset(-96 + i * 5)),
             // Runtime state from firmware (read-only)
             currentLevelDb: -96,
             slewIndex: 0,               // fractional

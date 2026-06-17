@@ -22,10 +22,12 @@
 #include "audio/audio_sync.h"
 #include "effects/dsp_pipeline.h"
 #include "control/uart_protocol.h"
-#include "control/param_controller.h"
-#include "control/preset_manager.h"
-#include "control/wifi_manager.h"
-#include "control/web_server.h"
+#include "control/param/param_controller.h"
+#include "control/param/preset_manager.h"
+#include "control/wifi/wifi_manager.h"
+#include "control/wifi/web_server.h"
+#include "control/display/display.h"
+#include "control/display/encoder.h"
 #include "utils/status_led.h"
 #include "utils/debug_log.h"
 
@@ -42,6 +44,8 @@ static PresetManager   g_presetMgr;
 static WiFiManager     g_wifiMgr;
 static DspWebServer    g_webServer;
 static StatusLED       g_statusLED;
+static Display         g_display;
+static Encoder         g_encoder;
 
 // Audio processing buffer (16-byte aligned for SIMD)
 static float __attribute__((aligned(16))) g_audioBuf[DSP_FRAME_SAMPLES];
@@ -71,9 +75,10 @@ static volatile uint32_t g_maxFrameUs  = 0;
 #ifdef SOFT_LATCH_SHUTDOWN
 #include "esp_timer.h"
 static esp_timer_handle_t g_autoShutdownTimerHandle = NULL;
-static volatile bool     g_userShutdownRequest = false;
 static bool              g_shutdownButtonIsHolding = false;
 static volatile uint32_t g_shutdownCountdown = 0;
+
+volatile bool     g_userShutdownRequest = false;
 
 static void autoShutdownTimerCallback(void* arg) {
     LOG_INFO("SYS", "Auto shutdown timer expired (no clock). Initiating shutdown...");
@@ -315,8 +320,12 @@ void controlTask(void* param) {
             } else
             #endif
             if (clickCount == 2) {
+                #ifndef ONLY_SERIAL
                 LOG_INFO("SYS", "Double press detected — Toggling WiFi");
                 toggleWifiShutdown();
+                #else
+                LOG_INFO("SYS", "In ONLY_SERIAL mode Wifi in this mode is disable");
+                #endif
             }
             #ifdef TRIGGER_GPIO_PIN
             else if (clickCount == 3) {
@@ -383,15 +392,15 @@ void controlTask(void* param) {
 
         #ifdef SOFT_LATCH_SHUTDOWN
         if (g_userShutdownRequest) {
+            #ifdef MUTE_PIN
+            digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
+            LOG_INFO("SYS", "Mute pin set.");
+            #endif
             LOG_INFO("SYS", "Initiating shutdown sequence...");
             g_audioIO.deinit();
             LOG_INFO("SYS", "Audio interfaces deinitialized.");
             vTaskDelete(g_audioTaskHandle);
             LOG_INFO("SYS", "Audio task stopped.");
-            #ifdef MUTE_PIN
-            digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
-            LOG_INFO("SYS", "Mute pin set.");
-            #endif
             vTaskDelete(g_syncTaskHandle);
             g_audioSync.clearHandle();
             LOG_INFO("SYS", "Audio synchronization stopped.");
@@ -442,16 +451,32 @@ void controlTask(void* param) {
         if (nowMs - lastPerfMonitorMs >= 2000) {
             lastPerfMonitorMs = nowMs;
 
+            #ifdef USING_DISPLAY
+                g_display.setStats(
+                    s_cpu_usage,          // uint16_t tenths (cpu_usage * 10)
+                    s_heapPct,            // uint8_t
+                    s_fs,                 // uint32_t current sample rate
+                    (WiFi.status() == WL_CONNECTED),
+                    g_isclockabsent
+                );
+            #endif
+
             #ifndef DISABLE_PERF_LOG
-            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%), Write timeout count: %lu, Read timeout count: %lu",
+            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%% left), DMA largest block free: %u, Heap largest block free: %u, Write timeout count: %lu, Read timeout count: %lu",
                 g_lastFrameUs, s_usage, (unsigned long)s_fs,
-                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct, g_audioIO.getWriteTimeouts(), g_audioIO.getReadTimeouts());
+                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct, heap_caps_get_largest_free_block(MALLOC_CAP_DMA), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), g_audioIO.getWriteTimeouts(), g_audioIO.getReadTimeouts());
             #endif
             g_maxFrameUs = 0;
         }
 
         // Smooth RGB LED update (Core 0)
         g_statusLED.update(s_usage, s_heapPct, g_currentSampleRate, g_isclockabsent);
+
+        #ifdef USING_DISPLAY
+        EncoderEvent ev;
+        g_encoder.poll(&ev);
+        g_display.update(ev);
+        #endif
 
         vTaskDelay(1);
     }
@@ -503,6 +528,12 @@ void setup() {
     DBG_PRINTF("  Channels: %d\n", DSP_NUM_CHANNELS);
     DBG_PRINTLN("=================================");
 
+    #ifdef USING_DISPLAY
+        g_display.init();
+        g_display.setPipeline(&g_pipeline, &g_presetMgr);
+        g_encoder.init(ENCODER_A_PIN, ENCODER_B_PIN, ENCODER_BTN_PIN);
+    #endif
+
     // 1. Init DSP pipeline at default rate
     //    AudioSync will reinit within ~100ms when QCC5125 clock is detected.
     LOG_INFO("INIT", "Initializing DSP pipeline (%d modules)...", DSP_MODULE_COUNT);
@@ -549,14 +580,14 @@ void setup() {
         g_presetMgr.loadPreset(currentSlot, g_pipeline);
     }
 
-    // 5.1. Init AudioSync — starts PCNT clock monitor on Core 0
+    // 6.1. Init AudioSync — starts PCNT clock monitor on Core 0
     //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)
     LOG_INFO("INIT", "Initializing AudioSync clock monitor...");
     g_audioSync.init(onRateChange);
     g_isclockabsent = true;
-    //g_pipelineReady = true; // Start audio task immediately for testing without AudioSync
+    //g_pipelineReady = true; // Start audio task immediately for testing without AudioSync 
 
-    // 5.2. Create AudioSync monitor task (Core 0, Priority 5)
+    // 6.2. Create AudioSync monitor task (Core 0, Priority 5)
     xTaskCreatePinnedToCore(
         g_audioSync.monitorTask,
         "SyncTask",
@@ -567,7 +598,7 @@ void setup() {
         SYNC_TASK_CORE
     );
     
-    // 6. Create control task (Core 0)
+    // 7. Create control task (Core 0)
     xTaskCreatePinnedToCore(
         controlTask,
         "ControlTask",
@@ -578,7 +609,7 @@ void setup() {
         CONTROL_TASK_CORE
     );
 
-    // 7. Create audio task (Core 1) — starts suspended, AudioSync resumes it
+    // 8. Create audio task (Core 1) — starts suspended, AudioSync resumes it
     //    after first clock detection.
     xTaskCreatePinnedToCore(
         audioTask,

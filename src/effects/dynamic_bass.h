@@ -38,6 +38,7 @@
 class DynamicBass : public DspModule {
     friend class PresetManager;
     friend class ParamController;
+    friend class Display;
 
 public:
     DynamicBass() = default;
@@ -69,6 +70,9 @@ public:
     // -------------------------------------------------------------------------
     void setClipAttack (int32_t ms);
     void setClipRelease(int32_t ms);
+    // Lookahead: delay feed vào level detector Nms, output không bị delay.
+    // 0 = disabled. Max = DYNBASS_LOOKAHEAD_MAX (5ms @ 96kHz).
+    void setLookahead(float ms);
 
     // -------------------------------------------------------------------------
     // Getters
@@ -112,6 +116,13 @@ private:
     float   _rmsEnergySq = 0.0f;
     float   _energyDb    = -96.0f;
     float   _rmsCoeff    = 0.0f;
+
+    // ---- Lookahead feed buffer (level detector only, output không delay) ----
+    static constexpr int DYNBASS_LOOKAHEAD_MAX = 960; // 10ms @ 96kHz
+    float   _lookaheadMs      = 0.0f;
+    int     _lookaheadSamples = 0;
+    int     _laWriteIdx       = 0;
+    float*  _laFeedBuf        = nullptr; // PSRAM: mono, (MAX+1) floats
 
     // ---- Blend alpha ----
     float   _alpha       = 0.0f;     // [-1, +1]

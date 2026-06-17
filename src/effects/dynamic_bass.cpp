@@ -12,6 +12,7 @@
  */
 
 #include "dynamic_bass.h"
+#include "../utils/psram.h"
 #include <math.h>
 #include <string.h>
 
@@ -22,19 +23,31 @@ static constexpr int DECIM_FACTOR = 16;
 // init
 // ============================================================================
 void DynamicBass::init(int32_t sampleRate, int32_t numChannels) {
+    const float savedMs = _lookaheadMs;
     DspModule::init(sampleRate, numChannels);
+    _lookaheadMs = savedMs;
 
     _fCut          = 80;
     _gainBoostDb   = 600;       // +6.00 dB default
     _gainBoostDbF  = 6.0f;
     _enhanced      = false;
-    _clipattack    = 600;
+    _clipattack    = 5;
     _cliprelease   = 200;
 
     _boostFullDb = -2400;
     _neutralDb   = -1600;
     _clipFullDb  =  -800;
 
+    if (_laFeedBuf == nullptr) {
+        _laFeedBuf = (float*)PSRAM_MALLOC((DYNBASS_LOOKAHEAD_MAX + 1) * sizeof(float));
+    }
+    // Tính lại samples từ ms * SR mới
+    if (_lookaheadMs <= 0.0f) {
+        _lookaheadSamples = 0;
+    } else {
+        int s = (int)(_lookaheadMs * 0.001f * (float)sampleRate + 0.5f);
+        _lookaheadSamples = (s > DYNBASS_LOOKAHEAD_MAX) ? DYNBASS_LOOKAHEAD_MAX : s;
+    }
     recalcFilters();
     reset();
 }
@@ -43,6 +56,8 @@ void DynamicBass::init(int32_t sampleRate, int32_t numChannels) {
 // reset
 // ============================================================================
 void DynamicBass::reset() {
+    if (_laFeedBuf) memset(_laFeedBuf, 0, (DYNBASS_LOOKAHEAD_MAX + 1) * sizeof(float));
+    _laWriteIdx = 0;
     _flp1.reset();
     _fboost.reset();
     _fboost2.reset();
@@ -92,6 +107,19 @@ void DynamicBass::setClipRelease(int32_t ms) {
     recalcFilters();
 }
 
+void DynamicBass::setLookahead(float ms) {
+    _lookaheadMs = (ms < 0.0f) ? 0.0f : ms;
+    if (_lookaheadMs <= 0.0f) {
+        _lookaheadSamples = 0;
+    } else {
+        int s = (int)(_lookaheadMs * 0.001f * (float)_sampleRate + 0.5f);
+        _lookaheadSamples = (s > DYNBASS_LOOKAHEAD_MAX) ? DYNBASS_LOOKAHEAD_MAX : s;
+        if (_laFeedBuf == nullptr)
+            _laFeedBuf = (float*)PSRAM_MALLOC((DYNBASS_LOOKAHEAD_MAX + 1) * sizeof(float));
+    }
+    reset();
+}
+
 // ============================================================================
 // recalcFilters
 // ============================================================================
@@ -107,14 +135,14 @@ void DynamicBass::recalcFilters() {
 
     // Enhanced punch (bypass when _enhanced=false)
     if (_enhanced) {
-        float enhGain = (gain / 20.0f) * 6.0f;
+        float enhGain = (gain / 20.0f) * 7.0f;
         _fboost2.design(EQ_FILTER_TYPE_PEAKING, fc, 0.5f, enhGain, fs);
     } else {
         _fboost2.design(EQ_FILTER_TYPE_PEAKING, 1.0f, 0.707f, 0.0f, fs);
     }
 
     // Extra boost for low-energy zone
-    const float extraBoostGain = gain * 0.8f;
+    const float extraBoostGain = gain * 0.9f;
     _fboostExtra.design(EQ_FILTER_TYPE_PEAKING, fc * 0.6f, 0.5f, extraBoostGain, fs);
 
     // Sub limiter for high-energy zone
@@ -165,6 +193,8 @@ void IRAM_ATTR DynamicBass::process(float* __restrict samples, size_t numSamples
     float targetAlpha = computeTargetAlpha(_energyDb);
     int   decimCount  = 0;
 
+    const float invChannels = 1.0f / (float)_numChannels;
+
     for (size_t i = 0; i < numSamples; i++) {
         const int base = (int)(i * _numChannels);
 
@@ -176,9 +206,20 @@ void IRAM_ATTR DynamicBass::process(float* __restrict samples, size_t numSamples
             sqSum += bassLp[ch] * bassLp[ch];
         }
 
-        // IIR energy update (cheap: 1 multiply-add)
-        const float sqAvg = sqSum * (1.0f / (float)_numChannels);
-        rmsEnergySq = rmsEnergySq + rmsCoeff * (sqAvg - rmsEnergySq);
+        // ── Lookahead feed: ghi mono LP vào circular buffer,
+        //    đọc sample cũ hơn lookahead ms để feed vào energy detector
+        float monoLp = sqSum * invChannels; // sqAvg
+        float feedSq = monoLp; // default: no lookahead
+        if (_lookaheadSamples > 0 && _laFeedBuf != nullptr) {
+            _laFeedBuf[_laWriteIdx] = monoLp;
+            int readIdx = _laWriteIdx - _lookaheadSamples;
+            if (readIdx < 0) readIdx += DYNBASS_LOOKAHEAD_MAX + 1;
+            feedSq = _laFeedBuf[readIdx];
+            if (++_laWriteIdx > DYNBASS_LOOKAHEAD_MAX) _laWriteIdx = 0;
+        }
+
+        // IIR energy update — dùng feedSq (đã lookahead nếu enabled)
+        rmsEnergySq = rmsEnergySq + rmsCoeff * (feedSq - rmsEnergySq);
 
         // ── Decimated: expensive dB + alpha target every 16 samples ──
         if (++decimCount >= DECIM_FACTOR) {
@@ -197,26 +238,24 @@ void IRAM_ATTR DynamicBass::process(float* __restrict samples, size_t numSamples
 
             // Main boost (always runs — 1 biquad)
             float boosted = _fboost.processSample(bassLp[ch], ch);
-            if (enhanced) {
-                boosted = _fboost2.processSample(boosted, ch);
-            }
+            if (enhanced) boosted = _fboost2.processSample(boosted, ch);
 
             float result;
 
             if (alpha > 0.02f) {
                 // Low energy zone: extra boost active
                 const float extra = _fboostExtra.processSample(boosted, ch);
-                _flowclip.processSample(0.0f, ch);  // keep state alive (zero input = cheap)
+                //_flowclip.processSample(0.0f, ch);  // keep state alive (zero input = cheap)
                 result = boosted + alpha * (extra - boosted);
             } else if (alpha < -0.02f) {
                 // High energy zone: clip protection active
-                _fboostExtra.processSample(0.0f, ch);  // keep state alive
+                //_fboostExtra.processSample(0.0f, ch);  // keep state alive
                 const float clipped = _flowclip.processSample(boosted, ch);
                 result = boosted + (-alpha) * (clipped - boosted);
             } else {
                 // Neutral zone: skip both extra filters entirely
-                _fboostExtra.processSample(0.0f, ch);
-                _flowclip.processSample(0.0f, ch);
+                //_fboostExtra.processSample(0.0f, ch);
+                //_flowclip.processSample(0.0f, ch);
                 result = boosted;
             }
 

@@ -11,7 +11,7 @@
  */
 
 #include "param_controller.h"
-#include "../utils/debug_log.h"
+#include "../../utils/debug_log.h"
 #include <string.h>
 
 #define TAG "PARAM"
@@ -298,10 +298,12 @@ void ParamController::handleSetIsfConfig(const UartCommand& cmd) {
     int16_t rmsMs         = extractInt16(&cmd.data[1]);
     int16_t slewMs        = extractInt16(&cmd.data[3]);
     int16_t overrideQ88   = extractInt16(&cmd.data[5]);
+    int32_t lookahead     = extractInt32(&cmd.data[7]);
 
     if (numPresets > 0) isf->setNumPresets(numPresets);
     if (rmsMs  > 0)    isf->setRmsWindowMs(rmsMs);
     if (slewMs > 0)    isf->setSlewMs(slewMs);
+    if (lookahead > 0) isf->setLookahead((float)lookahead / 10.0f);
 
     // INT16_MIN (-32768) = auto; anything else = override level in Q8.8
     float overrideDb = (overrideQ88 == (int16_t)0x8000)
@@ -309,9 +311,9 @@ void ParamController::handleSetIsfConfig(const UartCommand& cmd) {
         : (float)overrideQ88 / 256.0f;
     isf->setOverrideDb(overrideDb);
 
-    LOG_INFO(TAG, "ISF%d config: presets=%d rms=%dms slew=%dms override=%.1f",
+    LOG_INFO(TAG, "ISF%d config: presets=%d rms=%dms slew=%dms override=%.1f, lookahead=%f",
         (cmd.moduleId == MODULE_ID_ISF_1) ? 1 : 2,
-        numPresets, rmsMs, slewMs, overrideDb);
+        numPresets, rmsMs, slewMs, overrideDb, (float)lookahead / 10.0f);
 
     _uart->sendAck(cmd.moduleId, 0);
 }
@@ -349,18 +351,23 @@ void ParamController::sendIsfState(uint8_t instanceIdx) {
     if (levelDb < -128.0f) levelDb = -128.0f;
     if (levelDb >  127.0f) levelDb =  127.0f;
 
-    int16_t levelQ88 = (int16_t)(levelDb * 256.0f);
-    int16_t slewQ88  = (int16_t)(slewIdx * 256.0f);
+    int16_t levelQ88    = (int16_t)(levelDb * 256.0f);
+    int16_t slewQ88     = (int16_t)(slewIdx * 256.0f);
+    int32_t lookahead = (int32_t)(isf.getLookaheadMs() * 10.0f + 0.5f);
 
-    uint8_t pkt[8];
-    pkt[0] = instanceIdx;
-    pkt[1] = (uint8_t)(levelQ88 & 0xFF);
-    pkt[2] = (uint8_t)((levelQ88 >> 8) & 0xFF);
-    pkt[3] = (uint8_t)(slewQ88 & 0xFF);
-    pkt[4] = (uint8_t)((slewQ88 >> 8) & 0xFF);
-    pkt[5] = (uint8_t)isf.getActiveA();
-    pkt[6] = (uint8_t)isf.getActiveB();
-    pkt[7] = isf.getNumPresets();
+    uint8_t pkt[12];
+    pkt[0]  = instanceIdx;
+    pkt[1]  = (uint8_t)(levelQ88 & 0xFF);
+    pkt[2]  = (uint8_t)((levelQ88 >> 8) & 0xFF);
+    pkt[3]  = (uint8_t)(slewQ88 & 0xFF);
+    pkt[4]  = (uint8_t)((slewQ88 >> 8) & 0xFF);
+    pkt[5]  = (uint8_t)(lookahead & 0xFF);
+    pkt[6]  = (uint8_t)((lookahead >> 8) & 0xFF);
+    pkt[7]  = (uint8_t)((lookahead >> 16) & 0xFF);
+    pkt[8]  = (uint8_t)((lookahead >> 24) & 0xFF);
+    pkt[9]  = (uint8_t)isf.getActiveA();
+    pkt[10] = (uint8_t)isf.getActiveB();
+    pkt[11] = isf.getNumPresets();
 
     _uart->sendFrame(CMD_REPORT_ISF, MODULE_ID_ISF_1, pkt, sizeof(pkt));
 }
@@ -438,10 +445,10 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     };
 
     // Volume
-    sendPkt(MODULE_ID_POST_GAIN, 0, _pipeline->getPostGain()._gainDb);
+    sendPkt(MODULE_ID_POST_GAIN, 0, _pipeline->getPostGain().getGainDb());
     sendPkt(MODULE_ID_POST_GAIN, 1,  _pipeline->getPostGain().isMuted() ? 1 : 0);
     sendPkt(MODULE_ID_POST_GAIN, 2, _pipeline->getPostGain().isMono()   ? 1 : 0);
-    sendPkt(MODULE_ID_PRE_GAIN, 0, _pipeline->getPreGain()._gainDb);
+    sendPkt(MODULE_ID_PRE_GAIN, 0, _pipeline->getPreGain().getGainDb());
     sendPkt(MODULE_ID_PRE_GAIN, 1, _pipeline->getPreGain().isMuted() ? 1 : 0);
     sendPkt(MODULE_ID_PRE_GAIN, 2, _pipeline->getPreGain().isMono()  ? 1 : 0);
 
@@ -469,6 +476,7 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     sendPkt(MODULE_ID_DYNAMIC_BASS, 5, _pipeline->getDynamicBass().getClipFullThresh());
     sendPkt(MODULE_ID_DYNAMIC_BASS, 6, _pipeline->getDynamicBass().getClipAttack());
     sendPkt(MODULE_ID_DYNAMIC_BASS, 7, _pipeline->getDynamicBass().getClipRelease());
+    sendPkt(MODULE_ID_DYNAMIC_BASS, 8, (int32_t)(_pipeline->getDynamicBass()._lookaheadMs * 10.0f + 0.5f));
 
     // DRC — send mode + fullband (band[3]) params using new encoding
     {
@@ -511,7 +519,7 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     sendEq(CMD_SET_EQ_BAND, MODULE_ID_LEFTRIGHT_EQ, _pipeline->getLeftRightEq().getEqRight(), true);
 
     // DynEQ
-    uint8_t deqPkt[20];
+    uint8_t deqPkt[24];
     auto write32 = [&](int offset, int32_t val) {
         deqPkt[offset] = val & 0xFF;
         deqPkt[offset + 1] = (val >> 8) & 0xFF;
@@ -524,7 +532,8 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     write32(8, deq._highThreshDb);
     write32(12, deq._attackMs);
     write32(16, deq._releaseMs);
-    _uart->sendFrame(CMD_SET_DYNEQ_THRESH, MODULE_ID_DYNAMIC_EQ, deqPkt, 20);
+    write32(20, (int32_t)(deq._lookaheadMs * 10.0f + 0.5f));
+    _uart->sendFrame(CMD_SET_DYNEQ_THRESH, MODULE_ID_DYNAMIC_EQ, deqPkt, 24);
 
     sendEq(CMD_SET_DYNEQ_LOW_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqLow);
     sendEq(CMD_SET_DYNEQ_HIGH_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqHigh);
@@ -627,13 +636,14 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
 
 void ParamController::handleSetDynEqThresholds(const UartCommand& cmd) {
     // low(4)+normal(4)+high(4)+attack(4)+release(4) = 20 bytes
-    if (cmd.dataLen < 20) { _uart->sendAck(cmd.moduleId, 1); return; }
+    if (cmd.dataLen < 24) { _uart->sendAck(cmd.moduleId, 1); return; }
     DynamicEQ& deq = _pipeline->getDynamicEq();
     deq.setLowEnergyThreshold(extractInt32(&cmd.data[0]));
     deq.setNormalEnergyThreshold(extractInt32(&cmd.data[4]));
     deq.setHighEnergyThreshold(extractInt32(&cmd.data[8]));
     deq.setAttackTime(extractInt32(&cmd.data[12]));
     deq.setReleaseTime(extractInt32(&cmd.data[16]));
+    deq.setLookahead((float)extractInt32(&cmd.data[20]) / 10.0f);
     _uart->sendAck(cmd.moduleId, 0);
 }
 
@@ -680,8 +690,9 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
                 case 3: _pipeline->getDynamicBass().setBoostFullThreshold(value); break;
                 case 4: _pipeline->getDynamicBass().setNeutralThreshold(value);   break;
                 case 5: _pipeline->getDynamicBass().setClipFullThreshold(value);  break;
-                case 6: _pipeline->getDynamicBass().setClipAttack(value);         break;
-                case 7: _pipeline->getDynamicBass().setClipRelease(value);        break;
+                case 6: _pipeline->getDynamicBass().setClipAttack(value);          break;
+                case 7: _pipeline->getDynamicBass().setClipRelease(value);         break;
+                case 8: _pipeline->getDynamicBass().setLookahead((float)value / 10.0f); break; // ms×10 → ms
             }
             break;
         case MODULE_ID_DRC: {
@@ -715,7 +726,6 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
             }
             break;
         }
-        default:
             LOG_WARN(TAG, "SET_PARAM: unhandled moduleId 0x%02X", cmd.moduleId);
             _uart->sendAck(cmd.moduleId, 1);
             return;

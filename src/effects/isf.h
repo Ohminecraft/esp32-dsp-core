@@ -51,6 +51,7 @@ struct ISFPreset {
 class IndexSelectableFilter : public DspModule {
     friend class PresetManager;
     friend class ParamController;
+    friend class Display;
 
 public:
     void init(int32_t sampleRate, int32_t numChannels) override;
@@ -93,12 +94,18 @@ public:
     static constexpr float ISF_OVERRIDE_AUTO = -9999.0f;
     void setOverrideDb(float db) { _overrideDb = db; }
 
+    // Lookahead: delay feed vào RMS detector Nms.
+    // Giúp slewIndex bắt đầu di chuyển trước khi transient thực sự đến.
+    // Output signal không bị delay.
+    void setLookahead(float ms);
+
     // ── Runtime state (read-only, for UI / UART reporting) ───────────────────
 
     float getCurrentLevelDb() const { return _currentLevelDb; }
     float getSlewIndex()      const { return _slewIndex; }
     int   getActiveA()        const { return _activeA; }
     int   getActiveB()        const { return _activeB; }
+    float getLookaheadMs()    const { return _lookaheadMs; }
 
 private:
     uint8_t   _moduleId    = 0x0B;
@@ -111,6 +118,13 @@ private:
     int32_t _rmsMs         = ISF_DEFAULT_RMS_MS;
     float   _currentLevelDb = -96.0f;
     float   _overrideDb    = ISF_OVERRIDE_AUTO;
+
+    // ── Lookahead feed buffer (RMS detector only) ─────────────────────────
+    static constexpr int ISF_LOOKAHEAD_MAX = 960; // 10ms @ 96kHz
+    float   _lookaheadMs      = 0.0f;
+    int     _lookaheadSamples = 0;
+    int     _laWriteIdx       = 0;
+    float*  _laFeedBuf        = nullptr; // PSRAM: mono squared, (MAX+1) floats
 
     // ── Smooth slew ──────────────────────────────────────────────────────────
     float   _slewIndex  = 0.0f;        // fractional, 0 .. numPresets-1

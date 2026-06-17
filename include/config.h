@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-#define FIRMWARE_VERSION "1.4.2"
+#define FIRMWARE_VERSION "1.5"
 
 // ============================================================================
 // Audio Configuration
@@ -27,6 +27,7 @@
 #define DSP_SAMPLE_RATE_DEFAULT 96000   // Hz — max QCC5125 LDAC rate
 
 #define DSP_NUM_CHANNELS        2       // Stereo
+#define DSP_DMA_BUFFER_COUNT    8       // Number of DMA buffers in the I2S driver
 #if defined(CONFIG_IDF_TARGET_ESP32) // ESP32 can handle max 256 frame size because out of heap
 #define DSP_FRAME_SIZE          256     // Samples per frame per channel
 #else 
@@ -34,11 +35,13 @@
 #endif
 #define DSP_FRAME_SAMPLES       (DSP_FRAME_SIZE * DSP_NUM_CHANNELS)
 
+#//define USING_SUB_OUT               // Enable separate sub out channel on I2S_NUM_0 (see txSubHandle in AudioIO) - requires wiring to separate DAC input and additional I2S channel init
+
 // ============================================================================
 // EQ Configuration
 // ============================================================================
 
-#define ISF_MAX_PRESETS         5
+#define ISF_MAX_PRESETS         10
 #define ISF_DEFAULT_RMS_MS      300
 #define ISF_DEFAULT_SLEW_MS     500
 
@@ -70,6 +73,62 @@
 #define MODULE_ID_ISF_1         0x0B
 #define MODULE_ID_ISF_2         0x0C
 #define MODULE_ID_SYSTEM        0xF0
+
+// ============================================================================
+// Command IDs (UART protocol)
+// ===========================================================================
+
+// Common
+
+#define CMD_SET_PARAM           0x01
+#define CMD_ENABLE_MODULE       0x02
+#define CMD_DISABLE_MODULE      0x03
+#define CMD_SET_EQ_BAND         0x04
+
+// Dynamic EQ specific commands
+
+#define CMD_SET_DYNEQ_LOW_BAND  0x05
+#define CMD_SET_DYNEQ_HIGH_BAND 0x06
+#define CMD_SET_DYNEQ_THRESH    0x07
+
+// ISF specific commands
+
+#define CMD_SET_ISF_PRESET      0x0B
+#define CMD_SET_ISF_BAND_PARAMS 0x0C
+#define CMD_GET_ISF_STATE       0x0D
+#define CMD_SET_ISF_CONFIG      0x0E
+
+// WiFi configuration commands
+
+#define CMD_WIFI_SCAN       0x10  // ESP32 scans WiFi, returns SSID list via ACK frames
+#define CMD_WIFI_SET_STA    0x11  // Data: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) + ip(4B opt)
+#define CMD_WIFI_SET_AP     0x12  // No data — switch back to AP mode
+#define CMD_WIFI_GET_STATUS 0x13  // No data — reply with mode/IP/SSID/RSSI
+
+// reporting commands:
+
+#define CMD_REPORT_ENABLE_MASK         0x44
+#define CMD_GET_REPORT_CPU_USAGE       0x39
+#define CMD_SEND_REPORT_CPU_USAGE      0x40 
+#define CMD_REPORT_ISF                 0x41
+#define CMD_REPORT_ISF_PRESET          0x42
+#define CMD_REPORT_ISF_BAND_PER_PRESET 0x43
+#define CMD_REPORT_DYNBASS             0x46
+#define CMD_REPORT_DYNEQ               0x47
+#define CMD_REPORT_COMPANDER           0x48
+#define CMD_REPORT_DRC                 0x49
+#define CMD_GET_MODULE_METER           0x4A
+
+// App-level commands (not direct DSP control, more for user interaction)
+
+#define CMD_GET_CURRENT_PRESET_INDEX   0x45
+#define CMD_SAVE_PRESET                0x08
+#define CMD_LOAD_PRESET                0x09
+#define CMD_GET_ALL_STATE              0x0A
+
+#define CMD_ACK_RESPONSE 0xFE
+#define CMD_ERROR        0xFF
+
 
 // ============================================================================
 // Task Configuration
@@ -108,13 +167,17 @@
 // ============================================================================
 
 #define MAX_PRESET_SLOTS        4
+#define MAIN_MENU_AUTOSAVE_MS   2500
+#define MAIN_MENU_IDLE_SAVE_MS  2500
 
 // ============================================================================
 // Misc Configs
 // ============================================================================
 
+#define USING_DISPLAY
 #define DISABLE_PERF_LOG
 #define ONLY_SERIAL
+#define USE_BUILTIN_SERIAL
 //#define USING_TRIGGERS
 //#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
 

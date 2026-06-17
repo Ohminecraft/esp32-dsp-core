@@ -48,6 +48,7 @@
 class DynamicEQ : public DspModule {
     friend class PresetManager;
     friend class ParamController;
+    friend class Display;
 
 public:
     DynamicEQ() = default;
@@ -90,6 +91,9 @@ public:
     void setHighEnergyThreshold  (int32_t db_001);
     void setAttackTime (int32_t ms);
     void setReleaseTime(int32_t ms);
+    // Lookahead: delay feed vào energy detector Nms.
+    // Output signal không bị delay — chỉ level detection nhìn trước.
+    void setLookahead(float ms);
 
     // Convenience: read back current smoothed energy (dBFS) and blend factors
     float getEnergyDb()   const { return _energyDb;   }
@@ -130,6 +134,13 @@ private:
     int32_t _highThreshDb   =  -600;
 
     // ---- Processing buffers (mapped dynamically from _scratchpad) ---------
+
+    // ---- Lookahead feed buffer (energy detector only) --------------------
+    static constexpr int DYNEQ_LOOKAHEAD_MAX = 960; // 10ms @ 96kHz
+    float   _lookaheadMs      = 0.0f;
+    int     _lookaheadSamples = 0;
+    int     _laWriteIdx       = 0;
+    float*  _laFeedBuf        = nullptr; // PSRAM: mono squared, (MAX+1) floats
 
     // ---- Internal helpers ------------------------------------------------
     void  recalcCoeffs();

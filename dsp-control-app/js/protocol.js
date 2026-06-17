@@ -159,10 +159,12 @@ export function buildSetDynEqBand(isHigh, band, pregainDb, enabled, type, freq, 
     return buildFrame(cmd, MODULE.DYNAMIC_EQ, data);
 }
 
-export function buildSetDynEqThresholds(low, normal, high, attackMs, releaseMs) {
+export function buildSetDynEqThresholds(low, normal, high, attackMs, releaseMs, lookaheadMs) {
+    const clamped = Math.max(0, Math.min(100, lookaheadMs)); // 100 = 10.0ms
+    const value   = Math.round(clamped * 10);       // ×10 → int32
     const data = [
         ...int32ToLE(low), ...int32ToLE(normal), ...int32ToLE(high),
-        ...int32ToLE(attackMs), ...int32ToLE(releaseMs)
+        ...int32ToLE(attackMs), ...int32ToLE(releaseMs), ...int32ToLE(value)
     ];
     return buildFrame(CMD.SET_DYNEQ_THRESH, MODULE.DYNAMIC_EQ, data);
 }
@@ -188,8 +190,9 @@ export function buildGetModuleMeter(moduleId) {
  * Encoding: ms × 10 → int32  (0.1ms resolution)
  *   e.g. 5.0ms → value 50,  0.5ms → value 5,  0 → disabled
  *
- * Compander: paramId = 6
- * DRC band:  paramId = pBase + 5  (pBase = 0x20 + bandIdx*8)
+ * Compander:    paramId = 6
+ * DRC band:     paramId = pBase + 5  (pBase = 0x20 + bandIdx*8)
+ * DynamicBass:  paramId = 8
  *
  * @param {number} moduleId  MODULE.COMPANDER or MODULE.DRC
  * @param {number} paramId   6 for Compander; (0x20+band*8+5) for DRC band
@@ -249,13 +252,16 @@ export function buildSetIsfBandParams(moduleId, presetIdx, bandIdx, presetObj) {
  * @param {number} slewMs     Slew time per index step ms
  * @param {number|null} overrideDb  null = auto (use RMS), number = override level
  */
-export function buildSetIsfConfig(moduleId, numPresets, rmsMs, slewMs, overrideDb = null) {
+export function buildSetIsfConfig(moduleId, numPresets, rmsMs, slewMs, overrideDb = null, lookahead) {
     const overrideQ88 = (overrideDb === null) ? 0x8000 : dbToQ88(overrideDb);
+    const clamped = Math.max(0, Math.min(100, lookahead)); // 100 = 10.0ms
+    const lookaheadvalue   = Math.round(clamped * 10);       // ×10 → int32
     const data = [
         numPresets & 0xFF,
         ...int16ToLE(rmsMs),
         ...int16ToLE(slewMs),
-        ...int16ToLE(overrideQ88)
+        ...int16ToLE(overrideQ88),
+        ...int32ToLE(lookaheadvalue)
     ];
     return buildFrame(CMD.SET_ISF_CONFIG, moduleId, data);
 }

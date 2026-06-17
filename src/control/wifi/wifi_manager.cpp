@@ -7,8 +7,8 @@
 #include <ESPmDNS.h>
 #include <esp_wifi.h>          // esp_wifi_set_ps()
 #include "config.h"
-#include "../utils/debug_log.h"
-#include "../utils/psram.h"  // psram_alloc(), PSRAM_FREE()
+#include "../../utils/debug_log.h"
+#include "../../utils/psram.h"  // psram_alloc(), PSRAM_FREE()
 
 #define TAG "WIFI"
 

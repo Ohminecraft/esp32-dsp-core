@@ -121,6 +121,23 @@
 #define MUTE_PIN 4
 
 // ============================================================================
+// TFT Encoder
+// ============================================================================
+// Set these to the GPIOs wired to the rotary encoder. The display UI compiles
+// with the encoder disabled while the pins are left at -1.
+#ifndef ENCODER_A_PIN
+#define ENCODER_A_PIN 12
+#endif
+
+#ifndef ENCODER_B_PIN
+#define ENCODER_B_PIN 13
+#endif
+
+#ifndef ENCODER_BTN_PIN
+#define ENCODER_BTN_PIN 14
+#endif
+
+// ============================================================================
 // Trigger GPIO Settings (Single / Triple Click)
 // ============================================================================
 #ifdef USING_TRIGGERS

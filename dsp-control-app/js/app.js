@@ -19,7 +19,9 @@ import {
 import { EQGraph } from './eq-graph.js';
 import { DRCGraph } from './drc-graph.js';
 
-let eqGraph = null;
+// eqGraphs: Map<moduleId (string), EQGraph instance>
+// Multiple accordions can have their own graph open simultaneously.
+const eqGraphs = new Map();
 let drcGraph = null;
 let parser = new FrameParser();
 
@@ -380,7 +382,7 @@ parser.onFrame((frame) => {
                 else if (pIndex === 2) store.updateParam('preGain', 'mono', val !== 0);
                 break;
             case MODULE.POST_GAIN:
-                if (pIndex === 0) store.updateParam('postGain', 'gainDb', val);
+                if (pIndex === 0) {store.updateParam('postGain', 'gainDb', val); console.log(val);}
                 else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
                 else if (pIndex === 2) store.updateParam('postGain', 'mono', val !== 0);
                 break;
@@ -407,6 +409,7 @@ parser.onFrame((frame) => {
                 else if (pIndex === 5) store.updateParam('dynamicBass', 'clipthreshold', val);
                 else if (pIndex === 6) store.updateParam('dynamicBass', 'clipattack', val);
                 else if (pIndex === 7) store.updateParam('dynamicBass', 'cliprelease', val);
+                else if (pIndex === 8) store.updateParam('dynamicBass', 'lookaheadMs', val / 10);
                 break;
             case MODULE.DRC: {
                 // New encoding:
@@ -478,6 +481,7 @@ parser.onFrame((frame) => {
         store.updateParam('dynamicEq', 'highThresh', leToInt32(frame.data, 8));
         store.updateParam('dynamicEq', 'attackMs', leToInt32(frame.data, 12));
         store.updateParam('dynamicEq', 'releaseMs', leToInt32(frame.data, 16));
+        store.updateParam('dynamicEq', 'lookaheadMs', leToInt32(frame.đata, 20) / 10);
     }
     else if (frame.cmd === CMD.SEND_REPORT_CPU_USAGE && frame.data.length >= 7) {
         const cpu10 = frame.data[0] | (frame.data[1] << 8);
@@ -486,15 +490,19 @@ parser.onFrame((frame) => {
         updateCpuUI(cpu10 / 10.0, 100 - heapPct, fs);
     }
     else if (frame.cmd === CMD.REPORT_ISF && frame.data.length >= 7) {
-        // Data: instance(1)+level_q88(2)+slew_q88(2)+activeA(1)+activeB(1)+numPresets(1)
+        // Data: instance(1)+level_q88(2)+slew_q88(2)+lookahead(4)+activeA(1)+activeB(1)+numPresets(1)
         const d = frame.data;
         const instanceIdx = d[0];
         const which = instanceIdx === 0 ? 'isf1' : 'isf2';
-        const levelDb  = leToInt16(d, 1) / 256;
-        const slewQ88  = leToInt16(d, 3);
-        const slewIdx  = slewQ88 / 256;
-        const activeA  = d[5];
-        const activeB  = d[6];
+        const levelDb    = leToInt16(d, 1) / 256;
+        const slewQ88    = leToInt16(d, 3);
+        const lookahead  = leToInt32(d, 5)
+        const slewIdx    = slewQ88 / 256;
+        const activeA    = d[9];
+        const activeB    = d[10];
+        const numPresets = d[11];
+        store.getIsfInstance(which).numPresets = numPresets;
+        store.getIsfInstance(which).lookaheadMs = lookahead / 10;
         store.updateIsfState(which, levelDb, slewIdx, activeA, activeB);
         renderIsfLevelMeter(which, levelDb, slewIdx, activeA, activeB);
     }
@@ -609,9 +617,11 @@ const ACCORDION_MODULES = [
 
 function buildAccordionModules() {
     const container = document.getElementById('modules-list');
-    
-    // Remember which accordion was open
-    const openModuleId = document.querySelector('.accordion.open')?.dataset.moduleId;
+
+    // Remember which accordions were open (support multiple)
+    const openModuleIds = new Set(
+        [...document.querySelectorAll('.accordion.open')].map(a => a.dataset.moduleId)
+    );
     
     container.innerHTML = '';
 
@@ -667,21 +677,14 @@ function buildAccordionModules() {
                 const wasOpen = acc.classList.contains('open');
 
                 if (wasOpen) {
-                    // Close this EQ accordion
+                    // Close & unmount only THIS accordion's graph
                     acc.classList.remove('open');
-                    unmountGraph();
+                    unmountGraph(acc);
                 } else {
-                    // Close ALL other EQ accordions first
-                    document.querySelectorAll('.accordion').forEach(other => {
-                        if (other !== acc && EQ_MODULE_IDS.includes(other.dataset.moduleId)) {
-                            other.classList.remove('open');
-                        }
-                    });
-
-                    // Open this one
+                    // Open this one (others stay open)
                     acc.classList.add('open');
 
-                    // Set active EQ
+                    // Track which EQ target this accordion represents
                     if (mod.id === MODULE.EQ_DSP_1) store.setActiveEq('eq1');
                     else if (mod.id === MODULE.EQ_DSP_2) store.setActiveEq('eq2');
                     else if (mod.id === 'DYNEQ_LOW') store.setActiveEq('dynLow');
@@ -691,7 +694,7 @@ function buildAccordionModules() {
                     else if (mod.id === MODULE.ISF_1) { store.setActiveIsfInstance('isf1'); store.graphMode = 'isf1'; }
                     else if (mod.id === MODULE.ISF_2) { store.setActiveIsfInstance('isf2'); store.graphMode = 'isf2'; }
 
-                    // Mount graph
+                    // Mount graph into THIS accordion
                     mountGraphToAccordion(acc);
                 }
             } else {
@@ -709,10 +712,10 @@ function buildAccordionModules() {
         acc.appendChild(body);
         container.appendChild(acc);
 
-        // Restore open state
-        if (mod.id === openModuleId || (mod.id === Number(openModuleId))) {
+        // Restore open state (multiple accordions can be open)
+        if (openModuleIds.has(String(mod.id))) {
             acc.classList.add('open');
-            // If it was an EQ module, we need to remount the graph
+            // If it was an EQ module, remount its graph
             if (isEqModule) {
                 setTimeout(() => mountGraphToAccordion(acc), 0);
             }
@@ -801,12 +804,10 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Clip Release', 0, 2000, 1, 'ms',
                 () => store.dynamicBass.cliprelease,
                 (v) => { store.dynamicBass.cliprelease = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 7, v)); });
+            addSlider(body, 'Lookahead', 0, 50, 1, 'ms',
+                () => store.dynamicBass.lookaheadMs,
+                (v) => { store.dynamicBass.lookaheadMs = v; sendFrame(buildSetLookahead(MODULE.DYNAMIC_BASS, 8, v)); }, null, 0.1);
             break;
-
-        case MODULE.AUTO_EQ:
-            buildAutoEqPanel(body);
-            break;
-
         case MODULE.ISF_1:
             buildIsfPanel(body, 'isf1');
             break;
@@ -848,19 +849,19 @@ function buildModuleBody(body, mod) {
             const { slider: slLow, valInput: vsLow } =
                 addSlider(body, 'Low Thresh', -6000, 0, 100, 'dB',
                     () => store.dynamicEq.lowThresh,
-                    (v) => { store.dynamicEq.lowThresh = v; sendFrame(buildSetDynEqThresholds(v, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs)); },
+                    (v) => { store.dynamicEq.lowThresh = v; sendFrame(buildSetDynEqThresholds(v, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); },
                     null, 0.01);
 
             const { slider: slNorm, valInput: vsNorm } =
                 addSlider(body, 'Normal Thresh', -6000, 0, 100, 'dB',
                     () => store.dynamicEq.normalThresh,
-                    (v) => { store.dynamicEq.normalThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, v, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs)); },
+                    (v) => { store.dynamicEq.normalThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, v, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); },
                     null, 0.01);
 
             const { slider: slHigh, valInput: vsHigh } =
                 addSlider(body, 'High Thresh', -6000, 0, 100, 'dB',
                     () => store.dynamicEq.highThresh,
-                    (v) => { store.dynamicEq.highThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, v, store.dynamicEq.attackMs, store.dynamicEq.releaseMs)); },
+                    (v) => { store.dynamicEq.highThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, v, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); },
                     null, 0.01);
 
             // Constraint enforcement (runs after addSlider's own listener)
@@ -914,10 +915,13 @@ function buildModuleBody(body, mod) {
 
             addSlider(body, 'Attack', 1, 2000, 1, 'ms',
                 () => store.dynamicEq.attackMs,
-                (v) => { store.dynamicEq.attackMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, v, store.dynamicEq.releaseMs)); });
+                (v) => { store.dynamicEq.attackMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, v, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); });
             addSlider(body, 'Release', 10, 2000, 1, 'ms',
                 () => store.dynamicEq.releaseMs,
-                (v) => { store.dynamicEq.releaseMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, v)); });
+                (v) => { store.dynamicEq.releaseMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, v, store.dynamicEq.lookaheadMs)); });
+            addSlider(body, 'Lookahead', 0, 50, 1, 'ms',
+                () => store.dynamicEq.lookaheadMs,
+                (v) => { store.dynamicEq.lookaheadMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, v)); }, null, 0.1);
 
             /*
             const syncBtn = document.createElement('button');
@@ -1278,11 +1282,17 @@ function buildEqBandPanel(container, moduleId, eqKey) {
     eq.bands.forEach((band, i) => {
         if (!band.enabled) return;
         container.appendChild(buildBandRow(band, i, (idx, changes) => {
-            store.updateEqBand(idx, changes);
+            // Update directly on this eq, not store.getActiveEqState()
+            Object.assign(eq.bands[idx], changes);
+            store.emit('eq:changed');
+            store.emit('eq:band-updated', idx);
             syncEqBand(moduleId, idx);
         }, (idx) => {
-            store.removeEqBand(idx);
-            syncEqBand(moduleId, idx);  // Tell firmware this slot is now disabled
+            eq.bands[idx].enabled = false;
+            Object.assign(eq.bands[idx], { type: 0, freq: 1000, gain: 0, q: 0.707 });
+            store.emit('eq:changed');
+            store.emit('eq:structure-changed');
+            syncEqBand(moduleId, idx);
         }));
     });
 
@@ -1299,7 +1309,12 @@ function buildEqBandPanel(container, moduleId, eqKey) {
         addBtn.textContent = '+ Add Band';
         addBtn.className = 'btn btn-outline btn-sm';
         addBtn.addEventListener('click', () => {
-            const slot = store.addEqBand(1000, 0, 0.707, 0);
+            // Add directly to this eq, not store.getActiveEqState()
+            const slot = eq.bands.findIndex(b => !b.enabled);
+            if (slot === -1) return;
+            Object.assign(eq.bands[slot], { enabled: true, freq: 1000, gain: 0, q: 0.707, type: 0 });
+            store.emit('eq:changed');
+            store.emit('eq:structure-changed');
             if (slot !== null) syncEqBand(moduleId, slot);
         });
         actions.appendChild(addBtn);
@@ -1310,10 +1325,18 @@ function buildEqBandPanel(container, moduleId, eqKey) {
     resetBtn.className = 'btn btn-sm';
     resetBtn.style.color = 'var(--accent-red)';
     resetBtn.addEventListener('click', () => {
-        store.resetEqBands();
+        // Reset directly on this eq, not store.getActiveEqState()
+        eq.bands.forEach(b => {
+            b.enabled = false;
+            b.type = 0; b.freq = 1000; b.gain = 0; b.q = 0.707;
+        });
+        store.emit('eq:changed');
+        store.emit('eq:structure-changed');
         eq.bands.forEach((_, i) => syncEqBand(moduleId, i));
     });
     actions.appendChild(resetBtn);
+
+    container.appendChild(actions);
 }
 // ─── Dynamic EQ Band Panel ───────────────────────────────────────────
 
@@ -1443,7 +1466,7 @@ function rebuildAccordionBody(moduleId) {
 
     // Nếu accordion này đang mount graph, unmount trước để tránh memory leak
     const hadGraph = !!body.querySelector('.eq-graph-container');
-    if (hadGraph) unmountGraph();
+    if (hadGraph) unmountGraph(acc);
 
     body.innerHTML = '';
 
@@ -1496,10 +1519,6 @@ function syncEqToHardware(moduleId) {
         store.leftRightEq.eqRight.bands.forEach((_, i) => syncEqBand(moduleId, i));
         store.activeEq = prev;
     }
-}
-
-function syncAutoEqToHardware() {
-    sendDebounced('auto_eq_bands', () => buildSetAutoEqTarget(store.autoEq.bands), 16);
 }
 
 function syncDynEqBand(isHigh, index) {
@@ -1869,7 +1888,7 @@ function syncIsfAllPresets(which) {
     }
     // Also send config
     sendDebounced(`isf_${which}_config`,
-        () => buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb),
+        () => buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb, isf.lookaheadMs),
         30
     );
 }
@@ -1963,10 +1982,11 @@ function buildIsfPanel(container, which) {
     const configRow = document.createElement('div');
     configRow.className = 'isf-config-row';
     const sendConfig = () =>
-        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb));
+        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb, isf.lookaheadMs));
 
     const { el: rmsEl } = makeConfigItem('RMS Window', isf.rmsMs, 10, 2000, 10, 'ms', v => { isf.rmsMs = v; sendConfig(); });
     const { el: slewEl } = makeConfigItem('Slew Time', isf.slewMs, 10, 5000, 50, 'ms/step', v => { isf.slewMs = v; sendConfig(); });
+    const { el: laEl } = makeConfigItem('Lookahead', isf.lookaheadMs ?? 0, 0, 10, 1, 'ms', v => { isf.lookaheadMs = v; sendConfig(); });
 
     const ovItem = document.createElement('div'); ovItem.className = 'isf-config-item';
     const ovChk = document.createElement('input'); ovChk.type = 'checkbox'; ovChk.checked = isf.overrideDb !== null;
@@ -1978,7 +1998,7 @@ function buildIsfPanel(container, which) {
     const applyOv = () => { isf.overrideDb = ovChk.checked ? parseFloat(ovInp.value) : null; ovInp.disabled = !ovChk.checked; sendConfig(); };
     ovChk.addEventListener('change', applyOv); ovInp.addEventListener('change', applyOv);
     ovItem.appendChild(ovChk); ovItem.appendChild(ovLbl); ovItem.appendChild(ovInp); ovItem.appendChild(ovUnit);
-    configRow.appendChild(rmsEl); configRow.appendChild(slewEl); configRow.appendChild(ovItem);
+    configRow.appendChild(rmsEl); configRow.appendChild(slewEl); configRow.appendChild(laEl); configRow.appendChild(ovItem);
     container.appendChild(configRow);
 
     // ── Live level meter ──────────────────────────────────────────────────
@@ -2142,40 +2162,52 @@ function buildIsfPanel(container, which) {
             });
             tabBar.appendChild(tab);
         }
-        addPresetBtn.disabled  = isf.numPresets >= 5;
+        addPresetBtn.disabled  = isf.numPresets >= 10;
         removePresetBtn.disabled = isf.numPresets <= 1;
+        if (removePresetBtn.disabled) removePresetBtn.textContent = "⚠ At least 1 preset";
+        if (addPresetBtn.disabled) addPresetBtn.textContent = "⚠ Max 10 presets";
     };
 
 
     addPresetBtn.addEventListener('click', () => {
-        if (isf.numPresets >= 5) {
+        if (isf.numPresets >= 9) {
             addPresetBtn.disabled = true;
-            addPresetBtn.textContent = "⚠ Max 5 presets";
-            return;
+            addPresetBtn.textContent = "⚠ Max 10 presets";
         } else {
             addPresetBtn.textContent = "+ Preset";
         };
+        removePresetBtn.textContent = "− Preset";
+        removePresetBtn.disabled    = false;
         const p = isf.numPresets++;
         isf.presets[p].thresholdDb = -96 + p * Math.round(96 / isf.numPresets);
         isf.presets[p].numBands = 0; isf.presets[p].pregainDb = 0;
-        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb));
-        rebuildTabs(); switchPreset(p);
+        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb, isf.lookaheadMs));
+        currentPreset = p;
+        switchPreset(p);
+        rebuildTabs();
     });
 
     removePresetBtn.addEventListener('click', () => {
-        if (isf.numPresets <= 1) {
+        if (isf.numPresets <= 2) {
             removePresetBtn.disabled = true;
             removePresetBtn.textContent = "⚠ At least 1 preset";
-            return;
         } else {
             removePresetBtn.textContent = "− Preset";
         };
+        addPresetBtn.textContent = "+ Preset";
+        addPresetBtn.disabled    = false;
         isf.numPresets--;
-        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb));
-        rebuildTabs(); switchPreset(Math.min(currentPreset, isf.numPresets - 1));
+        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb, isf.lookaheadMs));
+        switchPreset(Math.min(currentPreset, isf.numPresets - 1));
+        rebuildTabs();
     });
 
     // ── Event listeners ───────────────────────────────────────────────────
+
+    store.on('isf:band-changed', (w, pIdx, bandIdx) => {
+        if (w !== which || pIdx !== currentPreset) return;
+        syncIsfBandParams(which, currentPreset, bandIdx);
+    });
 
     // Đang drag → update freq/gain inputs live (không rebuild toàn bộ list)
     store.on('isf:band-dragging', (w, pIdx2, bandArrayIdx) => {
@@ -2200,13 +2232,14 @@ function buildIsfPanel(container, which) {
         syncIsfBandParams(which, currentPreset, bandArrayIdx);
     });
     // Band added từ graph double-click
-    store.on('isf:band-added', (w, pIdx2) => {
+    store.on('isf:band-added', (w, pIdx2, bIdx) => {
         if (w !== which) return;
         if (pIdx2 !== undefined && pIdx2 !== currentPreset) {
             tabBar.querySelectorAll('.isf-tab').forEach((t, i) => t.classList.toggle('active', i === pIdx2));
             switchPreset(pIdx2);
         } else {
             renderBandList();
+            syncIsfBandParams(which, currentPreset, bIdx);
         }
     });
 
@@ -2230,19 +2263,27 @@ function buildIsfPanel(container, which) {
 // ─── Graph Container Helpers ─────────────────────────────────────────
 
 function mountGraphToAccordion(acc) {
-    unmountGraph(); // clean up any existing
+    const moduleId = acc.dataset.moduleId;
+
+    // If this accordion already has a graph, destroy and re-create
+    // (e.g. after rebuildStructural wipes body.innerHTML)
+    if (eqGraphs.has(moduleId)) {
+        eqGraphs.get(moduleId).destroy();
+        eqGraphs.delete(moduleId);
+    }
 
     const body = acc.querySelector('.accordion-body');
     if (!body) return;
+
+    // Remove any stale DOM remnants from a previous mount on this accordion
+    body.querySelector('.eq-graph-container')?.remove();
+    body.querySelector('.eq-controls')?.remove();
 
     const container = document.createElement('div');
     container.className = 'eq-graph-container';
     body.insertBefore(container, body.firstChild);
 
     const canvas = document.createElement('canvas');
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-    canvas.style.display = 'block';
     container.appendChild(canvas);
 
     // Controls wrapper for Pregain
@@ -2251,7 +2292,6 @@ function mountGraphToAccordion(acc) {
     body.insertBefore(controls, container.nextSibling);
 
     // Pregain slider below graph
-    const moduleId = acc.dataset.moduleId;
     let eqState;
     if (moduleId === String(MODULE.ISF_1)) eqState = null;
     else if (moduleId === String(MODULE.ISF_2)) eqState = null;
@@ -2268,10 +2308,8 @@ function mountGraphToAccordion(acc) {
             (v) => {
                 eqState.pregain = v / 100;
                 store.emit('eq:changed');
-                // Sync via first enabled band or band 0
                 let bandIdx = eqState.bands.findIndex(b => b.enabled);
                 if (bandIdx === -1) bandIdx = 0;
-                
                 if (moduleId === String(MODULE.EQ_DSP_1) || moduleId === String(MODULE.EQ_DSP_2)) {
                     syncEqBand(parseInt(moduleId), bandIdx);
                 } else if (moduleId === 'EQ_LEFT' || moduleId === 'EQ_RIGHT') {
@@ -2283,8 +2321,19 @@ function mountGraphToAccordion(acc) {
             null, 0.01);
     }
 
-    // Initialize graph instance
-    eqGraph = new EQGraph(canvas);
+    // Map accordion moduleId → canonical string key used by EQGraph._getMyEqState/_getMyGraphMode
+    const MODULE_KEY_MAP = {
+        [String(MODULE.ISF_1)]:     'isf1',
+        [String(MODULE.ISF_2)]:     'isf2',
+        [String(MODULE.EQ_DSP_1)]:  'EQ_DSP_1',
+        [String(MODULE.EQ_DSP_2)]:  'EQ_DSP_2',
+        // DYNEQ_LOW, DYNEQ_HIGH, EQ_LEFT, EQ_RIGHT are already string keys
+    };
+    const graphKey = MODULE_KEY_MAP[moduleId] ?? moduleId;
+
+    // Create and register the EQGraph instance for this accordion
+    const graph = new EQGraph(canvas, graphKey);
+    eqGraphs.set(moduleId, graph);
 }
 
 function updateCpuUI(usage, heapPct, fs) {
@@ -2336,13 +2385,27 @@ function updateCpuUI(usage, heapPct, fs) {
     }
 }
 
-function unmountGraph() {
-    if (eqGraph) {
-        eqGraph.destroy();
-        eqGraph = null;
+/**
+ * Unmount graph(s).
+ * @param {HTMLElement|null} acc - If provided, unmount only that accordion's graph.
+ *                                  If null/omitted, unmount ALL graphs (e.g. on full rebuild).
+ */
+function unmountGraph(acc = null) {
+    if (acc) {
+        // Unmount only the graph belonging to this accordion
+        const moduleId = acc.dataset.moduleId;
+        if (eqGraphs.has(moduleId)) {
+            eqGraphs.get(moduleId).destroy();
+            eqGraphs.delete(moduleId);
+        }
+        acc.querySelector('.eq-graph-container')?.remove();
+        acc.querySelector('.eq-controls')?.remove();
+    } else {
+        // Unmount ALL graphs (full rebuild path)
+        eqGraphs.forEach(g => g.destroy());
+        eqGraphs.clear();
+        document.querySelectorAll('.eq-graph-container, .eq-controls').forEach(el => el.remove());
     }
-    // Remove containers entirely
-    document.querySelectorAll('.eq-graph-container, .eq-controls').forEach(el => el.remove());
 }
 
 function updateStatusUI() {
@@ -2789,9 +2852,6 @@ document.addEventListener('DOMContentLoaded', () => {
     buildAccordionModules();
     updateStatusUI();
 
-    // EQ Graph
-    eqGraph = null;
-
     store.on('eq:band-selected', (index) => {
         document.querySelectorAll('.eq-band-row').forEach((row, i) => row.classList.toggle('selected', i === index));
     });
@@ -2802,9 +2862,6 @@ document.addEventListener('DOMContentLoaded', () => {
             syncDynEqBand(false, index);
         } else if (store.activeEq === 'dynHigh') {
             syncDynEqBand(true, index);
-        } else if (store.activeEq === 'autoEq') {
-            syncAutoEqToHardware();
-            renderAutoEqMeters();
         } else {
             const mid = store.getActiveEqModuleId();
             syncEqBand(mid, index);
@@ -2839,10 +2896,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Handle structural state changes (e.g. presets loaded, bands added/removed)
     const rebuildStructural = () => {
-        unmountGraph();
+        unmountGraph(); // destroy all graph instances (full rebuild)
 
         const rebuildIds = [MODULE.ISF_1, MODULE.ISF_2, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
-        let activeAcc = null;
+        const openEqAccs = []; // collect all open EQ accordions to remount
 
         rebuildIds.forEach(id => {
             const acc = document.querySelector(`.accordion[data-module-id="${id}"]`);
@@ -2851,35 +2908,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 body.innerHTML = '';
                 const mod = ACCORDION_MODULES.find(m => String(m.id) === String(id));
                 if (mod) buildModuleBody(body, mod);
-                activeAcc = acc;
+                if (String(id) !== String(MODULE.DRC)) {
+                    openEqAccs.push(acc);
+                }
             }
         });
 
-        if (activeAcc && activeAcc.dataset.moduleId !== String(MODULE.DRC)) {
-            mountGraphToAccordion(activeAcc);
-        }
+        // Remount graphs for all open EQ accordions
+        openEqAccs.forEach(acc => mountGraphToAccordion(acc));
     };
 
     store.on('state:loaded', rebuildStructural);
     store.on('eq:structure-changed', rebuildStructural);
     store.on('isf:instance-changed', (which) => {
         store.graphMode = which;
-        if (eqGraph) eqGraph.redraw ? eqGraph.redraw() : null;
+        // markDirty on all open ISF graph instances
+        eqGraphs.forEach(g => g.markDirty ? g.markDirty() : null);
     });
+    
 
-    const btn1 = document.getElementById(`preset-0`);
-    const btn2 = document.getElementById(`preset-1`);
-    const btn3 = document.getElementById(`preset-2`);
-    const btn4 = document.getElementById(`preset-3`);
-    btn1.addEventListener('click', () => { buildPresetLoad(0); });
-    btn2.addEventListener('click', () => { buildPresetLoad(1); });
-    btn3.addEventListener('click', () => { buildPresetLoad(2); });
-    btn4.addEventListener('click', () => { buildPresetLoad(3); });
-
-    btn1.addEventListener('contextmenu', (e) => { buildPresetSave(e, 0); });
-    btn2.addEventListener('contextmenu', (e) => { buildPresetSave(e, 1); });
-    btn3.addEventListener('contextmenu', (e) => { buildPresetSave(e, 2); });
-    btn4.addEventListener('contextmenu', (e) => { buildPresetSave(e, 3); });
+    for (let btnIdx = 0; btnIdx < 4; btnIdx++) {
+        const btn = document.getElementById(`preset-${btnIdx}`);
+        btn.addEventListener('click', () => { buildPresetLoad(btnIdx); });
+        btn.addEventListener('contextmenu', (e) => { buildPresetSave(e, btnIdx); });
+    }
 
     document.getElementById('btn-save-preset').addEventListener('click', () => {
         const idx = store.system.activePreset;

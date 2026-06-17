@@ -8,7 +8,7 @@
  */
 
 #include "preset_manager.h"
-#include "../utils/debug_log.h"
+#include "../../utils/debug_log.h"
 
 #define TAG "PRESET"
 
@@ -34,10 +34,12 @@ struct ISFPresetData {
 struct ISFInstanceData {
     uint8_t      numPresets;
     uint8_t      _pad[1];
-    int16_t      rmsMs;        // RMS window ms
-    int16_t      slewMs;       // slew time per index step ms
+    int16_t      rmsMs;          // RMS window ms
+    int16_t      slewMs;         // slew time per index step ms
+    int16_t      lookaheadMs10;  // lookahead ms×10 (e.g. 50 = 5.0ms); 0=disabled
+    int16_t      _pad2[1];
     ISFPresetData presets[ISF_MAX_PRESETS];
-};  // 1+1+2+2+10*86 = 866 bytes
+};  // 1+1+2+2+2+2+10*86 = 870 bytes
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PresetData — full NVS blob
@@ -63,6 +65,7 @@ struct PresetData {
     int32_t db_cutoffFreq, db_gainBoost, db_enhanced;
     int32_t db_boostfullthreshold, db_neutralthreshold;
     int32_t db_clipfullthreshold, db_clipattack, db_cliprelease;
+    int32_t db_lookaheadMs10; // ms×10, 0=disabled
 
     // ── DRC ───────────────────────────────────────────────────────────────────
     int32_t drc_thresholdDb, drc_ratio, drc_attackMs, drc_releaseMs, drc_pregainQ412;
@@ -78,6 +81,7 @@ struct PresetData {
     // ── Dynamic EQ ────────────────────────────────────────────────────────────
     int32_t deq_lowThresh, deq_normThresh, deq_highThresh;
     int32_t deq_attackMs, deq_releaseMs;
+    int32_t deq_lookaheadMs10; // ms×10, 0=disabled
     int16_t deq_low_pregain_q88;
     EQFilterParams deq_low_bands[MAX_EQ_BANDS];
     int16_t deq_high_pregain_q88;
@@ -105,8 +109,9 @@ static void makeDefaultIsfInstance(ISFInstanceData& inst,
                                    int32_t sampleRate)
 {
     memset(&inst, 0, sizeof(ISFInstanceData));
-    inst.rmsMs  = ISF_DEFAULT_RMS_MS;
-    inst.slewMs = ISF_DEFAULT_SLEW_MS;
+    inst.rmsMs          = ISF_DEFAULT_RMS_MS;
+    inst.slewMs         = ISF_DEFAULT_SLEW_MS;
+    inst.lookaheadMs10  = 0;
 
     if (!withLoudnessCurve) {
         // Flat passthrough — 1 preset at -96 dB threshold
@@ -169,6 +174,7 @@ static void loadIsfInstance(IndexSelectableFilter& isf,
     isf.setRmsWindowMs(data.rmsMs  > 0 ? data.rmsMs  : ISF_DEFAULT_RMS_MS);
     isf.setSlewMs     (data.slewMs > 0 ? data.slewMs : ISF_DEFAULT_SLEW_MS);
     isf.setNumPresets (data.numPresets);
+    isf.setLookahead  ((float)data.lookaheadMs10 / 10.0f);
 
     for (int p = 0; p < data.numPresets && p < ISF_MAX_PRESETS; p++) {
         const ISFPresetData& pd = data.presets[p];
@@ -196,8 +202,9 @@ static void loadIsfInstance(IndexSelectableFilter& isf,
 static void saveIsfInstance(ISFInstanceData& data,
                              IndexSelectableFilter& isf)
 {
-    data.rmsMs      = (int16_t)isf.getRmsWindowMs();
-    data.slewMs     = (int16_t)isf.getSlewMs();
+    data.rmsMs         = (int16_t)isf.getRmsWindowMs();
+    data.slewMs        = (int16_t)isf.getSlewMs();
+    data.lookaheadMs10 = (int16_t)(isf.getLookaheadMs() * 10.0f + 0.5f);
     data.numPresets = isf.getNumPresets();
 
     for (int p = 0; p < data.numPresets && p < ISF_MAX_PRESETS; p++) {
@@ -279,6 +286,7 @@ void PresetManager::saveDefault(uint8_t slot) {
     pd.db_clipattack          = 600;
     pd.db_cliprelease         = 200;
     pd.db_clipfullthreshold   = -800;
+    pd.db_lookaheadMs10       = 0;
     pd.db_neutralthreshold    = -1600;
     pd.db_boostfullthreshold  = -2400;
 
@@ -295,8 +303,9 @@ void PresetManager::saveDefault(uint8_t slot) {
     pd.deq_lowThresh  = -4000;
     pd.deq_normThresh = -2000;
     pd.deq_highThresh = -600;
-    pd.deq_attackMs   = 10;
-    pd.deq_releaseMs  = 100;
+    pd.deq_attackMs      = 10;
+    pd.deq_releaseMs     = 100;
+    pd.deq_lookaheadMs10 = 0;
 
     // EQ bands: all disabled defaults
     for (int b = 0; b < MAX_EQ_BANDS; b++) {
@@ -372,6 +381,7 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.db_boostfullthreshold = pipeline.getDynamicBass().getBoostFullThresh();
     pd.db_clipattack         = pipeline.getDynamicBass().getClipAttack();
     pd.db_cliprelease        = pipeline.getDynamicBass().getClipRelease();
+    pd.db_lookaheadMs10      = (int32_t)(pipeline.getDynamicBass()._lookaheadMs * 10.0f + 0.5f);
 
     // DRC (fullband band[3])
     pd.drc_thresholdDb = pipeline.getDrc()._bands[3].thresholdDbInt;
@@ -396,8 +406,9 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.deq_lowThresh  = pipeline.getDynamicEq()._lowThreshDb;
     pd.deq_normThresh = pipeline.getDynamicEq()._normalThreshDb;
     pd.deq_highThresh = pipeline.getDynamicEq()._highThreshDb;
-    pd.deq_attackMs   = pipeline.getDynamicEq()._attackMs;
-    pd.deq_releaseMs  = pipeline.getDynamicEq()._releaseMs;
+    pd.deq_attackMs      = pipeline.getDynamicEq()._attackMs;
+    pd.deq_releaseMs     = pipeline.getDynamicEq()._releaseMs;
+    pd.deq_lookaheadMs10 = (int32_t)(pipeline.getDynamicEq()._lookaheadMs * 10.0f + 0.5f);
 
     pd.deq_low_pregain_q88  = pipeline.getDynamicEq().getEqLow().getPregain();
     for (int i = 0; i < MAX_EQ_BANDS; i++)
@@ -501,6 +512,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     pipeline.getDynamicBass().setClipFullThreshold(pd.db_clipfullthreshold);
     pipeline.getDynamicBass().setClipAttack(pd.db_clipattack);
     pipeline.getDynamicBass().setClipRelease(pd.db_cliprelease);
+    pipeline.getDynamicBass().setLookahead((float)pd.db_lookaheadMs10 / 10.0f);
 
     pipeline.getEqDsp_1().setPregain(pd.eq1_pregain_q88);
     for (int i = 0; i < MAX_EQ_BANDS; i++)
@@ -515,6 +527,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     pipeline.getDynamicEq().setHighEnergyThreshold(pd.deq_highThresh);
     pipeline.getDynamicEq().setAttackTime(pd.deq_attackMs);
     pipeline.getDynamicEq().setReleaseTime(pd.deq_releaseMs);
+    pipeline.getDynamicEq().setLookahead((float)pd.deq_lookaheadMs10 / 10.0f);
 
     pipeline.getDynamicEq().getEqLow().setPregain(pd.deq_low_pregain_q88);
     for (int i = 0; i < MAX_EQ_BANDS; i++)

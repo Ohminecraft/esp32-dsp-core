@@ -319,12 +319,14 @@ body {
 
 /* Embedded EQ graph container inside accordion */
 .eq-graph-container {
-    position: relative;
+    position: relative;  /* canvas is absolute inside here */
+    display: block;      /* always block-flow, never overlapping siblings */
+    width: 100%;
     height: 280px;
     min-height: 280px;
     background: var(--bg-graph);
     border-radius: var(--radius-md);
-    overflow: hidden;
+    overflow: hidden;    /* clip canvas to rounded corners only — OK here */
     margin-bottom: 10px;
 }
 
@@ -332,6 +334,8 @@ body {
     position: absolute;
     top: 0;
     left: 0;
+    width: 100%;         /* fill container width */
+    height: 100%;        /* fill container height */
     display: block !important;
     cursor: crosshair;
 }
@@ -348,7 +352,8 @@ body {
     border: 1px solid var(--border-light);
     border-radius: var(--radius-md);
     margin-bottom: 6px;
-    overflow: hidden;
+    /* Do NOT use overflow:hidden — it would clip graph content and pull sibling
+       accordions up. Border-radius on children handles visual rounding. */
     box-shadow: var(--shadow-sm);
     transition: box-shadow var(--transition);
 }
@@ -430,10 +435,20 @@ body {
     padding: 12px 14px;
     border-top: 1px solid var(--border-light);
     background: var(--bg-card);
+    overflow: visible;
 }
 
 .accordion.open .accordion-body {
-    display: block;
+    /* display:flow-root establishes a block formatting context:
+       - contains floats/positioned children in height calculation
+       - does NOT clip overflow (unlike overflow:hidden)
+       - next sibling accordion is correctly pushed down */
+    display: flow-root;
+}
+
+/* When EQ graph is present, ensure no max-height clips the body */
+.accordion-body:has(.eq-graph-container) {
+    max-height: none !important;
 }
 
 /* ─── Parameter Row ─────────────────────────────────────────── */
@@ -1216,4 +1231,4 @@ body {
     display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
     padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--border-light);
 }
-.isf-band-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.isf-band-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; } 

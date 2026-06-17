@@ -13,6 +13,9 @@ static const char* TAG = "AudioIO";
 
 int32_t AudioIO::s_rxBuf[DSP_FRAME_SAMPLES];
 int32_t AudioIO::s_txBuf[DSP_FRAME_SAMPLES];
+#ifdef USING_SUB_OUT
+int32_t AudioIO::s_txSubBuf[DSP_FRAME_SAMPLES]; // for sub out
+#endif
 int32_t AudioIO::s_zeroBuf[DSP_FRAME_SAMPLES] = {0}; // all-zero buffer for underrun muting
 
 // ---------------------------------------------------------------------------
@@ -36,18 +39,31 @@ void AudioIO::reinit(int32_t sampleRate) {
     clk.clk_src        = I2S_CLK_SRC_DEFAULT;  // unused in slave, but required by API
     clk.mclk_multiple  = I2S_MCLK_MULTIPLE_256;
 
-    size_t bytesTxLoaded = 0;
-
+    size_t bytesTxLoaded    = 0;
+    size_t bytesSubTxLoaded = 0;
+    
     i2s_channel_disable(_rxHandle);
     i2s_channel_disable(_txHandle);
+    #ifdef USING_SUB_OUT
+    i2s_channel_disable(_txSubHandle);
+    #endif
 
     i2s_channel_preload_data(_txHandle, s_zeroBuf, sizeof(s_zeroBuf), &bytesTxLoaded); // prime TX with zeros to avoid garbage on underrun
+    #ifdef USING_SUB_OUT
+    i2s_channel_preload_data(_txSubHandle, s_zeroBuf, sizeof(s_zeroBuf), &bytesSubTxLoaded);
+    #endif
 
     i2s_channel_reconfig_std_clock(_rxHandle, &clk);
     i2s_channel_reconfig_std_clock(_txHandle, &clk);
+    #ifdef USING_SUB_OUT
+    i2s_channel_reconfig_std_clock(_txSubHandle, &clk);
+    #endif
 
     i2s_channel_enable(_rxHandle);
     i2s_channel_enable(_txHandle);
+    #ifdef USING_SUB_OUT
+    i2s_channel_enable(_txSubHandle);
+    #endif
 
     /*
     i2s_stop(I2S_INPUT_OUTPUT_FULL_PORT);
@@ -77,8 +93,16 @@ void AudioIO::deinit() {
         i2s_del_channel(_txHandle);
         _txHandle = nullptr;
     }
+    #ifdef USING_SUB_OUT
+    if (_txSubHandle) {
+        i2s_channel_disable(_txSubHandle);
+        i2s_del_channel(_txSubHandle);
+        _txSubHandle = nullptr;
+    }
+    #endif
 
     //i2s_driver_uninstall(I2S_INPUT_OUTPUT_FULL_PORT);
+    //i2s_driver_uninstall(I2S_OUTPUT_SUB_PORT);
 }
 
 void AudioIO::initI2S() {
@@ -87,13 +111,19 @@ void AudioIO::initI2S() {
     // i2s_new_channel with both tx + rx handles = full-duplex pair.
     i2s_chan_config_t chan_cfg = {};
     chan_cfg.id            = I2S_INPUT_OUTPUT_FULL_PORT;
-    chan_cfg.role          = I2S_ROLE_SLAVE;     // QCC5125 is master
-    chan_cfg.dma_desc_num  = 8;                  // DMA ring buffer has 8 descriptors (buffers)
+    chan_cfg.role          = I2S_ROLE_SLAVE;         // Input audio (input must drive clock)
+    chan_cfg.dma_desc_num  = DSP_DMA_BUFFER_COUNT;   // DMA ring buffer has 8 descriptors (buffers)
     chan_cfg.dma_frame_num = DSP_FRAME_SIZE;
     chan_cfg.auto_clear    = true;               // zero-fill TX on underrun → no noise
 
+    i2s_chan_config_t sub_chan_cfg = chan_cfg;
+    sub_chan_cfg.id        = I2S_OUTPUT_SUB_PORT;
+
     // Pass both handles → IDF allocates a full-duplex pair on the same port
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &_txHandle, &_rxHandle));
+    #ifdef USING_SUB_OUT
+    ESP_ERROR_CHECK(i2s_new_channel(&sub_chan_cfg, &_txSubHandle, nullptr)); // RX-only sub-channel for simultaneous read/write on the same port (see readFrame/writeFrame)
+    #endif
 
     // ── Slot config ───────────────────────────────────────────────────────
     // Philips/I2S standard, 32-bit frame, stereo.
@@ -132,10 +162,20 @@ void AudioIO::initI2S() {
     // the direction-specific registers while keeping the shared clock pins.
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(_rxHandle, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(_txHandle, &std_cfg));
+    #ifdef USING_SUB_OUT
+    std_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO; // sub out only needs mono
+    std_cfg.gpio_cfg.dout      = (gpio_num_t)I2S_SUB_DATA_OUT_PIN; // separate DOUT pin for sub out
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(_txSubHandle, &std_cfg));
+    #endif
 
     // Enable RX first so DMA starts filling before TX drains
     ESP_ERROR_CHECK(i2s_channel_enable(_rxHandle));
     ESP_ERROR_CHECK(i2s_channel_enable(_txHandle));
+    #ifdef USING_SUB_OUT
+    ESP_ERROR_CHECK(i2s_channel_enable(_txSubHandle));
+    #endif
+
+
     
 /*
     i2s_config_t i2s_config = {};

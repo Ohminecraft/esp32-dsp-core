@@ -8,7 +8,7 @@
 
 #include <Preferences.h>
 #include "config.h"
-#include "../effects/dsp_pipeline.h"
+#include "../../effects/dsp_pipeline.h"
 
 class PresetManager {
 public:

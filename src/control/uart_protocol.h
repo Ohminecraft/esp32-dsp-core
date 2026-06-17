@@ -17,43 +17,11 @@
 class AsyncWebSocket;
 class AsyncWebSocketClient;
 
-// UART Command IDs
-#define CMD_SET_PARAM 0x01
-#define CMD_ENABLE_MODULE 0x02
-#define CMD_DISABLE_MODULE 0x03
-#define CMD_SET_EQ_BAND 0x04
-#define CMD_SET_DYNEQ_LOW_BAND 0x05
-#define CMD_SET_DYNEQ_HIGH_BAND 0x06
-#define CMD_SET_DYNEQ_THRESH 0x07
-#define CMD_SAVE_PRESET 0x08
-#define CMD_LOAD_PRESET 0x09
-#define CMD_GET_ALL_STATE 0x0A
-#define CMD_SET_ISF_PRESET      0x0B
-#define CMD_SET_ISF_BAND_PARAMS 0x0C
-#define CMD_GET_ISF_STATE       0x0D
-#define CMD_SET_ISF_CONFIG      0x0E
-
-// WiFi configuration commands
-#define CMD_WIFI_SCAN       0x10  // ESP32 scans WiFi, returns SSID list via ACK frames
-#define CMD_WIFI_SET_STA    0x11  // Data: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) + ip(4B opt)
-#define CMD_WIFI_SET_AP     0x12  // No data — switch back to AP mode
-#define CMD_WIFI_GET_STATUS 0x13  // No data — reply with mode/IP/SSID/RSSI
-
-#define CMD_GET_REPORT_CPU_USAGE       0x39
-#define CMD_SEND_REPORT_CPU_USAGE      0x40
-#define CMD_REPORT_ISF                 0x41 
-#define CMD_REPORT_ISF_PRESET          0x42
-#define CMD_REPORT_ISF_BAND_PER_PRESET 0x43
-#define CMD_REPORT_ENABLE_MASK         0x44
-#define CMD_GET_CURRENT_PRESET_INDEX   0x45
-#define CMD_REPORT_DYNBASS             0x46
-#define CMD_REPORT_DYNEQ               0x47
-#define CMD_REPORT_COMPANDER           0x48
-#define CMD_REPORT_DRC                 0x49
-#define CMD_GET_MODULE_METER           0x4A
-
-#define CMD_ACK_RESPONSE 0xFE
-#define CMD_ERROR 0xFF
+#ifdef USE_BUILTIN_SERIAL
+#define UART Serial
+#else
+#define UART Serial2
+#endif
 
 // Maximum data payload
 #define UART_MAX_DATA_LEN 64

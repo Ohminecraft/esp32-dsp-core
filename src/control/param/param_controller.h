@@ -6,11 +6,11 @@
 #ifndef PARAM_CONTROLLER_H
 #define PARAM_CONTROLLER_H
 
-#include "../audio/audio_io.h"
-#include "../effects/dsp_pipeline.h"
+#include "../../audio/audio_io.h"
+#include "../../effects/dsp_pipeline.h"
 #include "preset_manager.h"
-#include "uart_protocol.h"
-#include "wifi_manager.h"
+#include "../uart_protocol.h"
+#include "../wifi/wifi_manager.h"
 
 extern volatile uint16_t s_cpu_usage;
 extern volatile uint8_t  s_heapPct;

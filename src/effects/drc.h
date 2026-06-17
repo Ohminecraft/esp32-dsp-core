@@ -63,6 +63,7 @@ struct DRCBand {
 class DRC : public DspModule {
     friend class PresetManager;
     friend class ParamController;
+    friend class Display;
 public:
     void init(int32_t sampleRate, int32_t numChannels) override;
     void process(float* __restrict samples, size_t numSamples) override;
