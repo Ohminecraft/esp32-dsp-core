@@ -53,6 +53,10 @@ struct PresetData {
     int8_t   vol_mono;      // 0 = stereo, 1 = mono
     int8_t   pre_vol_mono;  // 0 = stereo, 1 = mono
 
+    // ── Pre EQ ────────────────────────────────────────────────────────────────
+    int16_t        preeq_pregainq88;
+    EQFilterParams preeq_bands[MAX_EQ_BANDS];
+
     // ── Compander ─────────────────────────────────────────────────────────────
     int32_t cp_thresholdDb, cp_ratioBelow, cp_ratioAbove;
     int32_t cp_attackMs, cp_releaseMs, cp_pregainQ412;
@@ -231,6 +235,17 @@ void PresetManager::init() {
     for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
         if (!hasPreset(i)) saveDefault(i);
     }
+    if (!hasMainMenuParam()) {
+        static MainMenuParam mmparam;
+        memset(&mmparam, 0, sizeof(MainMenuParam));
+        _prefs.begin("main_menu_param", false);
+        mmparam.vol = 100;
+        mmparam.bass = 50;
+        mmparam.mid = 50;
+        mmparam.treble = 50;
+        _prefs.putBytes("blob", &mmparam, sizeof(MainMenuParam));
+        _prefs.end();
+    }
 }
 
 void PresetManager::saveCurrentSlotIndex(uint8_t slot) {
@@ -259,8 +274,8 @@ void PresetManager::saveDefault(uint8_t slot) {
     memset(&pd, 0, sizeof(PresetData));
     pd.valid = true;
 
-    // Chain: [0]=preGain enabled, [11]=postGain enabled
-    pd.en_mask    = (1u << 0) | (1u << 11);
+    // Chain: [0]=preGain enabled, [1]=preEq enable, [12]=postGain enabled
+    pd.en_mask    = (1u << 0) | (1u << 1) | (1u << 12);
     pd.vol_db     = 0;
     pd.pre_vol_db = 0;
     pd.vol_mono   = 0;
@@ -320,6 +335,16 @@ void PresetManager::saveDefault(uint8_t slot) {
         pd.eql_bands[b] = pd.eqr_bands[b] = def;
     }
 
+    EQFilterParams preeqParam[3] = {
+        { true,  EQ_FILTER_TYPE_LOW_SHELF, 80, 724, 0 },
+        { true,  EQ_FILTER_TYPE_PEAKING, 1000, 724, 0 },
+        { true,  EQ_FILTER_TYPE_HIGH_SHELF, 8000, 724, 0 }
+    };
+
+    for (int b = 0; b < 3; b++) {
+        pd.preeq_bands[b] = preeqParam[b];
+    }
+
     // ISF defaults:
     //   ISF1 = loudness-dependent bass curve (5 presets)
     //   ISF2 = flat passthrough (1 preset, ready for user customization)
@@ -330,9 +355,6 @@ void PresetManager::saveDefault(uint8_t slot) {
     _prefs.begin(key.c_str(), false);
     _prefs.putBytes("blob", &pd, sizeof(PresetData));
     _prefs.end();
-
-    Serial.printf("sizeof(PresetData) = %d bytes\n", sizeof(PresetData));
-    Serial.printf("sizeof(EQFilterParams) = %d bytes\n", sizeof(EQFilterParams));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,6 +379,11 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.pre_vol_db = pipeline.getPreGain()._gainDb;
     pd.vol_mono   = pipeline.getPostGain().isMono() ? 1 : 0;
     pd.pre_vol_mono = pipeline.getPreGain().isMono() ? 1 : 0;
+
+    pd.preeq_pregainq88 = pipeline.getPreEq().getPregain();
+    for (int i = 0; i < MAX_EQ_BANDS; i++) {
+        pd.preeq_bands[i] = pipeline.getPreEq()._params[i];
+    }
 
     // Compander
     pd.cp_thresholdDb = pipeline.getCompander()._thresholdDbInt;
@@ -492,6 +519,10 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     pipeline.getPostGain().setMono(pd.vol_mono != 0);
     pipeline.getPreGain().setMono(pd.pre_vol_mono != 0);
 
+    pipeline.getPreEq().setPregain(pd.preeq_pregainq88);
+    for (int i = 0; i < MAX_EQ_BANDS; i++)
+        pipeline.getPreEq().setBand(i, pd.preeq_bands[i]);
+
     pipeline.getCompander().setThreshold(pd.cp_thresholdDb);
     pipeline.getCompander().setRatioBelow(pd.cp_ratioBelow);
     pipeline.getCompander().setRatioAbove(pd.cp_ratioAbove);
@@ -565,8 +596,33 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// loadMainMenuParam/saveMainMenuParam
+// ─────────────────────────────────────────────────────────────────────────────
+
+void PresetManager::loadMainMenuParam(MainMenuParam* param) {
+    if (!param) return;
+    _prefs.begin("main_menu_param", true);
+    _prefs.getBytes("blob", param, sizeof(MainMenuParam));
+    _prefs.end();
+}
+
+void PresetManager::saveMainMenuParam(MainMenuParam* param) {
+    if (!param) return;
+    _prefs.begin("main_menu_param", false);
+    _prefs.putBytes("blob", param, sizeof(MainMenuParam));
+    _prefs.end();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // hasPreset / getSlotKey
 // ─────────────────────────────────────────────────────────────────────────────
+
+bool PresetManager::hasMainMenuParam() {
+    _prefs.begin("main_menu_param", true);
+    size_t len = _prefs.getBytesLength("blob");
+    _prefs.end();
+    return len == sizeof(MainMenuParam);
+}
 
 bool PresetManager::hasPreset(uint8_t slot) {
     if (slot >= MAX_PRESET_SLOTS) return false;

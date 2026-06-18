@@ -12,7 +12,7 @@ void ParametricEQ::init(int32_t sampleRate, int32_t numChannels) {
     _pregain = 1.0f;
     _pregainDb = 0;
     
-    for (int i = 0; i < MAX_EQ_BANDS; i++) {
+    for (int i = 0; i < _totalavaliablebands; i++) {
         _params[i].enabled = 0;
         _params[i].type = EQ_FILTER_TYPE_PEAKING;
         _params[i].f0 = 1000;
@@ -37,7 +37,7 @@ void IRAM_ATTR ParametricEQ::processInternal(float* __restrict samples, size_t n
     }
 
     bool hasActiveBands = false;
-    for (uint8_t b = 0; b < MAX_EQ_BANDS; b++) {
+    for (uint8_t b = 0; b < _totalavaliablebands; b++) {
         if (_params[b].enabled) {
             hasActiveBands = true;
             break;
@@ -59,7 +59,7 @@ void IRAM_ATTR ParametricEQ::processInternal(float* __restrict samples, size_t n
         }
 
         // Process
-        for (uint8_t b = 0; b < MAX_EQ_BANDS; b++) {
+        for (uint8_t b = 0; b < _totalavaliablebands; b++) {
             if (_params[b].enabled) {
                 _filters[b].processPlanar(bufL, bufR, numSamples);
             }
@@ -74,15 +74,23 @@ void IRAM_ATTR ParametricEQ::processInternal(float* __restrict samples, size_t n
 }
 
 void ParametricEQ::reset() {
-    for (int i = 0; i < MAX_EQ_BANDS; i++) {
+    for (int i = 0; i < _totalavaliablebands; i++) {
         _filters[i].reset();
     }
 }
 
 void ParametricEQ::setBand(uint8_t bandIndex, const EQFilterParams& params) {
-    if (bandIndex >= MAX_EQ_BANDS) return;
+    if (bandIndex >= _totalavaliablebands) return;
     _params[bandIndex] = params;
     _filters[bandIndex].designFromParams(params, _sampleRate);
+}
+
+void ParametricEQ::setNumBand(uint8_t totalband) {
+    if (totalband > MAX_EQ_BANDS) {
+        _totalavaliablebands = MAX_EQ_BANDS;
+        return;
+    }
+    _totalavaliablebands = totalband;
 }
 
 void ParametricEQ::setPregain(int16_t pregain_db) {

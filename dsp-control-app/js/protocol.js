@@ -60,15 +60,18 @@ export const MODULE = {
     LEFTRIGHT_EQ: 0x0A,
     ISF_1: 0x0B,   // Index Selectable Filter instance 1 (replaces AUTO_EQ)
     ISF_2: 0x0C,   // Index Selectable Filter instance 2
+    PRE_EQ: 0x0D,  // Pre EQ (3-band tone control: Bass/Mid/Treble)
     SYSTEM: 0xF0
 };
 
 export const MODULE_NAMES = {
     [MODULE.PRE_GAIN]: 'Pre Gain',
+    [MODULE.PRE_EQ]: 'Pre EQ',
     [MODULE.COMPANDER]: 'Compander',
     [MODULE.EXCITER]: 'Exciter',
     [MODULE.DYNAMIC_BASS]: 'Dynamic Bass',
     [MODULE.DYNAMIC_EQ]: 'Dynamic EQ',
+    [MODULE.PRE_EQ]: 'Pre EQ (Tone)',
     [MODULE.EQ_DSP_1]: 'Parametric EQ 1',
     [MODULE.EQ_DSP_2]: 'Parametric EQ 2',
     [MODULE.LEFTRIGHT_EQ]: 'Left Right EQ',
@@ -79,7 +82,7 @@ export const MODULE_NAMES = {
 };
 
 export const MODULE_ORDER = [
-    MODULE.PRE_GAIN, MODULE.COMPANDER, MODULE.EXCITER,
+    MODULE.PRE_GAIN, MODULE.PRE_EQ, MODULE.COMPANDER, MODULE.EXCITER,
     MODULE.DYNAMIC_BASS, MODULE.DYNAMIC_EQ,
     MODULE.ISF_1, MODULE.ISF_2,
     MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, MODULE.LEFTRIGHT_EQ,

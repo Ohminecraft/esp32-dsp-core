@@ -117,6 +117,7 @@ static void reinitPipeline(uint32_t newRateHz) {
         g_audioIO.reinit(newRateHz);
         g_pipeline.init((int32_t)newRateHz, DSP_NUM_CHANNELS);
         g_presetMgr.loadPreset(g_presetMgr.getCurrentSlotIndex(), g_pipeline);
+        g_display.setPipeline(&g_pipeline, &g_presetMgr);
     }
 
     g_currentSampleRate = (newRateHz > 0) ? newRateHz : g_currentSampleRate;
@@ -530,7 +531,6 @@ void setup() {
 
     #ifdef USING_DISPLAY
         g_display.init();
-        g_display.setPipeline(&g_pipeline, &g_presetMgr);
         g_encoder.init(ENCODER_A_PIN, ENCODER_B_PIN, ENCODER_BTN_PIN);
     #endif
 
@@ -579,6 +579,11 @@ void setup() {
         LOG_INFO("INIT", "Auto-loading Preset Slot %d from NVS", currentSlot);
         g_presetMgr.loadPreset(currentSlot, g_pipeline);
     }
+
+    // 5. Load Main Menu Param
+    #ifdef USING_DISPLAY
+        g_display.setPipeline(&g_pipeline, &g_presetMgr);
+    #endif
 
     // 6.1. Init AudioSync — starts PCNT clock monitor on Core 0
     //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)

@@ -448,6 +448,8 @@ parser.onFrame((frame) => {
             eqState = store.eq1;
         } else if (frame.moduleId === MODULE.EQ_DSP_2) {
             eqState = store.eq2;
+        } else if (frame.moduleId === MODULE.PRE_EQ) {
+            eqState = store.preEq;
         } else if (frame.moduleId === MODULE.LEFTRIGHT_EQ) {
             if (b & 0x80) {
                 eqState = store.leftRightEq.eqRight;
@@ -599,7 +601,8 @@ parser.onFrame((frame) => {
 // Extended module list: split Dynamic EQ into DynEQ Thresh, DynEQ Low, DynEQ High
 const ACCORDION_MODULES = [
     { id: MODULE.PRE_GAIN, name: 'Pre Gain', icon: '🎚️' },
-    { id: MODULE.COMPANDER, name: 'Compander', icon: '📊' },
+    { id: MODULE.PRE_EQ, name: 'Pre EQ (Tone)', icon: '🎵' },
+    { id: MODULE.COMPANDER, name: 'Compander', icon: '⚡' },
     { id: MODULE.EXCITER, name: 'Exciter', icon: '✨' },
     { id: MODULE.DYNAMIC_BASS, name: 'Dynamic Bass', icon: '🔊' },
     { id: 'DYNEQ_THRESH', name: 'Dynamic EQ — Thresholds', icon: '⚡', parentId: MODULE.DYNAMIC_EQ },
@@ -612,7 +615,7 @@ const ACCORDION_MODULES = [
     { id: 'EQ_LEFT', name: 'EQ Left', icon: '👈', parentId: MODULE.LEFTRIGHT_EQ },
     { id: 'EQ_RIGHT', name: 'EQ Right', icon: '👉', parentId: MODULE.LEFTRIGHT_EQ },
     { id: MODULE.DRC, name: 'Dynamic Range Compression', icon: '🛡️' },
-    { id: MODULE.POST_GAIN, name: 'Post Gain', icon: '🔉' },
+    { id: MODULE.POST_GAIN, name: 'Post Gain', icon: '🎚️' }
 ];
 
 function buildAccordionModules() {
@@ -667,7 +670,7 @@ function buildAccordionModules() {
         header.appendChild(title);
         header.appendChild(chevron);
 
-        const EQ_MODULE_IDS = [String(MODULE.ISF_1), String(MODULE.ISF_2), String(MODULE.EQ_DSP_1), String(MODULE.EQ_DSP_2), 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT'];
+        const EQ_MODULE_IDS = [String(MODULE.ISF_1), String(MODULE.ISF_2), String(MODULE.EQ_DSP_1), String(MODULE.EQ_DSP_2), String(MODULE.PRE_EQ), 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT'];
         const isEqModule = EQ_MODULE_IDS.includes(String(mod.id));
 
         header.addEventListener('click', (e) => {
@@ -687,6 +690,7 @@ function buildAccordionModules() {
                     // Track which EQ target this accordion represents
                     if (mod.id === MODULE.EQ_DSP_1) store.setActiveEq('eq1');
                     else if (mod.id === MODULE.EQ_DSP_2) store.setActiveEq('eq2');
+                    else if (mod.id === MODULE.PRE_EQ) store.setActiveEq('preEq');
                     else if (mod.id === 'DYNEQ_LOW') store.setActiveEq('dynLow');
                     else if (mod.id === 'DYNEQ_HIGH') store.setActiveEq('dynHigh');
                     else if (mod.id === 'EQ_LEFT') store.setActiveEq('eqLeft');
@@ -830,6 +834,10 @@ function buildModuleBody(body, mod) {
 
         case 'EQ_RIGHT':
             buildEqBandPanel(body, MODULE.LEFTRIGHT_EQ, 'eqRight');
+            break;
+
+        case MODULE.PRE_EQ:
+            buildEqBandPanel(body, MODULE.PRE_EQ, 'preEq');
             break;
 
         case 'DYNEQ_THRESH': {
@@ -1293,48 +1301,55 @@ function buildEqBandPanel(container, moduleId, eqKey) {
             store.emit('eq:changed');
             store.emit('eq:structure-changed');
             syncEqBand(moduleId, idx);
-        }));
+        }, eqKey === 'preEq'));
     });
 
     const actions = document.createElement('div');
     actions.className = 'eq-actions';
 
-    if (enabledCount >= 10) {
-        const msg = document.createElement('span');
-        msg.className = 'band-limit-msg';
-        msg.textContent = '⚠ Max 10 bands';
-        actions.appendChild(msg);
-    } else {
-        const addBtn = document.createElement('button');
-        addBtn.textContent = '+ Add Band';
-        addBtn.className = 'btn btn-outline btn-sm';
-        addBtn.addEventListener('click', () => {
-            // Add directly to this eq, not store.getActiveEqState()
-            const slot = eq.bands.findIndex(b => !b.enabled);
-            if (slot === -1) return;
-            Object.assign(eq.bands[slot], { enabled: true, freq: 1000, gain: 0, q: 0.707, type: 0 });
-            store.emit('eq:changed');
-            store.emit('eq:structure-changed');
-            if (slot !== null) syncEqBand(moduleId, slot);
-        });
-        actions.appendChild(addBtn);
-    }
+    if (eqKey !== 'preEq') {
+        if (enabledCount >= 10) {
+            const msg = document.createElement('span');
+            msg.className = 'band-limit-msg';
+            msg.textContent = '⚠ Max 10 bands';
+            actions.appendChild(msg);
+        } else {
+            const addBtn = document.createElement('button');
+            addBtn.textContent = '+ Add Band';
+            addBtn.className = 'btn btn-outline btn-sm';
+            addBtn.addEventListener('click', () => {
+                // Add directly to this eq, not store.getActiveEqState()
+                const slot = eq.bands.findIndex(b => !b.enabled);
+                if (slot === -1) return;
+                Object.assign(eq.bands[slot], { enabled: true, freq: 1000, gain: 0, q: 0.707, type: 0 });
+                store.emit('eq:changed');
+                store.emit('eq:structure-changed');
+                if (slot !== null) syncEqBand(moduleId, slot);
+            });
+            actions.appendChild(addBtn);
 
-    const resetBtn = document.createElement('button');
-    resetBtn.textContent = 'Reset';
-    resetBtn.className = 'btn btn-sm';
-    resetBtn.style.color = 'var(--accent-red)';
-    resetBtn.addEventListener('click', () => {
-        // Reset directly on this eq, not store.getActiveEqState()
-        eq.bands.forEach(b => {
-            b.enabled = false;
-            b.type = 0; b.freq = 1000; b.gain = 0; b.q = 0.707;
-        });
-        store.emit('eq:changed');
-        store.emit('eq:structure-changed');
-        eq.bands.forEach((_, i) => syncEqBand(moduleId, i));
-    });
-    actions.appendChild(resetBtn);
+            const resetBtn = document.createElement('button');
+            resetBtn.textContent = 'Reset';
+            resetBtn.className = 'btn btn-sm';
+            resetBtn.style.color = 'var(--accent-red)';
+            resetBtn.addEventListener('click', () => {
+                // Reset directly on this eq, not store.getActiveEqState()
+                eq.bands.forEach(b => {
+                    b.enabled = false;
+                    b.type = 0; b.freq = 1000; b.gain = 0; b.q = 0.707;
+                });
+                store.emit('eq:changed');
+                store.emit('eq:structure-changed');
+                eq.bands.forEach((_, i) => syncEqBand(moduleId, i));
+            });
+            actions.appendChild(resetBtn);
+        }
+    } else {
+        const msg = document.createElement('span');
+            msg.className = 'band-limit-msg';
+            msg.textContent = '⚠ Max 3 bands, To Change Gain you must using display DSP to change';
+            actions.appendChild(msg);
+    }
 
     container.appendChild(actions);
 }
@@ -1396,7 +1411,7 @@ function buildDynEqBandPanel(container, isHigh) {
 
 // ─── Shared Band Row Builder ─────────────────────────────────────────
 
-function buildBandRow(band, index, onUpdate, onDelete) {
+function buildBandRow(band, index, onUpdate, onDelete, ispreeq = false) {
     const row = document.createElement('div');
     row.className = 'eq-band-row';
     row.dataset.bandIndex = index;
@@ -1421,7 +1436,9 @@ function buildBandRow(band, index, onUpdate, onDelete) {
     // Freq
     row.appendChild(createNumInput(band.freq, 20, 20000, 1, 'Hz', 'freq', (v) => onUpdate(index, { freq: v })));
     // Gain
-    row.appendChild(createNumInput(band.gain, -24, 24, 0.5, 'dB', 'gain', (v) => onUpdate(index, { gain: v })));
+    if (!ispreeq) {
+        row.appendChild(createNumInput(band.gain, -24, 24, 0.5, 'dB', 'gain', (v) => onUpdate(index, { gain: v })));
+    }
     // Q
     row.appendChild(createNumInput(band.q, 0.1, 20, 0.1, 'Q', 'q', (v) => onUpdate(index, { q: v })));
 
@@ -1486,6 +1503,7 @@ function syncEqBand(moduleId, index) {
     let realIndex = index;
     if (moduleId === MODULE.EQ_DSP_1) eq = store.eq1;
     else if (moduleId === MODULE.EQ_DSP_2) eq = store.eq2;
+    else if (moduleId === MODULE.PRE_EQ) eq = store.preEq;
     else if (moduleId === MODULE.LEFTRIGHT_EQ) {
         if (store.activeEq === 'eqRight') {
             eq = store.leftRightEq.eqRight;
@@ -1518,6 +1536,8 @@ function syncEqToHardware(moduleId) {
         store.activeEq = 'eqRight';
         store.leftRightEq.eqRight.bands.forEach((_, i) => syncEqBand(moduleId, i));
         store.activeEq = prev;
+    } else if (moduleId === MODULE.PRE_EQ) {
+        store.preEq.forEach((_, i) => syncEqBand(moduleId, i));
     }
 }
 
@@ -2297,13 +2317,15 @@ function mountGraphToAccordion(acc) {
     else if (moduleId === String(MODULE.ISF_2)) eqState = null;
     else if (moduleId === String(MODULE.EQ_DSP_1)) eqState = store.eq1;
     else if (moduleId === String(MODULE.EQ_DSP_2)) eqState = store.eq2;
+    else if (moduleId === String(MODULE.PRE_EQ)) eqState = store.preEq;
     else if (moduleId === 'DYNEQ_LOW') eqState = store.dynamicEq.eqLow;
     else if (moduleId === 'DYNEQ_HIGH') eqState = store.dynamicEq.eqHigh;
     else if (moduleId === 'EQ_LEFT') eqState = store.leftRightEq.eqLeft;
     else if (moduleId === 'EQ_RIGHT') eqState = store.leftRightEq.eqRight;
 
     if (eqState) {
-        addSlider(controls, 'Pregain', -2400, 2400, 50, 'dB',
+        if (moduleId !== String(MODULE.PRE_EQ)) {
+            addSlider(controls, 'Pregain', -2400, 2400, 50, 'dB',
             () => (eqState.pregain || 0) * 100,
             (v) => {
                 eqState.pregain = v / 100;
@@ -2314,11 +2336,14 @@ function mountGraphToAccordion(acc) {
                     syncEqBand(parseInt(moduleId), bandIdx);
                 } else if (moduleId === 'EQ_LEFT' || moduleId === 'EQ_RIGHT') {
                     syncEqBand(MODULE.LEFTRIGHT_EQ, bandIdx);
+                } else if (moduleId === String(MODULE.PRE_EQ)) {
+                    syncEqBand(MODULE.PRE_EQ, bandIdx);
                 } else {
                     syncDynEqBand(moduleId === 'DYNEQ_HIGH', bandIdx);
                 }
             },
             null, 0.01);
+        }
     }
 
     // Map accordion moduleId → canonical string key used by EQGraph._getMyEqState/_getMyGraphMode
@@ -2327,6 +2352,7 @@ function mountGraphToAccordion(acc) {
         [String(MODULE.ISF_2)]:     'isf2',
         [String(MODULE.EQ_DSP_1)]:  'EQ_DSP_1',
         [String(MODULE.EQ_DSP_2)]:  'EQ_DSP_2',
+        [String(MODULE.PRE_EQ)]:    'PRE_EQ',
         // DYNEQ_LOW, DYNEQ_HIGH, EQ_LEFT, EQ_RIGHT are already string keys
     };
     const graphKey = MODULE_KEY_MAP[moduleId] ?? moduleId;
@@ -2870,10 +2896,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Scope DOM updates to the active accordion only
         const accId = store.activeEq === 'eq1' ? MODULE.EQ_DSP_1 :
             store.activeEq === 'eq2' ? MODULE.EQ_DSP_2 :
-                store.activeEq === 'dynLow' ? 'DYNEQ_LOW' :
-                    store.activeEq === 'dynHigh' ? 'DYNEQ_HIGH' :
-                        store.activeEq === 'autoEq' ? MODULE.AUTO_EQ :
-                            store.activeEq === 'eqLeft' ? 'EQ_LEFT' : 'EQ_RIGHT';
+                store.activeEq === 'preEq' ? MODULE.PRE_EQ :
+                    store.activeEq === 'dynLow' ? 'DYNEQ_LOW' :
+                        store.activeEq === 'dynHigh' ? 'DYNEQ_HIGH' :
+                                store.activeEq === 'eqLeft' ? 'EQ_LEFT' : 'EQ_RIGHT';
         const activeAcc = document.querySelector(`.accordion[data-module-id="${accId}"].open`);
         if (!activeAcc) return;
 
@@ -2898,7 +2924,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const rebuildStructural = () => {
         unmountGraph(); // destroy all graph instances (full rebuild)
 
-        const rebuildIds = [MODULE.ISF_1, MODULE.ISF_2, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
+        const rebuildIds = [MODULE.ISF_1, MODULE.ISF_2, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, MODULE.PRE_EQ, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
         const openEqAccs = []; // collect all open EQ accordions to remount
 
         rebuildIds.forEach(id => {

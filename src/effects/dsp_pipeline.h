@@ -51,6 +51,7 @@ public:
     // ── Module Accessors ──────────────────────────────────────────────────────
 
     Compander&               getCompander()   { return _compander; }
+    ParametricEQ&            getPreEq()       { return _preeq; }
     Exciter&                 getExciter()     { return _exciter; }
     DynamicBass&             getDynamicBass() { return _dynamicBass; }
     DynamicEQ&               getDynamicEq()   { return _dynamicEq; }
@@ -72,17 +73,18 @@ private:
     static const size_t CHAIN_LENGTH = DSP_MODULE_COUNT;
 
     VolumeControl           _preGain;       // [00]
-    Compander               _compander;     // [01]
-    Exciter                 _exciter;       // [02]
-    DynamicBass             _dynamicBass;   // [03]
-    DynamicEQ               _dynamicEq;     // [04]
-    IndexSelectableFilter   _isf1;          // [05] ISF instance 1
-    IndexSelectableFilter   _isf2;          // [06] ISF instance 2
-    ParametricEQ            _eqDsp_1;       // [07]
-    ParametricEQ            _eqDsp_2;       // [08]
-    LeftRightEQ             _leftRightEq;   // [09]
-    DRC                     _drc;           // [10]
-    VolumeControl           _postGain;      // [11]
+    ParametricEQ            _preeq;         // [01]
+    Compander               _compander;     // [02]
+    Exciter                 _exciter;       // [03]
+    DynamicBass             _dynamicBass;   // [04]
+    DynamicEQ               _dynamicEq;     // [05]
+    IndexSelectableFilter   _isf1;          // [06] ISF instance 1
+    IndexSelectableFilter   _isf2;          // [07] ISF instance 2
+    ParametricEQ            _eqDsp_1;       // [08]
+    ParametricEQ            _eqDsp_2;       // [09]
+    LeftRightEQ             _leftRightEq;   // [10]
+    DRC                     _drc;           // [11]
+    VolumeControl           _postGain;      // [12]
 
     DspModule* _chain[CHAIN_LENGTH];
 };

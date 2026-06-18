@@ -10,6 +10,13 @@
 #include "config.h"
 #include "../../effects/dsp_pipeline.h"
 
+struct MainMenuParam {
+    int8_t vol;
+    int8_t bass;
+    int8_t mid;
+    int8_t treble;
+};
+
 class PresetManager {
 public:
     void init();
@@ -43,6 +50,11 @@ public:
     uint8_t getCurrentSlotIndex();
 
     const uint8_t getCurrentPresetIndex() const { return currentpresetidx; };
+
+    bool hasMainMenuParam();
+
+    void loadMainMenuParam(MainMenuParam* param);
+    void saveMainMenuParam(MainMenuParam* param);
 
 
 private:

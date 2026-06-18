@@ -214,6 +214,7 @@ export class EQGraph {
             case 'DYNEQ_HIGH':  return 'dynamicEq';
             case 'isf1':        return 'isf1';
             case 'isf2':        return 'isf2';
+            case 'PRE_EQ':       return 'preEq';
             default:            return 'eq';
         }
     }
@@ -227,6 +228,7 @@ export class EQGraph {
             case 'EQ_RIGHT':    return store.leftRightEq.eqRight;
             case 'EQ_DSP_1':    return store.eq1;
             case 'EQ_DSP_2':    return store.eq2;
+            case 'PRE_EQ':      return store.preEq;
             case 'isf1':
             case 'isf2':        return null;
             default:            return null;
@@ -802,11 +804,14 @@ export class EQGraph {
         this.mouseY = y;
 
         if (this.isDragging && this.dragBand >= 0) {
+            const myMode = this._getMyGraphMode();
             const freq  = Math.max(FREQ_MIN, Math.min(FREQ_MAX, this.xToFreq(x)));
             const gain  = Math.max(DB_MIN,   Math.min(DB_MAX,   this.yToDb(y)));
             const freqR = Math.round(freq);
-            const gainR = Math.round(gain * 10) / 10;
-            const myMode = this._getMyGraphMode();
+            let gainR = 0;
+            if (myMode !== 'preEq') gainR = Math.round(gain * 10) / 10;
+            else gainR = 0;
+
             if (myMode === 'isf1' || myMode === 'isf2') {
                 store.updateIsfEqBand(myMode, this.dragBand, freqR, gainR);
             } else {

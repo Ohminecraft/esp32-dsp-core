@@ -24,6 +24,7 @@
 #include <Arduino.h>
 #include "dsp_types.h"
 #include "pin_config.h"
+#include "../param/preset_manager.h"
 
 extern volatile bool g_userShutdownRequest;
 
@@ -236,6 +237,18 @@ private:
     bool     _wifiConn    = false;
     bool     _clockAbsent = true;
 
+    // ── Live meter data (for DSP list screen) ─────────────────────────────────
+    float    _companderEnv    = 0.0f;  // envelope 0..1
+    float    _companderGainDb = 0.0f;  // gain reduction dB (negative)
+    float    _drcGainDb[4]    = {0.0f, 0.0f, 0.0f, 0.0f}; // per-band gain reduction
+    float    _dynBassAlpha    = 0.0f;  // -1 (clip) to +1 (boost)
+    float    _dynBassEnergyDb = -96.0f; // energy in dBFS
+    float    _dynEqAlphaLow   = 0.0f;  // 0..1 low EQ contribution
+    float    _dynEqAlphaHigh  = 0.0f;  // 0..1 high EQ contribution
+    float    _dynEqEnergyDb   = -96.0f; // energy in dBFS
+    uint32_t _lastMeterUpdate = 0;
+    static constexpr uint32_t METER_UPDATE_INTERVAL_MS = 100; // 10 Hz refresh
+
     // ── Pipeline (injected) ───────────────────────────────────────────────────
     DspPipeline*   _pipeline   = nullptr;
     PresetManager* _presetMgr  = nullptr;
@@ -380,7 +393,7 @@ private:
     // ── EQ band edit sub-state ────────────────────────────────────────────────
     EQFilterType _bandEditType = EQFilterType::EQ_FILTER_TYPE_PEAKING;  // type of band being edited
 
-    float _maxVolGainDb = 0.0f;
+    float _maxRangeParam = 16.0f;
     uint8_t _eqBandCount = 6;
 
     // ── Keyboard context (for applying value after ENTER) ────────────────────
@@ -404,6 +417,7 @@ private:
     int8_t VISIBLE_ROWS_DRC_CONFIG = 4;
     int8_t VISIBLE_ISF_PRESET = 3;
 
+    MainMenuParam _mmparam;
 
     uint8_t getScreenParams(NavEntry nav, UiParam* outParams);
     float getParamValue(NavEntry nav, uint8_t idx);

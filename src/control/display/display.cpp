@@ -468,6 +468,36 @@ void Display::init() {
 void Display::setPipeline(DspPipeline* pipeline, PresetManager* presetMgr) {
     _pipeline  = pipeline;
     _presetMgr = presetMgr;
+
+    if (_presetMgr && _presetMgr->hasMainMenuParam()) {
+        _presetMgr->loadMainMenuParam(&_mmparam);
+    } else {
+        _mmparam.vol = 100;
+        _mmparam.bass = 50;
+        _mmparam.mid = 50;
+        _mmparam.treble = 50;
+    }
+
+    _mmparam.vol = constrain(_mmparam.vol, 0, 100);
+    _mmparam.bass = constrain(_mmparam.bass, 0, 100);
+    _mmparam.mid = constrain(_mmparam.mid, 0, 100);
+    _mmparam.treble = constrain(_mmparam.treble, 0, 100);
+
+    if (_pipeline) {
+        VolumeControl& pre = _pipeline->getPreGain();
+        float db = -64.0f + _mmparam.vol * 64.0f / 100.0f;
+        pre.setGainDb(FLOAT_TO_DB_Q8(db));
+        pre.setMute(_mmparam.vol <= 0);
+
+        ParametricEQ& preEq = _pipeline->getPreEq();
+        const int8_t toneParams[3] = { _mmparam.bass, _mmparam.mid, _mmparam.treble };
+        for (uint8_t i = 0; i < 3; i++) {
+            EQFilterParams p = preEq.getBandParams(i);
+            float gainDb = ((float)toneParams[i] / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            p.gain = FLOAT_TO_DB_Q8(gainDb);
+            preEq.setBand(i, p);
+        }
+    }
 }
 
 // ─── Keyboard helper ──────────────────────────────────────────────────────────
@@ -576,8 +606,71 @@ void Display::update(EncoderEvent enc) {
         }
     }
 
+    // ── Live meter polling (10 Hz refresh for main menu and DSP list) ─────────
+    if ((currentScreen() == ScreenID::MAIN_MENU || currentScreen() == ScreenID::DSP_LIST) && _pipeline) {
+        uint32_t now = millis();
+        if (now - _lastMeterUpdate >= METER_UPDATE_INTERVAL_MS) {
+            _lastMeterUpdate = now;
+            
+            // Update Compander meter
+            Compander& comp = _pipeline->getCompander();
+            if (comp.isEnabled()) {
+                _companderEnv = comp.getEnvLinear();
+                _companderGainDb = comp.getGainDb();
+            } else {
+                _companderEnv = 0.0f;
+                _companderGainDb = 0.0f;
+            }
+            
+            // Update DRC meter (all 4 bands)
+            DRC& drc = _pipeline->getDrc();
+            if (drc.isEnabled()) {
+                for (uint8_t i = 0; i < 4; i++) {
+                    _drcGainDb[i] = drc.getBandGainDb(i);
+                }
+            } else {
+                for (uint8_t i = 0; i < 4; i++) {
+                    _drcGainDb[i] = 0.0f;
+                }
+            }
+            
+            // Update Dynamic Bass meter
+            DynamicBass& dynBass = _pipeline->getDynamicBass();
+            if (dynBass.isEnabled()) {
+                _dynBassAlpha = dynBass.getAlpha();
+                _dynBassEnergyDb = dynBass.getEnergyDb();
+            } else {
+                _dynBassAlpha = 0.0f;
+                _dynBassEnergyDb = -96.0f;
+            }
+            
+            // Update Dynamic EQ meter
+            DynamicEQ& dynEq = _pipeline->getDynamicEq();
+            if (dynEq.isEnabled()) {
+                _dynEqAlphaLow = dynEq.getAlphaLow();
+                _dynEqAlphaHigh = dynEq.getAlphaHigh();
+                _dynEqEnergyDb = dynEq.getEnergyDb();
+            } else {
+                _dynEqAlphaLow = 0.0f;
+                _dynEqAlphaHigh = 0.0f;
+                _dynEqEnergyDb = -96.0f;
+            }
+            
+            _dirty = true; // Redraw to show updated meters
+        }
+    }
+
     if (enc != EncoderEvent::NONE) {
         handleEncoder(enc);
+    }
+
+    // ── Main Menu Auto-save (3s idle after editing Vol/Bass/Mid/Treble) ──────
+    if (_mainMenuAutosaveArmed && _pipeline && _presetMgr) {
+        if (millis() - _mainMenuLastEditMs >= 3000) {
+            _mainMenuAutosaveArmed = false;
+            _presetMgr->saveMainMenuParam(&_mmparam);
+            LOG_INFO(TAG, "Saved Main Menu Param.");
+        }
     }
 
     if (_dirty) {
@@ -1179,19 +1272,52 @@ void Display::editDelta(int8_t dir) {
     if (s == ScreenID::MAIN_MENU && _focusIdx < 4 && _pipeline) {
         if (_focusIdx == 0) {
             VolumeControl& pre = _pipeline->getPreGain();
-            float db = DB_Q8_TO_FLOAT(pre.getGainDb());
 
-            int volume =
-                (int)roundf((db + 64.0f) * 100.0f / 64.0f);
+            _mmparam.vol += dir;
+            _mmparam.vol = constrain(_mmparam.vol, 0, 100);
 
-            volume += dir;
-            volume = constrain(volume, 0, 100);
-
-            db = -64.0f + volume * 64.0f / 100.0f;
+            float db = -64.0f + _mmparam.vol * 64.0f / 100.0f;
             pre.setGainDb(FLOAT_TO_DB_Q8(db));
-            pre.setMute(volume <= 0);
+            pre.setMute(_mmparam.vol <= 0);
+        } else if (_focusIdx == 1) { // Bass
+            ParametricEQ& pre = _pipeline->getPreEq();
+
+            _mmparam.bass += dir;
+            _mmparam.bass = constrain(_mmparam.bass, 0, 100);
+
+            float value = ((float)_mmparam.bass / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+
+            EQFilterParams p = pre.getBandParams(0);
+            p.gain = FLOAT_TO_DB_Q8(value);
+            pre.setBand(0, p);
+        } else if (_focusIdx == 2) { // Mid
+            ParametricEQ& pre = _pipeline->getPreEq();
+
+            _mmparam.mid += dir;
+            _mmparam.mid = constrain(_mmparam.mid, 0, 100);
+
+            float value = ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+
+            EQFilterParams p = pre.getBandParams(1);
+            p.gain = FLOAT_TO_DB_Q8(value);
+            pre.setBand(1, p);
+        } else if (_focusIdx == 3) { // Treble
+            ParametricEQ& pre = _pipeline->getPreEq();
+
+            _mmparam.treble += dir;
+            _mmparam.treble = constrain(_mmparam.treble, 0, 100);
+
+            float value = ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+
+            EQFilterParams p = pre.getBandParams(2);
+            p.gain = FLOAT_TO_DB_Q8(value);
+            pre.setBand(2, p);
         }
-        // Bass/Mid/Treble: left for future tone-control implementation
+        
+        // Reset auto-save timer — save after 3s idle
+        _mainMenuLastEditMs = millis();
+        _mainMenuAutosaveArmed = true;
+        
         _dirty = true;
         return;
     }
@@ -1581,42 +1707,155 @@ void Display::drawMainMenu() {
     d.drawString("ESP32 DSP CORE", CONTENT_X, 10);
     d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
 
-    // ── Live values from pipeline ─────────────────────────────────────────────
-    float volPct = 50.0f;
-    if (_pipeline) {
-        VolumeControl& pre = _pipeline->getPreGain();
-        float gainDb = DB_Q8_TO_FLOAT(pre.getGainDb());
-        // Ensure _maxPostGainDb is at least 0dB
-        if (_maxVolGainDb < 0.0f) _maxVolGainDb = 0.0f;
-        // Map [-64dB, _maxPostGainDb] → [0%, 100%]
-        float range = _maxVolGainDb - (-64.0f);
-        if (range < 1.0f) range = 64.0f; // fallback if maxPostGain not set yet
-        volPct = ((gainDb - (-64.0f)) / range) * 100.0f;
-        volPct = roundf(constrain(volPct, 0.0f, 100.0f));
-    }
-
     // ── Volume / tone rows ────────────────────────────────────────────────────
     const char* labels[] = { "Vol", "Bass", "Mid", "Treble" };
-    float       values[] = { volPct, 0.0f, 0.0f, 0.0f };
+    float       values[] = {
+        (float)_mmparam.vol,
+        ((float)_mmparam.bass / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam,
+        ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam,
+        ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam
+    };
     const char* units[]  = { "%",    "dB",  "dB",  "dB"   };
-    float       mins[]   = { 0.0f, -12.0f, -12.0f, -12.0f };
-    float       maxs[]   = { 100.0f, 12.0f, 12.0f, 12.0f };
-    uint8_t     decimals[] = { 1, 1, 1, 1 }; // Vol shows .1f
+    float       mins[]   = { 0.0f, -_maxRangeParam, -_maxRangeParam, -_maxRangeParam };
+    float       maxs[]   = { 100.0f, _maxRangeParam, _maxRangeParam, _maxRangeParam };
+    uint8_t     decimals[] = { 0, 1, 1, 1 };
 
     for (uint8_t i = 0; i < 4; i++) {
         int16_t y = HEADER_H + 4 + i * ROW_H;
         bool focused = (_focusIdx == i);
         // In main menu, Vol/Bass/Mid/Treble are always "in edit" when focused
         // (encoder directly changes value, no separate edit mode toggle)
-        uint8_t dec = (i == 0) ? 1 : 1; // Vol shows 1 decimal (e.g. 50.5%)
         drawSliderRow(CONTENT_X, y, CONTENT_W,
                       labels[i], values[i], mins[i], maxs[i], units[i],
-                      focused, focused, dec);
+                      focused, focused, decimals[i]);
+    }
+
+    // ── Live Meters Section (compact panel below sliders) ────────────────────
+    int16_t meterY = HEADER_H + 4 + 4 * ROW_H + 8;
+    int16_t meterAreaH = DISP_H - meterY - 8;
+    
+    if (meterAreaH > 60 && _pipeline) {
+        // Draw meter panel background
+        d.fillRoundRect(CONTENT_X, meterY, CONTENT_W, meterAreaH, 4, Color::PANEL);
+        d.drawRoundRect(CONTENT_X, meterY, CONTENT_W, meterAreaH, 4, Color::BORDER);
+        
+        // Panel title
+        d.setTextColor(Color::TEXT_DIM, Color::PANEL);
+        d.setTextDatum(TC_DATUM);
+        d.setTextSize(1);
+        d.drawString("LIVE METERS", CONTENT_X + CONTENT_W / 2, meterY + 4);
+        
+        int16_t rowY = meterY + 18;
+        constexpr int16_t rowH = 15;
+        constexpr int16_t labelW = 56;
+        constexpr int16_t meterW = CONTENT_W - labelW - 16;
+        constexpr int16_t labelX = CONTENT_X + 6;
+        constexpr int16_t meterX = CONTENT_X + labelW + 4;
+        
+        // Compander meter (horizontal gain reduction bar)
+        Compander& comp = _pipeline->getCompander();
+        if (comp.isEnabled()) {
+            d.setTextColor(Color::TEXT, Color::PANEL);
+            d.setTextDatum(ML_DATUM);
+            d.drawString("Comp", labelX, rowY + rowH / 2);
+            
+            constexpr int16_t mH = 8;
+            int16_t mY = rowY + (rowH - mH) / 2;
+            d.drawRect(meterX, mY, meterW, mH, Color::BORDER);
+            
+            float gr = -_companderGainDb;
+            if (gr < 0.0f) gr = 0.0f;
+            float frac = constrain(gr / 30.0f, 0.0f, 1.0f);
+            int16_t fillW = (int16_t)(frac * (meterW - 2));
+            
+            uint16_t col = gr > 20.0f ? Color::RED : gr > 12.0f ? Color::YELLOW : Color::GREEN;
+            if (fillW > 0) {
+                d.fillRect(meterX + 1, mY + 1, fillW, mH - 2, col);
+            }
+        }
+        rowY += rowH;
+        
+        // Dynamic Bass meter (bi-directional alpha bar)
+        DynamicBass& dynBass = _pipeline->getDynamicBass();
+        if (dynBass.isEnabled()) {
+            d.setTextColor(Color::TEXT, Color::PANEL);
+            d.setTextDatum(ML_DATUM);
+            d.drawString("D.Bass", labelX, rowY + rowH / 2);
+            
+            constexpr int16_t mH = 8;
+            int16_t mY = rowY + (rowH - mH) / 2;
+            d.drawRect(meterX, mY, meterW, mH, Color::BORDER);
+            
+            int16_t centerX = meterX + meterW / 2;
+            d.drawFastVLine(centerX, mY, mH, Color::TEXT_DIM);
+            
+            float alpha = constrain(_dynBassAlpha, -1.0f, 1.0f);
+            if (alpha < 0.0f) {
+                int16_t fillW = (int16_t)((-alpha) * (meterW / 2 - 2));
+                if (fillW > 0) d.fillRect(centerX - fillW, mY + 1, fillW, mH - 2, Color::RED);
+            } else if (alpha > 0.0f) {
+                int16_t fillW = (int16_t)(alpha * (meterW / 2 - 2));
+                if (fillW > 0) d.fillRect(centerX + 1, mY + 1, fillW, mH - 2, Color::GREEN);
+            }
+        }
+        rowY += rowH;
+        
+        // Dynamic EQ meter (dual stacked bars for Low/High)
+        DynamicEQ& dynEq = _pipeline->getDynamicEq();
+        if (dynEq.isEnabled()) {
+            d.setTextColor(Color::TEXT, Color::PANEL);
+            d.setTextDatum(ML_DATUM);
+            d.drawString("D.EQ", labelX, rowY + rowH / 2);
+            
+            constexpr int16_t barH = 4;
+            constexpr int16_t gap = 1;
+            int16_t mY = rowY + (rowH - barH * 2 - gap) / 2;
+            
+            // Low EQ bar (top, orange)
+            d.drawRect(meterX, mY, meterW, barH, Color::BORDER);
+            float alphaLow = constrain(_dynEqAlphaLow, 0.0f, 1.0f);
+            int16_t fillWLow = (int16_t)(alphaLow * (meterW - 2));
+            if (fillWLow > 0) d.fillRect(meterX + 1, mY + 1, fillWLow, barH - 2, Color::ACCENT2);
+            
+            // High EQ bar (bottom, cyan)
+            d.drawRect(meterX, mY + barH + gap, meterW, barH, Color::BORDER);
+            float alphaHigh = constrain(_dynEqAlphaHigh, 0.0f, 1.0f);
+            int16_t fillWHigh = (int16_t)(alphaHigh * (meterW - 2));
+            if (fillWHigh > 0) d.fillRect(meterX + 1, mY + barH + gap + 1, fillWHigh, barH - 2, Color::ACCENT);
+        }
+        rowY += rowH;
+        
+        // DRC meter (4 vertical band bars)
+        DRC& drc = _pipeline->getDrc();
+        if (drc.isEnabled()) {
+            d.setTextColor(Color::TEXT, Color::PANEL);
+            d.setTextDatum(ML_DATUM);
+            d.drawString("DRC", labelX, rowY + rowH / 2);
+            
+            constexpr int16_t vBarH = 12;
+            int16_t mY = rowY + (rowH - vBarH) / 2;
+            int16_t barW = (meterW / 4) - 2;
+            
+            for (uint8_t b = 0; b < 4; b++) {
+                int16_t bx = meterX + b * (barW + 2);
+                d.drawRect(bx, mY, barW, vBarH, Color::BORDER);
+                
+                float gr = -_drcGainDb[b];
+                if (gr < 0.0f) gr = 0.0f;
+                float frac = constrain(gr / 30.0f, 0.0f, 1.0f);
+                int16_t fillH = (int16_t)(frac * (vBarH - 2));
+                
+                uint16_t col = gr > 20.0f ? Color::RED : gr > 12.0f ? Color::YELLOW : Color::GREEN;
+                if (fillH > 0) {
+                    d.fillRect(bx + 1, mY + vBarH - 1 - fillH, barW - 2, fillH, col);
+                }
+            }
+        }
     }
 
     // Note: No SETTINGS/DSP LIST buttons on main menu anymore — use encoder actions:
-    //   - Double-click → SETTINGS
-    //   - Hold 3s      → DSP LIST
+    //   - Double-click → DSP LIST
+    //   - Hold 3s      → SETTINGS
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -1749,6 +1988,113 @@ void Display::drawDspList() {
 
         DspModule* mod = getModulePtr(MODULE_LIST[mi].id);
         bool isOn = mod ? mod->isEnabled() : false;
+
+        // ── Live Meter Rendering ──────────────────────────────────────────────
+        if (isOn) {
+            if (MODULE_LIST[mi].id == DisplayModuleID::COMPANDER) {
+                // Compander: Horizontal meter (gain reduction 0 to -30 dB)
+                constexpr int16_t mW = 50;
+                constexpr int16_t mH = 6;
+                int16_t mX = CONTENT_X + CONTENT_W - 75;
+                int16_t mY = yPos + (ROW_H - 2) / 2 - mH / 2;
+                
+                d.drawRect(mX, mY, mW, mH, Color::BORDER);
+                
+                float gr = -_companderGainDb; // Gain reduction is negative
+                if (gr < 0.0f) gr = 0.0f;
+                float frac = constrain(gr / 30.0f, 0.0f, 1.0f);
+                int16_t fillW = (int16_t)(frac * (mW - 2));
+                
+                uint16_t meterColor = gr > 20.0f ? Color::RED 
+                                    : gr > 12.0f ? Color::YELLOW 
+                                    : Color::GREEN;
+                if (fillW > 0) {
+                    d.fillRect(mX + 1, mY + 1, fillW, mH - 2, meterColor);
+                }
+            } 
+            else if (MODULE_LIST[mi].id == DisplayModuleID::DRC) {
+                // DRC: 4 vertical band meters (gain reduction 0 to -30 dB)
+                constexpr int16_t mAreaW = 50;
+                constexpr int16_t mH = 14;
+                int16_t mX = CONTENT_X + CONTENT_W - 75;
+                int16_t mY = yPos + (ROW_H - 2) / 2 - mH / 2;
+                
+                int16_t barW = (mAreaW / 4) - 2;
+                for (uint8_t b = 0; b < 4; b++) {
+                    int16_t bx = mX + b * (barW + 2);
+                    d.drawRect(bx, mY, barW, mH, Color::BORDER);
+                    
+                    float gr = -_drcGainDb[b]; // Gain reduction is negative
+                    if (gr < 0.0f) gr = 0.0f;
+                    float frac = constrain(gr / 30.0f, 0.0f, 1.0f);
+                    int16_t fillH = (int16_t)(frac * (mH - 2));
+                    
+                    uint16_t meterColor = gr > 20.0f ? Color::RED 
+                                        : gr > 12.0f ? Color::YELLOW 
+                                        : Color::GREEN;
+                    if (fillH > 0) {
+                        d.fillRect(bx + 1, mY + mH - 1 - fillH, barW - 2, fillH, meterColor);
+                    }
+                }
+            }
+            else if (MODULE_LIST[mi].id == DisplayModuleID::DYNAMIC_BASS) {
+                // Dynamic Bass: Horizontal bar showing alpha (-1 to +1)
+                // Center = neutral, left = clip zone (red), right = boost zone (green)
+                constexpr int16_t mW = 50;
+                constexpr int16_t mH = 8;
+                int16_t mX = CONTENT_X + CONTENT_W - 75;
+                int16_t mY = yPos + (ROW_H - 2) / 2 - mH / 2;
+                
+                d.drawRect(mX, mY, mW, mH, Color::BORDER);
+                
+                // Center line (neutral point at alpha = 0)
+                int16_t centerX = mX + mW / 2;
+                d.drawFastVLine(centerX, mY, mH, Color::TEXT_DIM);
+                
+                // Alpha: -1 (full clip protection) to +1 (full boost)
+                float alpha = constrain(_dynBassAlpha, -1.0f, 1.0f);
+                
+                if (alpha < 0.0f) {
+                    // Clip protection zone: fill left from center
+                    int16_t fillW = (int16_t)((-alpha) * (mW / 2 - 2));
+                    if (fillW > 0) {
+                        d.fillRect(centerX - fillW, mY + 1, fillW, mH - 2, Color::RED);
+                    }
+                } else if (alpha > 0.0f) {
+                    // Boost zone: fill right from center
+                    int16_t fillW = (int16_t)(alpha * (mW / 2 - 2));
+                    if (fillW > 0) {
+                        d.fillRect(centerX + 1, mY + 1, fillW, mH - 2, Color::GREEN);
+                    }
+                }
+            }
+            else if (MODULE_LIST[mi].id == DisplayModuleID::DYNAMIC_EQ_THRESH) {
+                // Dynamic EQ: 2 horizontal bars showing Low/High alpha (0..1)
+                constexpr int16_t mW = 50;
+                constexpr int16_t barH = 4;
+                constexpr int16_t gap = 2;
+                int16_t mX = CONTENT_X + CONTENT_W - 75;
+                int16_t mY = yPos + (ROW_H - 2) / 2 - barH - gap / 2;
+                
+                // Low EQ alpha bar (top) - warm orange
+                d.drawRect(mX, mY, mW, barH, Color::BORDER);
+                float alphaLow = constrain(_dynEqAlphaLow, 0.0f, 1.0f);
+                int16_t fillWLow = (int16_t)(alphaLow * (mW - 2));
+                if (fillWLow > 0) {
+                    d.fillRect(mX + 1, mY + 1, fillWLow, barH - 2, Color::ACCENT2);
+                }
+                
+                // High EQ alpha bar (bottom) - bright cyan
+                int16_t mY2 = mY + barH + gap;
+                d.drawRect(mX, mY2, mW, barH, Color::BORDER);
+                float alphaHigh = constrain(_dynEqAlphaHigh, 0.0f, 1.0f);
+                int16_t fillWHigh = (int16_t)(alphaHigh * (mW - 2));
+                if (fillWHigh > 0) {
+                    d.fillRect(mX + 1, mY2 + 1, fillWHigh, barH - 2, Color::ACCENT);
+                }
+            }
+        }
+
         uint16_t dot = isOn ? Color::GREEN : Color::RED;
         d.fillCircle(CONTENT_X + CONTENT_W - 10, yPos + (ROW_H - 2) / 2, 4, dot);
 

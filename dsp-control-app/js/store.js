@@ -44,6 +44,17 @@ class Store extends EventEmitter {
             eqRight: makeEqState()
         };
 
+        // Pre EQ (3-band tone control: Bass/Mid/Treble)
+        this.preEq = {
+            enabled: true,
+            pregainDb: 0,
+            bands: [
+                { enabled: true, type: 1, freq: 100, gain: 0, q: 0.707 },  // Bass - Low Shelf
+                { enabled: true, type: 0, freq: 1000, gain: 0, q: 0.707 }, // Mid - Peaking
+                { enabled: true, type: 2, freq: 10000, gain: 0, q: 0.707 } // Treble - High Shelf
+            ]
+        };
+
         // Dynamic EQ
         this.dynamicEq = {
             lowThresh: -4000, normalThresh: -2000, highThresh: -600,
@@ -169,6 +180,7 @@ class Store extends EventEmitter {
             case 'dynHigh': return this.dynamicEq.eqHigh;
             case 'eqLeft': return this.leftRightEq.eqLeft;
             case 'eqRight': return this.leftRightEq.eqRight;
+            case 'preEq': return this.preEq;
             default: return this.eq1;
         }
     }
@@ -181,6 +193,7 @@ class Store extends EventEmitter {
             case 'dynHigh': return MODULE.DYNAMIC_EQ;
             case 'eqLeft': return MODULE.LEFTRIGHT_EQ;
             case 'eqRight': return MODULE.LEFTRIGHT_EQ;
+            case 'preEq': return MODULE.PRE_EQ;
             default: return MODULE.EQ_DSP_1;
         }
     }

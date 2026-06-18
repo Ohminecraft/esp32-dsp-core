@@ -513,6 +513,7 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
         _uart->sendFrame(cmdEq, mid, pkt, 11);
         }
     };
+    sendEq(CMD_SET_EQ_BAND, MODULE_ID_PRE_EQ, _pipeline->getPreEq());
     sendEq(CMD_SET_EQ_BAND, MODULE_ID_EQ_DSP_1, _pipeline->getEqDsp_1());
     sendEq(CMD_SET_EQ_BAND, MODULE_ID_EQ_DSP_2, _pipeline->getEqDsp_2());
     sendEq(CMD_SET_EQ_BAND, MODULE_ID_LEFTRIGHT_EQ, _pipeline->getLeftRightEq().getEqLeft(), false);
@@ -617,7 +618,9 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
             eq = &_pipeline->getDynamicEq().getEqHigh();
         }
         eq->setPregain(pregainQ88);
-     } else {
+    } else if (cmd.moduleId == MODULE_ID_PRE_EQ) {
+        eq = &_pipeline->getPreEq();
+    } else {
         _uart->sendAck(cmd.moduleId, 1); return;
     }
     if (eq && realBand < MAX_EQ_BANDS) {
@@ -629,6 +632,7 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
         (cmd.moduleId == MODULE_ID_LEFTRIGHT_EQ) ? "Left/Right" :
         (cmd.moduleId == MODULE_ID_DYNAMIC_EQ && cmd.cmd == CMD_SET_DYNEQ_LOW_BAND) ? "DynamicEQ LOW" :
         (cmd.moduleId == MODULE_ID_DYNAMIC_EQ && cmd.cmd == CMD_SET_DYNEQ_HIGH_BAND) ? "DynamicEQ HIGH" :
+        (cmd.moduleId == MODULE_ID_PRE_EQ) ? "Pre" :
         (cmd.moduleId == MODULE_ID_EQ_DSP_1) ? "1" : "2",
         (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
     _uart->sendAck(cmd.moduleId, 0);
