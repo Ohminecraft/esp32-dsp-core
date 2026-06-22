@@ -45,10 +45,10 @@
 // ============================================================================
 
 // I2S Input/Output Full
-#define I2S_IN_OUT_BCK_PIN         11      // BCK
-#define I2S_IN_OUT_WS_PIN          10      // WS 
-#define I2S_IN_OUT_DATA_OUT_PIN    13      // DOUT
-#define I2S_IN_OUT_DATA_IN_PIN     12      // DIN
+#define I2S_IN_OUT_BCK_PIN         17      // BCK
+#define I2S_IN_OUT_WS_PIN          16      // WS 
+#define I2S_IN_OUT_DATA_OUT_PIN    8      // DOUT
+#define I2S_IN_OUT_DATA_IN_PIN     6      // DIN
 
 // I2S Output Subwoffer (WIP)
 #define I2S_SUB_BCK_PIN            I2S_IN_OUT_BCK_PIN      // BCK same as in/out full 
@@ -113,12 +113,10 @@
 // Misc Pin 
 // ============================================================================
 
-#ifdef SOFT_LATCH_SHUTDOWN
-#define POWER_PIN_OUT 2
-#define POWER_PIN_OFF 40
-#endif
+#define POWER_PIN_OUT -1
+#define POWER_PIN_OFF -1
 
-#define MUTE_PIN 4
+//#define MUTE_PIN -1
 
 // ============================================================================
 // TFT Encoder
@@ -126,22 +124,20 @@
 // Set these to the GPIOs wired to the rotary encoder. The display UI compiles
 // with the encoder disabled while the pins are left at -1.
 #ifndef ENCODER_A_PIN
-#define ENCODER_A_PIN 12
+#define ENCODER_A_PIN 1
 #endif
 
 #ifndef ENCODER_B_PIN
-#define ENCODER_B_PIN 13
+#define ENCODER_B_PIN 2
 #endif
 
 #ifndef ENCODER_BTN_PIN
-#define ENCODER_BTN_PIN 14
+#define ENCODER_BTN_PIN 13
 #endif
 
 // ============================================================================
 // Trigger GPIO Settings (Single / Triple Click)
 // ============================================================================
-#ifdef USING_TRIGGERS
-#define TRIGGER_GPIO_PIN            41      // Target GPIO to trigger
-#endif // USING_TRIGGERS
+#define TRIGGER_GPIO_PIN            -1      // Target GPIO to trigger
 
 #endif // PIN_CONFIG_H

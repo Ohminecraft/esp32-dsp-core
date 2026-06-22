@@ -64,6 +64,9 @@ static volatile uint32_t g_lastReinitSampleRate = 0;
 // priority inversion between the high-priority audio task and the sync callback.
 static volatile bool g_pipelineReady = false;
 
+// Check User execute save parameter
+volatile bool g_inNvsSaving = false;
+
 // Clock Absent check flag
 static volatile bool g_isclockabsent = false;
 
@@ -71,12 +74,20 @@ static volatile bool g_isclockabsent = false;
 static volatile uint32_t g_lastFrameUs = 0;
 static volatile uint32_t g_maxFrameUs  = 0;
 
+// Setting
+
+volatile bool g_softLatchShutdown  = false;
+volatile bool g_usingWifi          = false;
+volatile bool g_usingTrigger       = false;
+volatile bool g_usingBuiltinSerial = false;
+
 // Shutdown Mechanism
-#ifdef SOFT_LATCH_SHUTDOWN
 #include "esp_timer.h"
+
+
 static esp_timer_handle_t g_autoShutdownTimerHandle = NULL;
-static bool              g_shutdownButtonIsHolding = false;
-static volatile uint32_t g_shutdownCountdown = 0;
+static bool               g_shutdownButtonIsHolding = false;
+static volatile uint32_t  g_shutdownCountdown = 0;
 
 volatile bool     g_userShutdownRequest = false;
 
@@ -98,7 +109,6 @@ static void stopAutoShutdownTimer() {
         LOG_INFO("SYS", "Auto shutdown timer stopped (clock restored)");
     }
 }
-#endif
 
 // ============================================================================
 // Pipeline Reinit — called from AudioSync callback (sync task context, Core 0)
@@ -112,7 +122,7 @@ static void reinitPipeline(uint32_t newRateHz) {
         vTaskSuspend(g_audioTaskHandle);
     }
 
-    if (newRateHz > 0 && newRateHz != g_lastReinitSampleRate) {
+    if (newRateHz > 0 && newRateHz != g_lastReinitSampleRate && !g_inNvsSaving) { // Prevent Click sound when save saving preset
         g_lastReinitSampleRate = newRateHz;
         g_audioIO.reinit(newRateHz);
         g_pipeline.init((int32_t)newRateHz, DSP_NUM_CHANNELS);
@@ -125,9 +135,8 @@ static void reinitPipeline(uint32_t newRateHz) {
     if (newRateHz > 0) {
         g_pipelineReady = true;
         g_isclockabsent = false;
-        #ifdef SOFT_LATCH_SHUTDOWN
+        if (g_softLatchShutdown)
         stopAutoShutdownTimer();
-        #endif
         #ifdef MUTE_PIN
         digitalWrite(MUTE_PIN, !MUTE_PIN_LOGIC);
         #endif
@@ -137,9 +146,7 @@ static void reinitPipeline(uint32_t newRateHz) {
         LOG_INFO("SYNC", "Pipeline reinit done: %lu Hz", (unsigned long)newRateHz);
     } else {
         g_isclockabsent = true;
-        #ifdef SOFT_LATCH_SHUTDOWN
-        startAutoShutdownTimer();
-        #endif
+        if (g_softLatchShutdown) startAutoShutdownTimer();
         #ifdef MUTE_PIN
         digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
         #endif
@@ -271,83 +278,81 @@ void controlTask(void* param) {
     #endif
 
     while (true) {
-        #ifdef SOFT_LATCH_SHUTDOWN
         // 1. Long press detection for hard shutdown (5s)
-        bool btnIsPressed = (digitalRead(POWER_PIN_OFF) == LOW); // LOW = pressed
+        if (g_softLatchShutdown) {
+            bool btnIsPressed = (digitalRead(POWER_PIN_OFF) == LOW); // LOW = pressed
 
-        if (btnIsPressed) {
-            if (!g_shutdownButtonIsHolding) {
-                g_shutdownButtonIsHolding = true;
-                g_shutdownCountdown = millis();
-            } else if (millis() - g_shutdownCountdown >= 5000) {
-                g_userShutdownRequest = true;
-            }
-        } else {
-            g_shutdownButtonIsHolding = false;
-            g_shutdownCountdown = 0;
-        }
-
-        // 2. Click & Multi-press detection
-        static bool lastBtnState = false; // false = released, true = pressed
-        static uint32_t btnPressTime = 0;
-        static uint32_t clickCount = 0;
-        static uint32_t lastClickTime = 0;
-
-        // Variables for non-blocking GPIO trigger timing
-        static uint32_t triggerEndTime = 0;
-        static bool triggerActive = false;
-
-        if (btnIsPressed != lastBtnState) {
-            lastBtnState = btnIsPressed;
-            if (!btnIsPressed) { // Button released (transitioned from pressed to released)
-                uint32_t pressDuration = millis() - btnPressTime;
-                if (pressDuration >= 40 && pressDuration <= 600) { // Valid short click
-                    clickCount++;
-                    lastClickTime = millis();
+            if (btnIsPressed) {
+                if (!g_shutdownButtonIsHolding) {
+                    g_shutdownButtonIsHolding = true;
+                    g_shutdownCountdown = millis();
+                } else if (millis() - g_shutdownCountdown >= 5000) {
+                    g_userShutdownRequest = true;
                 }
-            } else { // Button pressed
-                btnPressTime = millis();
+            } else {
+                g_shutdownButtonIsHolding = false;
+                g_shutdownCountdown = 0;
             }
-        }
 
-        // Wait until inactivity timeout (350ms) to evaluate click count
-        if (clickCount > 0 && (millis() - lastClickTime > 350)) {
-            #ifdef TRIGGER_GPIO_PIN
-            if (clickCount == 1) {
-                LOG_INFO("SYS", "Single press detected — Triggering GPIO %d for %d ms", TRIGGER_GPIO_PIN, TRIGGER_SINGLE_DURATION_MS);
-                digitalWrite(TRIGGER_GPIO_PIN, TRIGGER_GPIO_ACTIVE_LEVEL);
-                triggerEndTime = millis() + TRIGGER_SINGLE_DURATION_MS;
-                triggerActive = true;
-            } else
-            #endif
-            if (clickCount == 2) {
-                #ifndef ONLY_SERIAL
-                LOG_INFO("SYS", "Double press detected — Toggling WiFi");
-                toggleWifiShutdown();
-                #else
-                LOG_INFO("SYS", "In ONLY_SERIAL mode Wifi in this mode is disable");
+            // 2. Click & Multi-press detection
+            static bool lastBtnState = false; // false = released, true = pressed
+            static uint32_t btnPressTime = 0;
+            static uint32_t clickCount = 0;
+            static uint32_t lastClickTime = 0;
+
+            // Variables for non-blocking GPIO trigger timing
+            static uint32_t triggerEndTime = 0;
+            static bool triggerActive = false;
+
+            if (btnIsPressed != lastBtnState) {
+                lastBtnState = btnIsPressed;
+                if (!btnIsPressed) { // Button released (transitioned from pressed to released)
+                    uint32_t pressDuration = millis() - btnPressTime;
+                    if (pressDuration >= 40 && pressDuration <= 600) { // Valid short click
+                        clickCount++;
+                        lastClickTime = millis();
+                    }
+                } else { // Button pressed
+                    btnPressTime = millis();
+                }
+            }
+
+            // Wait until inactivity timeout (350ms) to evaluate click count
+            if (clickCount > 0 && (millis() - lastClickTime > 350)) {
+                #ifdef TRIGGER_GPIO_PIN
+                if (clickCount == 1) {
+                    LOG_INFO("SYS", "Single press detected — Triggering GPIO %d for %d ms", TRIGGER_GPIO_PIN, TRIGGER_SINGLE_DURATION_MS);
+                    digitalWrite(TRIGGER_GPIO_PIN, TRIGGER_GPIO_ACTIVE_LEVEL);
+                    triggerEndTime = millis() + TRIGGER_SINGLE_DURATION_MS;
+                    triggerActive = true;
+                } else
                 #endif
+                if (clickCount == 2) {
+                    #ifndef ONLY_SERIAL
+                    LOG_INFO("SYS", "Double press detected — Toggling WiFi");
+                    toggleWifiShutdown();
+                    #else
+                    LOG_INFO("SYS", "In ONLY_SERIAL mode Wifi in this mode is disable");
+                    #endif
+                }
+                #ifdef TRIGGER_GPIO_PIN
+                else if (clickCount == 3) {
+                    LOG_INFO("SYS", "Triple press detected — Triggering GPIO %d for %d ms", TRIGGER_GPIO_PIN, TRIGGER_TRIPLE_DURATION_MS);
+                    digitalWrite(TRIGGER_GPIO_PIN, TRIGGER_GPIO_ACTIVE_LEVEL);
+                    triggerEndTime = millis() + TRIGGER_TRIPLE_DURATION_MS;
+                    triggerActive = true;
+                }
+                #endif
+                clickCount = 0;
             }
-            #ifdef TRIGGER_GPIO_PIN
-            else if (clickCount == 3) {
-                LOG_INFO("SYS", "Triple press detected — Triggering GPIO %d for %d ms", TRIGGER_GPIO_PIN, TRIGGER_TRIPLE_DURATION_MS);
-                digitalWrite(TRIGGER_GPIO_PIN, TRIGGER_GPIO_ACTIVE_LEVEL);
-                triggerEndTime = millis() + TRIGGER_TRIPLE_DURATION_MS;
-                triggerActive = true;
-            }
-            #endif
-            clickCount = 0;
-        }
 
-        // Non-blocking trigger duration control
-        #ifdef TRIGGER_GPIO_PIN
-        if (triggerActive && (millis() >= triggerEndTime)) {
-            digitalWrite(TRIGGER_GPIO_PIN, !TRIGGER_GPIO_ACTIVE_LEVEL);
-            triggerActive = false;
-            LOG_INFO("SYS", "GPIO %d trigger finished", TRIGGER_GPIO_PIN);
+            // Non-blocking trigger duration control
+            if (triggerActive && (millis() >= triggerEndTime)) {
+                digitalWrite(TRIGGER_GPIO_PIN, !TRIGGER_GPIO_ACTIVE_LEVEL);
+                triggerActive = false;
+                LOG_INFO("SYS", "GPIO %d trigger finished", TRIGGER_GPIO_PIN);
+            }
         }
-        #endif
-        #endif
 
         // Poll UART for incoming commands
         if (g_uart.poll()) {
@@ -488,33 +493,29 @@ void controlTask(void* param) {
 // ============================================================================
 
 void setup() {
-    #ifdef SOFT_LATCH_SHUTDOWN
+    if (g_softLatchShutdown) {
         pinMode(POWER_PIN_OUT, OUTPUT);
-        digitalWrite(POWER_PIN_OUT, LOW);
-
         pinMode(POWER_PIN_OFF, INPUT_PULLUP);
-        delay(10); 
-
-        digitalWrite(POWER_PIN_OUT, HIGH);
         g_statusLED.off();
-    #endif
+    }
 
-    #ifdef TRIGGER_GPIO_PIN
+    if (g_usingTrigger) {
         pinMode(TRIGGER_GPIO_PIN, OUTPUT);
         digitalWrite(TRIGGER_GPIO_PIN, !TRIGGER_GPIO_ACTIVE_LEVEL);
-    #endif
+    }
+    
 
-    pinMode(MUTE_PIN, OUTPUT);
-    digitalWrite(MUTE_PIN, LOW);
+    //pinMode(MUTE_PIN, OUTPUT);
+    //digitalWrite(MUTE_PIN, LOW);
 
-    #ifdef SOFT_LATCH_SHUTDOWN
+    if (g_softLatchShutdown) {
         esp_timer_create_args_t shutdown_timer_args = {
             .callback = &autoShutdownTimerCallback,
             .arg = NULL,
             .name = "auto_shutdown"
         };
         esp_timer_create(&shutdown_timer_args, &g_autoShutdownTimerHandle);
-    #endif
+    }
 
     delay(100); // Allow time for power to stabilize before initializing components
     DBG_INIT(115200);
@@ -528,11 +529,6 @@ void setup() {
     DBG_PRINTF("  Frame size: %d samples\n", DSP_FRAME_SIZE);
     DBG_PRINTF("  Channels: %d\n", DSP_NUM_CHANNELS);
     DBG_PRINTLN("=================================");
-
-    #ifdef USING_DISPLAY
-        g_display.init();
-        g_encoder.init(ENCODER_A_PIN, ENCODER_B_PIN, ENCODER_BTN_PIN);
-    #endif
 
     // 1. Init DSP pipeline at default rate
     //    AudioSync will reinit within ~100ms when QCC5125 clock is detected.
@@ -580,41 +576,17 @@ void setup() {
         g_presetMgr.loadPreset(currentSlot, g_pipeline);
     }
 
+    #ifdef USING_DISPLAY
+        g_display.init();
+        g_encoder.init(ENCODER_A_PIN, ENCODER_B_PIN, ENCODER_BTN_PIN);
+    #endif
+
     // 5. Load Main Menu Param
     #ifdef USING_DISPLAY
         g_display.setPipeline(&g_pipeline, &g_presetMgr);
     #endif
 
-    // 6.1. Init AudioSync — starts PCNT clock monitor on Core 0
-    //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)
-    LOG_INFO("INIT", "Initializing AudioSync clock monitor...");
-    g_audioSync.init(onRateChange);
-    g_isclockabsent = true;
-    //g_pipelineReady = true; // Start audio task immediately for testing without AudioSync 
-
-    // 6.2. Create AudioSync monitor task (Core 0, Priority 5)
-    xTaskCreatePinnedToCore(
-        g_audioSync.monitorTask,
-        "SyncTask",
-        SYNC_TASK_STACK_SIZE,
-        NULL,
-        SYNC_TASK_PRIORITY,
-        &g_syncTaskHandle,
-        SYNC_TASK_CORE
-    );
-    
-    // 7. Create control task (Core 0)
-    xTaskCreatePinnedToCore(
-        controlTask,
-        "ControlTask",
-        CONTROL_TASK_STACK_SIZE,
-        NULL,
-        CONTROL_TASK_PRIORITY,
-        &g_controlTaskHandle,
-        CONTROL_TASK_CORE
-    );
-
-    // 8. Create audio task (Core 1) — starts suspended, AudioSync resumes it
+    // 6. Create audio task (Core 1) — starts suspended, AudioSync resumes it
     //    after first clock detection.
     xTaskCreatePinnedToCore(
         audioTask,
@@ -625,6 +597,37 @@ void setup() {
         &g_audioTaskHandle,
         AUDIO_TASK_CORE
     );
+ 
+    // 7.1. Init AudioSync — starts PCNT clock monitor on Core    //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)
+    LOG_INFO("INIT", "Initializing AudioSync clock monitor...");
+    g_audioSync.init(onRateChange);
+    g_isclockabsent = true;
+    //g_pipelineReady = true; // Start audio task immediately for testing without AudioSync 
+
+    // 7.2. Create AudioSync monitor task (Core 0, Priority 5)
+    xTaskCreatePinnedToCore(
+        g_audioSync.monitorTask,
+        "SyncTask",
+        SYNC_TASK_STACK_SIZE,
+        NULL,
+        SYNC_TASK_PRIORITY,
+        &g_syncTaskHandle,
+        SYNC_TASK_CORE
+    );
+    
+    // 8. Create control task (Core 0)
+    xTaskCreatePinnedToCore(
+        controlTask,
+        "ControlTask",
+        CONTROL_TASK_STACK_SIZE,
+        NULL,
+        CONTROL_TASK_PRIORITY,
+        &g_controlTaskHandle,
+        CONTROL_TASK_CORE
+    );
+
+    // 9. Set POWER_PIN_OUT to high 
+    if (g_softLatchShutdown) digitalWrite(POWER_PIN_OUT, HIGH);
 }
 
 // ============================================================================

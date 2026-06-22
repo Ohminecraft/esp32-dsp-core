@@ -10,6 +10,8 @@
 #include "config.h"
 #include "../../effects/dsp_pipeline.h"
 
+extern volatile bool g_inNvsSaving;
+
 struct MainMenuParam {
     int8_t vol;
     int8_t bass;

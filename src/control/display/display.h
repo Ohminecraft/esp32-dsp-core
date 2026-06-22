@@ -43,8 +43,8 @@ namespace Color {
     static constexpr uint16_t BG          = 0x0841; // #080808 near-black
     static constexpr uint16_t PANEL       = 0x10A2; // #101010 card bg
     static constexpr uint16_t BORDER      = 0x2945; // #294545
-    static constexpr uint16_t ACCENT      = 0x07FF; // cyan
-    static constexpr uint16_t ACCENT2     = 0xFD20; // orange
+    static constexpr uint16_t ACCENT      = 0xFFFF; // white
+    static constexpr uint16_t ACCENT2     = 0xBFFE; // cyan
     static constexpr uint16_t TEXT        = 0xDEDB; // light grey
     static constexpr uint16_t TEXT_DIM    = 0x7BCF; // dim grey
     static constexpr uint16_t TEXT_FOCUS  = 0xFFFF; // white when focused
@@ -149,6 +149,67 @@ struct KeyboardState {
     float   minVal;
     float   maxVal;
     ScreenID returnScreen;
+};
+
+// ─── Animation system ─────────────────────────────────────────────────────────
+/**
+ * Animation state for smooth UI transitions (AAA-game style)
+ */
+struct AnimationState {
+    // Focus transition (when moving between items)
+    uint8_t  prevFocusIdx;
+    float    focusTransition;     // 0.0 → 1.0 (0 = fully at prev, 1 = fully at current)
+    uint32_t focusStartMs;
+    
+    // Edit mode color sweep (left-to-right wipe when entering edit)
+    bool     aniSweepActive;
+    bool     aniSweepExit;  // true = right-to-left (exit animation)
+    float    aniSweepProgress;   // 0.0 (left) → 1.0 (right)
+    uint32_t aniSweepStartMs;
+    
+    // Value animation (smooth number transitions)
+    float    valueFrom;
+    float    valueTo;
+    float    valueProgress;       // 0.0 → 1.0
+    uint32_t valueStartMs;
+    bool     valueAnimating;
+    
+    // Volume animation on splash → main menu transition
+    bool     volAnimating;
+    float    volFrom;
+    float    volTo;
+    uint32_t volStartMs;
+    static constexpr uint16_t VOL_ANIM_MS = 800;  // slower for volume
+    
+    // Save preset button animation state
+    bool     saveAnimating;
+    uint32_t saveAnimStartMs;
+    
+    // Timing constants
+    static constexpr uint16_t FOCUS_ANIM_MS = 200;
+    static constexpr uint16_t SWEEP_ANIM_MS = 300;
+    static constexpr uint16_t VALUE_ANIM_MS = 150;
+    
+    void reset() {
+        prevFocusIdx = 0;
+        focusTransition = 1.0f;
+        focusStartMs = 0;
+        aniSweepActive = false;
+        aniSweepExit = false;
+        aniSweepProgress = 0.0f;
+        aniSweepStartMs = 0;
+        valueFrom = 0.0f;
+        valueTo = 0.0f;
+        valueProgress = 1.0f;
+        valueStartMs = 0;
+        valueAnimating = false;
+        volAnimating = false;
+        volFrom = 0.0f;
+        volTo = 0.0f;
+        volStartMs = 0;
+        saveAnimating = false;
+        saveAnimStartMs = 0;
+    }
 };
 
 // ─── Navigation stack entry ───────────────────────────────────────────────────
@@ -418,6 +479,23 @@ private:
     int8_t VISIBLE_ISF_PRESET = 3;
 
     MainMenuParam _mmparam;
+
+    // ── Animation state ───────────────────────────────────────────────────────
+    AnimationState _anim;
+    
+    // ── Animation helpers ─────────────────────────────────────────────────────
+    void updateAnimations();
+    void startFocusTransition();
+    void startValueAnimation(float from, float to);
+    void toggleEditMode();
+    // ── Easing functions ──────────────────────────────────────────────────────
+    static float easeOutCubic(float t);
+    static float easeInOutQuad(float t);
+    static float easeOutElastic(float t);
+    
+    // ── Animation drawing helpers ─────────────────────────────────────────────
+    void drawSweepAnimation(int16_t x, int16_t y, int16_t w, int16_t h);
+    float getAnimatedValue(float current);
 
     uint8_t getScreenParams(NavEntry nav, UiParam* outParams);
     float getParamValue(NavEntry nav, uint8_t idx);

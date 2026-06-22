@@ -104,7 +104,7 @@ private:
 
     i2s_chan_handle_t _rxHandle = nullptr;
     i2s_chan_handle_t _txHandle = nullptr;
-    i2s_chan_handle_t _txSubHandle = nullptr; // for simultaneous read/write on the same port (see readFrame/writeFrame)
+    i2s_chan_handle_t _txSubHandle = nullptr;
 
     int32_t  _sampleRate  = DSP_SAMPLE_RATE_DEFAULT;
     int32_t  _numChannels = 2;

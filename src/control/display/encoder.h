@@ -58,8 +58,8 @@ private:
     bool         _holdFired      = false; // prevent repeat hold events
 
     // Timing constants (ms)
-    static constexpr uint32_t DEBOUNCE_MS      =  20;
-    static constexpr uint32_t DCLICK_WINDOW_MS = 100; // max gap between two clicks
+    static constexpr uint32_t DEBOUNCE_MS      = 20;
+    static constexpr uint32_t DCLICK_WINDOW_MS = 60; // max gap between two clicks
     static constexpr uint32_t HOLD3_MS         = 3000;
     static constexpr uint32_t HOLD5_MS         = 5000;
 

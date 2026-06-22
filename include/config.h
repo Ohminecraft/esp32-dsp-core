@@ -24,7 +24,7 @@
 //
 // DSP_SAMPLE_RATE_DEFAULT: used only for initial I2S/pipeline init before
 // AudioSync fires its first callback. AudioSync will reinit within ~100ms.
-#define DSP_SAMPLE_RATE_DEFAULT 96000   // Hz — max QCC5125 LDAC rate
+#define DSP_SAMPLE_RATE_DEFAULT 48000   // Hz — max QCC5125 LDAC rate
 
 #define DSP_NUM_CHANNELS        2       // Stereo
 #define DSP_DMA_BUFFER_COUNT    8       // Number of DMA buffers in the I2S driver
@@ -137,7 +137,7 @@
 
 #define AUDIO_TASK_CORE         1
 #define AUDIO_TASK_PRIORITY     configMAX_PRIORITIES - 1
-#define AUDIO_TASK_STACK_SIZE   24576
+#define AUDIO_TASK_STACK_SIZE   16000
 
 #define CONTROL_TASK_CORE       0
 #define CONTROL_TASK_PRIORITY   5
@@ -167,7 +167,7 @@
 // Preset Configuration
 // ============================================================================
 
-#define MAX_PRESET_SLOTS        4
+#define MAX_PRESET_SLOTS        3
 #define MAIN_MENU_AUTOSAVE_MS   2500
 #define MAIN_MENU_IDLE_SAVE_MS  2500
 
@@ -176,9 +176,9 @@
 // ============================================================================
 
 #define USING_DISPLAY
-#define DISABLE_PERF_LOG
+//#define DISABLE_PERF_LOG
 #define ONLY_SERIAL
-#define USE_BUILTIN_SERIAL
+//#define USE_BUILTIN_SERIAL
 //#define USING_TRIGGERS
 //#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
 

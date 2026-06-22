@@ -12,6 +12,7 @@
 #include "../../effects/dsp_pipeline.h"
 #include "../../control/param/preset_manager.h"
 #include "../../utils/debug_log.h"
+#include "customfonts/Century751BT_12pt_GFX.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -457,10 +458,12 @@ void Display::init() {
     } else {
         LOG_WARN(TAG, "Sprite alloc failed — direct draw mode");
     }
-
     _splashStartMs = millis();
     pushScreen(ScreenID::SPLASH);
     _dirty = true;
+    
+    // Initialize animation state
+    _anim.reset();
 
     LOG_INFO(TAG, "Display initialized (ST7789 %dx%d)", _tft.width(), _tft.height());
 }
@@ -472,20 +475,20 @@ void Display::setPipeline(DspPipeline* pipeline, PresetManager* presetMgr) {
     if (_presetMgr && _presetMgr->hasMainMenuParam()) {
         _presetMgr->loadMainMenuParam(&_mmparam);
     } else {
-        _mmparam.vol = 100;
+        _mmparam.vol = 32;
         _mmparam.bass = 50;
         _mmparam.mid = 50;
         _mmparam.treble = 50;
     }
 
-    _mmparam.vol = constrain(_mmparam.vol, 0, 100);
+    _mmparam.vol = constrain(_mmparam.vol, 0, 32);
     _mmparam.bass = constrain(_mmparam.bass, 0, 100);
     _mmparam.mid = constrain(_mmparam.mid, 0, 100);
     _mmparam.treble = constrain(_mmparam.treble, 0, 100);
 
     if (_pipeline) {
         VolumeControl& pre = _pipeline->getPreGain();
-        float db = -64.0f + _mmparam.vol * 64.0f / 100.0f;
+        float db = -32.0f + _mmparam.vol * 32.0f / 32.0f;
         pre.setGainDb(FLOAT_TO_DB_Q8(db));
         pre.setMute(_mmparam.vol <= 0);
 
@@ -660,6 +663,9 @@ void Display::update(EncoderEvent enc) {
         }
     }
 
+    // ── Update animations ─────────────────────────────────────────────────────
+    updateAnimations();
+    
     if (enc != EncoderEvent::NONE) {
         handleEncoder(enc);
     }
@@ -738,6 +744,9 @@ void Display::handleEncoder(EncoderEvent enc) {
             return;
         }
 
+        // Save current focus BEFORE any calculations for animation
+        uint8_t oldFocus = _focusIdx;
+        
         int16_t next = (int16_t)_focusIdx + dir;
         _itemCount = getItemCount();
         if (next < 0)           next = (int16_t)(_itemCount - 1);
@@ -794,8 +803,15 @@ void Display::handleEncoder(EncoderEvent enc) {
             }
         }
 
+        // Apply new focus and trigger animation
+        _anim.prevFocusIdx = oldFocus;  // Use saved old focus
         _focusIdx     = (uint8_t)next;
         _holdTracking = false;
+        
+        // Trigger focus animation (don't overwrite prevFocusIdx!)
+        _anim.focusTransition = 0.0f;
+        _anim.focusStartMs = millis();
+        
         onFocusChanged();
         _dirty = true;
         return;
@@ -807,6 +823,8 @@ void Display::handleEncoder(EncoderEvent enc) {
         case ScreenID::MAIN_MENU:
             // Double click → DSP_LIST
             pushScreen(ScreenID::DSP_LIST);
+            _anim.reset();
+            _anim.aniSweepActive = true;
             break;
         case ScreenID::DSP_LIST: {
             const uint8_t backIdx = getItemCount() - 1;
@@ -849,8 +867,15 @@ void Display::handleEncoder(EncoderEvent enc) {
         // Single click behavior per screen
         if (s == ScreenID::MAIN_MENU) {
             // Cycle focus: Vol→Bass→Mid→Treble→Vol
+            uint8_t oldIdx = _focusIdx;
             _focusIdx = (_focusIdx + 1) % 4;
             _holdTracking = false;
+            
+            // Trigger focus transition animation
+            if (oldIdx != _focusIdx) {
+                startFocusTransition();
+            }
+            
             _dirty = true;
             return;
         }
@@ -894,7 +919,7 @@ void Display::handleEncoder(EncoderEvent enc) {
                 uint8_t moduleIdx = _focusIdx - DSP_LIST_MODULE_START_IDX;
                 if (moduleIdx < MODULE_COUNT) {
                     DspModule* mod = getModulePtr(MODULE_LIST[moduleIdx].id);
-                    if (mod) mod->setEnabled(!mod->isEnabled());
+                    if (mod && mod->getModuleId() != MODULE_ID_PRE_GAIN && mod->getModuleId() != MODULE_ID_POST_GAIN) mod->setEnabled(!mod->isEnabled());
                 }
                 _dirty = true;
                 return;
@@ -927,6 +952,9 @@ void Display::handleEncoder(EncoderEvent enc) {
 }
 
 void Display::onFocusChanged() {
+    // Start focus transition animation
+    startFocusTransition();
+    
     ScreenID s   = currentScreen();
     uint8_t  cnt = getItemCount();
 
@@ -996,13 +1024,6 @@ void Display::onConfirm() {
     NavEntry& nav = currentNav();
 
     switch (s) {
-
-    // ── Main Menu ─────────────────────────────────────────────────────────────
-    case ScreenID::MAIN_MENU:
-        // Items: 0=vol, 1=bass, 2=mid, 3=treble (no buttons)
-        // All are edit-only (no toggle), SW cycles focus instead
-        break;
-
     // ── Settings ──────────────────────────────────────────────────────────────
     case ScreenID::SETTINGS:
         // Items: 0=wifi toggle, 1=trigger toggle, 2=[SHUTDOWN], 3=[BACK]
@@ -1017,42 +1038,6 @@ void Display::onConfirm() {
         }
         break;
 
-    // ── DSP list ──────────────────────────────────────────────────────────────
-    case ScreenID::DSP_LIST: {
-        const uint8_t backIdx = getItemCount() - 1;
-        if (_focusIdx == backIdx) {
-            popScreen();
-            break;
-        }
-
-        if (_focusIdx < PRESET_SLOT_COUNT) {
-            if (_presetMgr && _pipeline) {
-                _presetTargetSlot = _focusIdx;
-                _presetMgr->loadPreset(_presetTargetSlot, *_pipeline);
-                _presetMgr->saveCurrentSlotIndex(_presetTargetSlot);
-            }
-            break;
-        }
-
-        if (_focusIdx == DSP_LIST_PRESET_SAVE_IDX) {
-            if (_presetMgr && _pipeline) {
-                _presetMgr->savePreset(_presetTargetSlot, *_pipeline);
-                _presetMgr->saveCurrentSlotIndex(_presetTargetSlot);
-            }
-            break;
-        }
-
-        if (_focusIdx >= DSP_LIST_MODULE_START_IDX) {
-            uint8_t moduleIdx = _focusIdx - DSP_LIST_MODULE_START_IDX;
-            if (moduleIdx < MODULE_COUNT) {
-                const ModuleEntry& m = MODULE_LIST[moduleIdx];
-                DspModule* mod = getModulePtr(m.id);
-                if (mod) mod->setEnabled(!mod->isEnabled());
-            }
-        }
-        break;
-    }
-
     // ── Effect common ─────────────────────────────────────────────────────────
     case ScreenID::EFFECT_COMMON: {
         // Last item is always [BACK]
@@ -1060,9 +1045,8 @@ void Display::onConfirm() {
         if (_focusIdx == cnt - 1) {
             popScreen();
         } else {
-            // Toggle edit mode
-            // TODO: if param is NUMBER_INPUT type, push keyboard instead
-            _editMode = !_editMode;
+            // Toggle edit mode with animation
+            toggleEditMode();
         }
         break;
     }
@@ -1097,7 +1081,7 @@ void Display::onConfirm() {
         if (_focusIdx == backIdx) {
             popScreen();
         } else {
-            _editMode = !_editMode;
+            toggleEditMode();
         }
         break;
     }
@@ -1163,7 +1147,7 @@ void Display::onConfirm() {
         } else if (_focusIdx == cnt - 2) {
             pushScreen(ScreenID::DRC_BAND_SELECT, nav.module); // NEXT to band select
         } else if (_focusIdx == 0 || _focusIdx == 1) {
-            _editMode = !_editMode; // Mode/CF type selector
+            toggleEditMode(); // Mode/CF type selector
         } else {
             // Crossover freq/Q params: push keyboard
             _kbContext = nav;
@@ -1208,7 +1192,7 @@ void Display::onConfirm() {
             popScreen();
         } else if (_focusIdx < 6) {
             // Param rows 0-5: toggle edit mode
-            _editMode = !_editMode;
+            toggleEditMode();
         }
         break;
     }
@@ -1270,49 +1254,65 @@ void Display::editDelta(int8_t dir) {
 
     // ── MAIN_MENU: edit vol/bass/mid/treble directly ───────────────────────────
     if (s == ScreenID::MAIN_MENU && _focusIdx < 4 && _pipeline) {
+        float oldValue = 0.0f, newValue = 0.0f;
+        
         if (_focusIdx == 0) {
             VolumeControl& pre = _pipeline->getPreGain();
 
+            oldValue = (float)_mmparam.vol;
             _mmparam.vol += dir;
-            _mmparam.vol = constrain(_mmparam.vol, 0, 100);
+            _mmparam.vol = constrain(_mmparam.vol, 0, 32);
+            newValue = (float)_mmparam.vol;
 
-            float db = -64.0f + _mmparam.vol * 64.0f / 100.0f;
+            float db = -32.0f + _mmparam.vol * 32.0f / 32.0f;
             pre.setGainDb(FLOAT_TO_DB_Q8(db));
             pre.setMute(_mmparam.vol <= 0);
         } else if (_focusIdx == 1) { // Bass
             ParametricEQ& pre = _pipeline->getPreEq();
 
+            float oldBass = ((float)_mmparam.bass / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
             _mmparam.bass += dir;
             _mmparam.bass = constrain(_mmparam.bass, 0, 100);
+            float newBass = ((float)_mmparam.bass / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
 
-            float value = ((float)_mmparam.bass / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            oldValue = oldBass;
+            newValue = newBass;
 
             EQFilterParams p = pre.getBandParams(0);
-            p.gain = FLOAT_TO_DB_Q8(value);
+            p.gain = FLOAT_TO_DB_Q8(newBass);
             pre.setBand(0, p);
         } else if (_focusIdx == 2) { // Mid
             ParametricEQ& pre = _pipeline->getPreEq();
 
+            float oldMid = ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
             _mmparam.mid += dir;
             _mmparam.mid = constrain(_mmparam.mid, 0, 100);
+            float newMid = ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
 
-            float value = ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            oldValue = oldMid;
+            newValue = newMid;
 
             EQFilterParams p = pre.getBandParams(1);
-            p.gain = FLOAT_TO_DB_Q8(value);
+            p.gain = FLOAT_TO_DB_Q8(newMid);
             pre.setBand(1, p);
         } else if (_focusIdx == 3) { // Treble
             ParametricEQ& pre = _pipeline->getPreEq();
 
+            float oldTreble = ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
             _mmparam.treble += dir;
             _mmparam.treble = constrain(_mmparam.treble, 0, 100);
+            float newTreble = ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
 
-            float value = ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            oldValue = oldTreble;
+            newValue = newTreble;
 
             EQFilterParams p = pre.getBandParams(2);
-            p.gain = FLOAT_TO_DB_Q8(value);
+            p.gain = FLOAT_TO_DB_Q8(newTreble);
             pre.setBand(2, p);
         }
+        
+        // Trigger value animation
+        startValueAnimation(oldValue, newValue);
         
         // Reset auto-save timer — save after 3s idle
         _mainMenuLastEditMs = millis();
@@ -1707,7 +1707,7 @@ void Display::drawMainMenu() {
     d.drawString("ESP32 DSP CORE", CONTENT_X, 10);
     d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
 
-    // ── Volume / tone rows ────────────────────────────────────────────────────
+    // ── Volume / tone params with animations ─────────────────────────────────
     const char* labels[] = { "Vol", "Bass", "Mid", "Treble" };
     float       values[] = {
         (float)_mmparam.vol,
@@ -1715,19 +1715,86 @@ void Display::drawMainMenu() {
         ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam,
         ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam
     };
-    const char* units[]  = { "%",    "dB",  "dB",  "dB"   };
+    const char* units[]  = { "",    "dB",  "dB",  "dB"   };
     float       mins[]   = { 0.0f, -_maxRangeParam, -_maxRangeParam, -_maxRangeParam };
-    float       maxs[]   = { 100.0f, _maxRangeParam, _maxRangeParam, _maxRangeParam };
+    float       maxs[]   = { 32.0f, _maxRangeParam, _maxRangeParam, _maxRangeParam };
     uint8_t     decimals[] = { 0, 1, 1, 1 };
 
+    // Animated parameter display
+    constexpr int16_t PARAM_AREA_Y = HEADER_H + 8;
+    constexpr int16_t PARAM_AREA_H = 140;
+    
+    // Draw all 4 params as compact indicators
+    constexpr int16_t COMPACT_H = 24;
+    constexpr int16_t COMPACT_GAP = 6;
+    int16_t compactY = PARAM_AREA_Y;
+    
     for (uint8_t i = 0; i < 4; i++) {
-        int16_t y = HEADER_H + 4 + i * ROW_H;
-        bool focused = (_focusIdx == i);
-        // In main menu, Vol/Bass/Mid/Treble are always "in edit" when focused
-        // (encoder directly changes value, no separate edit mode toggle)
-        drawSliderRow(CONTENT_X, y, CONTENT_W,
-                      labels[i], values[i], mins[i], maxs[i], units[i],
-                      focused, focused, decimals[i]);
+        bool isFocused = (_focusIdx == i);
+        
+        // Apply focus transition animation
+        float focusBlend = 0.0f;
+        if (_anim.focusTransition < 1.0f) {
+            if (i == _anim.prevFocusIdx) {
+                focusBlend = 1.0f - _anim.focusTransition; // fade out
+            } else if (i == _focusIdx) {
+                focusBlend = _anim.focusTransition; // fade in
+            }
+        } else if (isFocused) {
+            focusBlend = 1.0f;
+        }
+        
+        // Smooth value animation
+        float displayValue = values[i];
+        if (_anim.valueAnimating && isFocused) {
+            displayValue = getAnimatedValue(displayValue);
+        }
+        
+        // Color interpolation based on focus
+        uint16_t bgColor = Color::BG;
+        uint16_t borderColor = Color::BORDER;
+        uint16_t textColor = Color::TEXT;
+        
+        if (focusBlend > 0.0f) {
+            uint8_t blend = (uint8_t)(focusBlend * 255.0f);
+            bgColor = blendColor(Color::BG, Color::PANEL, blend);
+            borderColor = blendColor(Color::BORDER, Color::ACCENT, blend);
+            textColor = blendColor(Color::TEXT, Color::TEXT_FOCUS, blend);
+        }
+        
+        // Draw compact param indicator
+        d.fillRoundRect(CONTENT_X, compactY, CONTENT_W, COMPACT_H, 3, bgColor);
+        d.drawRoundRect(CONTENT_X, compactY, CONTENT_W, COMPACT_H, 3, borderColor);
+        
+        // Apply edit mode sweep if focused
+        if (isFocused && _anim.aniSweepActive) {
+            drawSweepAnimation(CONTENT_X, compactY, CONTENT_W, COMPACT_H);
+        }
+        
+        // Label
+        d.setTextColor(textColor, bgColor);
+        d.setTextDatum(ML_DATUM);
+        d.setTextSize(1);
+        d.drawString(labels[i], CONTENT_X + 8, compactY + COMPACT_H / 2);
+        
+        // Value
+        char valStr[16];
+        formatFloat(valStr, sizeof(valStr), displayValue, decimals[i]);
+        d.setTextDatum(MR_DATUM);
+        
+        if (isFocused) {
+            // Focused item: larger, bold value
+            //d.setFreeFont(&Century751BT12);
+            //d.setTextSize(1);
+            d.drawString(String(valStr) + String(units[i]), CONTENT_X + CONTENT_W - 8, compactY + COMPACT_H / 2);
+            //d.setTextFont(1);
+        } else {
+            // Non-focused: smaller value
+            d.setTextSize(1);
+            d.drawString(String(valStr) + String(units[i]), CONTENT_X + CONTENT_W - 8, compactY + COMPACT_H / 2);
+        }
+        
+        compactY += COMPACT_H + COMPACT_GAP;
     }
 
     // ── Live Meters Section (compact panel below sliders) ────────────────────
@@ -1912,8 +1979,8 @@ void Display::drawDspList() {
 
     int16_t yPos = HEADER_H + 4;
 
-    // Row 1: 4 horizontal preset boxes
-    constexpr int16_t presetBoxW = (CONTENT_W - 12) / 4; // 4 boxes with 4px gaps
+    // Row 1: 3 horizontal preset boxes (with focus transition animation)
+    constexpr int16_t presetBoxW = (CONTENT_W - 12) / PRESET_SLOT_COUNT; // 3 boxes with 4px gaps
     constexpr int16_t presetBoxH = 32;
     
     for (uint8_t i = 0; i < PRESET_SLOT_COUNT; i++) {
@@ -1922,33 +1989,74 @@ void Display::drawDspList() {
         bool has = _presetMgr ? _presetMgr->hasPreset(i) : false;
         bool isTarget = (i == _presetTargetSlot);
 
-        uint16_t bg = focused ? Color::PANEL : Color::BG;
-        uint16_t border = focused ? Color::ACCENT : Color::BORDER;
+        // Focus transition animation
+        uint16_t bg, border, textColor;
+        if (focused) {
+            if (_anim.focusTransition < 1.0f) {
+                uint8_t blend = (uint8_t)(_anim.focusTransition * 255.0f);
+                bg = blendColor(Color::BG, Color::PANEL, blend);
+                border = blendColor(Color::BORDER, Color::ACCENT, blend);
+            } else {
+                bg = Color::PANEL;
+                border = Color::ACCENT;
+            }
+        } else {
+            bg = Color::BG;
+            border = Color::BORDER;
+        }
         
         d.fillRect(x, yPos, presetBoxW, presetBoxH, bg);
         d.drawRect(x, yPos, presetBoxW, presetBoxH, border);
 
+        if (isTarget && _anim.aniSweepActive) {
+            // Sweep animation will overwrite background
+            drawSweepAnimation(x, yPos, presetBoxW, presetBoxH);
+            // After sweep, force text color to contrast with accent
+            textColor = Color::ACCENT;
+            bg = Color::BG; // for text background
+        } else if (_anim.aniSweepActive && _anim.aniSweepExit) {
+            // Sweep animation will overwrite background
+            drawSweepAnimation(x, yPos, presetBoxW, presetBoxH);
+            // After sweep, force text color to contrast with accent
+            textColor = Color::ACCENT;
+            bg = Color::ACCENT; // for text background
+        }
+
         // Preset label
         char label[8];
         snprintf(label, sizeof(label), "P%u", (unsigned)(i + 1));
-        d.setTextColor(focused ? Color::TEXT_FOCUS : Color::TEXT, bg);
+        d.setTextColor(isTarget ? textColor : focused ? Color::TEXT_FOCUS : Color::TEXT, bg);
         d.setTextDatum(MC_DATUM);
         d.drawString(label, x + presetBoxW / 2, yPos + presetBoxH / 2 - 4);
 
         // Status dot
+        /*
         uint16_t dot = isTarget ? Color::YELLOW : (has ? Color::GREEN : Color::RED);
         d.fillCircle(x + presetBoxW / 2, yPos + presetBoxH - 8, 3, dot);
+        */
     }
     yPos += presetBoxH + 6;
 
-    // Row 2: SAVE PRESET button (centered, rounded corners)
+    // Row 2: SAVE PRESET button (with focus transition animation)
     constexpr int16_t saveW = 180;
     constexpr int16_t saveH = 28;
     int16_t saveX = CONTENT_X + (CONTENT_W - saveW) / 2;
     bool saveFocused = (_focusIdx == DSP_LIST_PRESET_SAVE_IDX);
 
-    uint16_t saveBg = saveFocused ? Color::PANEL : Color::BG;
-    uint16_t saveBorder = saveFocused ? Color::ACCENT : Color::BORDER;
+    uint16_t saveBg, saveBorder;
+    if (saveFocused) {
+        if (_anim.focusTransition < 1.0f) {
+            uint8_t blend = (uint8_t)(_anim.focusTransition * 255.0f);
+            saveBg = blendColor(Color::BG, Color::PANEL, blend);
+            saveBorder = blendColor(Color::BORDER, Color::ACCENT, blend);
+        } else {
+            saveBg = Color::PANEL;
+            saveBorder = Color::ACCENT;
+        }
+    } else {
+        saveBg = Color::BG;
+        saveBorder = Color::BORDER;
+    }
     
     d.fillRoundRect(saveX, yPos, saveW, saveH, 4, saveBg);
     d.drawRoundRect(saveX, yPos, saveW, saveH, 4, saveBorder);
@@ -1977,10 +2085,24 @@ void Display::drawDspList() {
         uint8_t itemIdx = DSP_LIST_MODULE_START_IDX + mi;
         bool focused = (_focusIdx == itemIdx);
 
-        uint16_t bg = focused ? Color::PANEL : Color::BG;
+        // Focus transition animation
+        uint16_t bg, border;
+        if (focused) {
+            if (_anim.focusTransition < 1.0f) {
+                uint8_t blend = (uint8_t)(_anim.focusTransition * 255.0f);
+                bg = blendColor(Color::BG, Color::PANEL, blend);
+                border = blendColor(Color::BORDER, Color::ACCENT, blend);
+            } else {
+                bg = Color::PANEL;
+                border = Color::ACCENT;
+            }
+        } else {
+            bg = Color::BG;
+            border = Color::BORDER;
+        }
+
         d.fillRect(CONTENT_X, yPos, CONTENT_W, ROW_H - 2, bg);
-        d.drawRect(CONTENT_X, yPos, CONTENT_W, ROW_H - 2,
-                   focused ? Color::ACCENT : Color::BORDER);
+        d.drawRect(CONTENT_X, yPos, CONTENT_W, ROW_H - 2, border);
 
         d.setTextColor(focused ? Color::TEXT_FOCUS : Color::TEXT, bg);
         d.setTextDatum(ML_DATUM);
@@ -2095,8 +2217,10 @@ void Display::drawDspList() {
             }
         }
 
+        /*
         uint16_t dot = isOn ? Color::GREEN : Color::RED;
         d.fillCircle(CONTENT_X + CONTENT_W - 10, yPos + (ROW_H - 2) / 2, 4, dot);
+        */
 
         yPos += ROW_H;
     }
@@ -2800,13 +2924,52 @@ void Display::drawSliderRow(int16_t x, int16_t y, int16_t w,
     TFT_eSprite& d = _spr;
     int16_t h = ROW_H - 2;
 
-    uint16_t bg = focused ? Color::PANEL : Color::BG;
+    // Determine base colors
+    uint16_t bg, borderColor, textColor;
+    
+    if (focused) {
+        // Focused item colors
+        if (_anim.focusTransition < 1.0f) {
+            // Animating into focus
+            uint8_t blend = (uint8_t)(_anim.focusTransition * 255.0f);
+            bg = blendColor(Color::BG, Color::PANEL, blend);
+            borderColor = blendColor(Color::BORDER, Color::ACCENT, blend);
+            textColor = blendColor(Color::TEXT, Color::TEXT_FOCUS, blend);
+        } else {
+            // Fully focused
+            bg = Color::PANEL;
+            borderColor = Color::ACCENT;
+            textColor = Color::TEXT_FOCUS;
+        }
+    } else {
+        // Not focused
+        bg = Color::BG;
+        borderColor = Color::BORDER;
+        textColor = Color::TEXT;
+    }
+    
+    // Draw base
     d.fillRect(x, y, w, h, bg);
-    d.drawRect (x, y, w, h, focused ? Color::ACCENT : Color::BORDER);
+    d.drawRect(x, y, w, h, borderColor);
+    
+    // Apply edit mode sweep OVER base if editing
+    if (editing && focused && _anim.aniSweepActive) {
+        // Sweep animation will overwrite background
+        drawSweepAnimation(x, y, w, h);
+        // After sweep, force text color to contrast with accent
+        textColor = Color::BG;
+        bg = Color::ACCENT; // for text background
+    }
+    else if (!editing && focused && _anim.aniSweepExit && _anim.aniSweepActive) {
+        // Exit animation in progress - draw reverse sweep
+        drawSweepAnimation(x, y, w, h);
+        textColor = Color::ACCENT;
+        bg = Color::BG;
+    }
 
     // Label
     d.setTextDatum(ML_DATUM);
-    d.setTextColor(focused ? Color::TEXT_FOCUS : Color::TEXT, bg);
+    d.setTextColor(textColor, bg);
     d.setTextSize(1);
     d.drawString(label, x + 4, y + h / 2);
 
@@ -2825,21 +2988,21 @@ void Display::drawSliderRow(int16_t x, int16_t y, int16_t w,
     norm          = norm < 0.0f ? 0.0f : (norm > 1.0f ? 1.0f : norm);
     int16_t fillW = (int16_t)(norm * trackW);
     if (fillW > 0)
-        d.fillRect(trackX, trackY, fillW, trackH, editing ? Color::ACCENT2 : Color::SLIDER_FILL);
+        d.fillRect(trackX, trackY, fillW, trackH, Color::SLIDER_FILL);
 
     // Thumb
     int16_t thumbX = trackX + fillW;
     d.fillCircle(thumbX, trackY + trackH / 2, editing ? 6 : 4,
                  editing ? Color::ACCENT2 : Color::ACCENT);
     if (editing)
-        d.drawCircle(thumbX, trackY + trackH / 2, 6, Color::TEXT_FOCUS);
+        d.drawCircle(thumbX, trackY + trackH / 2, 6, Color::BORDER);
 
     // Value box
     char valBuf[10];
     formatFloat(valBuf, sizeof(valBuf), value, decimals);
     int16_t valX = x + w - VAL_W + 2;
     d.fillRect(valX, y + 2, VAL_W - 4, h - 4, focused ? 0x18A3 : 0x1082);
-    d.drawRect (valX, y + 2, VAL_W - 4, h - 4, focused ? Color::ACCENT : Color::BORDER);
+    d.drawRect (valX, y + 2, VAL_W - 4, h - 4, editing ? Color::BORDER : focused ? Color::ACCENT : Color::BORDER);
     d.setTextDatum(MR_DATUM);
     d.setTextColor(focused ? Color::TEXT_FOCUS : Color::TEXT, focused ? 0x18A3 : 0x1082);
     d.drawString(valBuf, valX + VAL_W - 6, y + h / 2);
@@ -2859,12 +3022,48 @@ void Display::drawSwitchRow(int16_t x, int16_t y, int16_t w,
     TFT_eSprite& d = _spr;
     int16_t h = ROW_H - 2;
 
-    uint16_t bg = focused ? Color::PANEL : Color::BG;
+    // Determine base colors
+    uint16_t bg, borderColor, textColor;
+    
+    if (focused) {
+        // Focused item colors
+        if (_anim.focusTransition < 1.0f) {
+            // Animating into focus
+            uint8_t blend = (uint8_t)(_anim.focusTransition * 255.0f);
+            bg = blendColor(Color::BG, Color::PANEL, blend);
+            borderColor = blendColor(Color::BORDER, Color::ACCENT, blend);
+            textColor = blendColor(Color::TEXT, Color::TEXT_FOCUS, blend);
+        } else {
+            // Fully focused
+            bg = Color::PANEL;
+            borderColor = Color::ACCENT;
+            textColor = Color::TEXT_FOCUS;
+        }
+    } else {
+        // Not focused
+        bg = Color::BG;
+        borderColor = Color::BORDER;
+        textColor = Color::TEXT;
+    }
+    
+    // Draw base
     d.fillRect(x, y, w, h, bg);
-    d.drawRect (x, y, w, h, focused ? Color::ACCENT : Color::BORDER);
+    d.drawRect(x, y, w, h, borderColor);
+    
+    // Apply edit mode sweep OVER base if editing
+    if (_editMode && focused && _anim.aniSweepActive) {
+        drawSweepAnimation(x, y, w, h);
+        textColor = Color::BG;
+        bg = Color::ACCENT;
+    } else if (!_editMode && focused && _anim.aniSweepExit && _anim.aniSweepActive) {
+        // Exit animation in progress - draw reverse sweep
+        drawSweepAnimation(x, y, w, h);
+        textColor = Color::ACCENT;
+        bg = Color::BG;
+    }
 
     d.setTextDatum(ML_DATUM);
-    d.setTextColor(focused ? Color::TEXT_FOCUS : Color::TEXT, bg);
+    d.setTextColor(textColor, bg);
     d.setTextSize(1);
     d.drawString(label, x + 4, y + h / 2);
 
@@ -2872,10 +3071,10 @@ void Display::drawSwitchRow(int16_t x, int16_t y, int16_t w,
     constexpr int16_t PW = 36, PH = 16;
     int16_t px = x + w - PW - 6;
     int16_t py = y + (h - PH) / 2;
-    uint16_t pillBg = value ? Color::ACCENT : Color::BORDER;
+    uint16_t pillBg = value ? (_editMode && focused) ? Color::BORDER : Color::ACCENT : Color::BORDER;
     d.fillRoundRect(px, py, PW, PH, PH / 2, pillBg);
     int16_t knobX = value ? px + PW - PH / 2 - 1 : px + PH / 2 + 1;
-    d.fillCircle(knobX, py + PH / 2, PH / 2 - 2, Color::TEXT_FOCUS);
+    d.fillCircle(knobX, py + PH / 2, PH / 2 - 2, Color::TEXT_DIM);
 }
 
 void Display::drawInputRow(int16_t x, int16_t y, int16_t w,
@@ -2884,9 +3083,28 @@ void Display::drawInputRow(int16_t x, int16_t y, int16_t w,
     TFT_eSprite& d = _spr;
     int16_t h = ROW_H - 2;
 
-    uint16_t bg = focused ? Color::PANEL : Color::BG;
+    uint16_t bg, borderColor;
+    
+    if (focused) {
+        // Focused item colors
+        if (_anim.focusTransition < 1.0f) {
+            // Animating into focus
+            uint8_t blend = (uint8_t)(_anim.focusTransition * 255.0f);
+            bg = blendColor(Color::BG, Color::PANEL, blend);
+            borderColor = blendColor(Color::BORDER, Color::ACCENT, blend);
+        } else {
+            // Fully focused
+            bg = Color::PANEL;
+            borderColor = Color::ACCENT;
+        }
+    } else {
+        // Not focused
+        bg = Color::BG;
+        borderColor = Color::BORDER;
+    }
+
     d.fillRect(x, y, w, h, bg);
-    d.drawRect (x, y, w, h, focused ? Color::ACCENT : Color::BORDER);
+    d.drawRect(x, y, w, h, borderColor);
 
     d.setTextDatum(ML_DATUM);
     d.setTextColor(focused ? Color::TEXT_FOCUS : Color::TEXT, bg);
@@ -2899,7 +3117,7 @@ void Display::drawInputRow(int16_t x, int16_t y, int16_t w,
     char valBuf[12];
     snprintf(valBuf, sizeof(valBuf), "%.1f %s", value, unit ? unit : "");
     d.fillRect(valX, y + 2, VAL_W, h - 4, focused ? 0x18A3 : 0x1082);
-    d.drawRect (valX, y + 2, VAL_W, h - 4, focused ? Color::ACCENT : Color::BORDER);
+    d.drawRect (valX, y + 2, VAL_W, h - 4, borderColor);
     d.setTextDatum(MC_DATUM);
     d.setTextColor(focused ? Color::TEXT_FOCUS : Color::TEXT, focused ? 0x18A3 : 0x1082);
     d.drawString(valBuf, valX + VAL_W / 2, y + h / 2);
@@ -2910,14 +3128,38 @@ void Display::drawNavButton(int16_t x, int16_t y, int16_t w, int16_t h,
                             bool holdProgress, float holdFrac) {
     TFT_eSprite& d = _spr;
 
-    uint16_t bg = focused ? Color::ACCENT : Color::PANEL;
-    uint16_t fg = focused ? Color::BG     : Color::TEXT;
+    uint16_t bg, borderColor, textColor;
+    
+    if (focused) {
+        // Focused item colors
+        if (_anim.focusTransition < 1.0f) {
+            // Animating into focus
+            uint8_t blend = (uint8_t)(_anim.focusTransition * 255.0f);
+            bg = blendColor(Color::BG, Color::PANEL, blend);
+            borderColor = blendColor(Color::BORDER, Color::ACCENT, blend);
+            textColor = blendColor(Color::TEXT, Color::TEXT_FOCUS, blend);
+        } else {
+            // Fully focused
+            bg = Color::PANEL;
+            borderColor = Color::ACCENT;
+            textColor = Color::TEXT_FOCUS;
+        }
+    } else {
+        // Not focused
+        bg = Color::BG;
+        borderColor = Color::BORDER;
+        textColor = Color::TEXT;
+    }
+    
+    // Draw base
+    d.fillRect(x, y, w, h, bg);
+    d.drawRect(x, y, w, h, borderColor);
 
     d.fillRoundRect(x, y, w, h, 4, bg);
     d.drawRoundRect(x, y, w, h, 4, focused ? Color::TEXT_FOCUS : Color::BORDER);
 
     d.setTextDatum(MC_DATUM);
-    d.setTextColor(fg, bg);
+    d.setTextColor(textColor, bg);
     d.setTextSize(1);
     d.drawString(label, x + w / 2, y + h / 2);
 
@@ -3032,9 +3274,9 @@ void Display::drawSideBars(int16_t x, int16_t y, int16_t h) {
     int16_t hx = x + BAR_W + 2;
     d.drawRect(hx, y, BAR_W, h, Color::BORDER);
     int16_t heapH = (int16_t)((uint32_t)_heapPct * h / 100);
-    uint16_t heapCol = _heapPct < 20 ? Color::ACCENT
+    uint16_t heapCol = _heapPct < 20 ? Color::RED
                      : _heapPct < 40 ? Color::YELLOW
-                     :                 Color::RED;
+                     :                 Color::GREEN;
     d.fillRect(hx + 1, y + h - heapH, BAR_W - 2, heapH, heapCol);
 
     d.setTextDatum(TC_DATUM);
@@ -3310,6 +3552,215 @@ void Display::drawDrcCurve(float threshold, float ratio, float pregain,
         snprintf(ratLbl, sizeof(ratLbl), "%.0f:1", ratio);
         d.drawString(ratLbl, lx, ly + 12);
     }
+}
+
+// ─── Animation system ─────────────────────────────────────────────────────────
+
+/**
+ * Update all active animations. Call from update() each frame.
+ */
+void Display::updateAnimations() {
+    uint32_t now = millis();
+    bool needsRedraw = false;
+    
+    // Update focus transition
+    if (_anim.focusTransition < 1.0f) {
+        uint32_t elapsed = now - _anim.focusStartMs;
+        _anim.focusTransition = (float)elapsed / AnimationState::FOCUS_ANIM_MS;
+        if (_anim.focusTransition > 1.0f) {
+            _anim.focusTransition = 1.0f;
+        }
+        needsRedraw = true;
+    }
+    
+    // Update sweep animation
+    if (_anim.aniSweepActive && _anim.aniSweepProgress < 1.0f) {
+        uint32_t elapsed = now - _anim.aniSweepStartMs;
+        _anim.aniSweepProgress = (float)elapsed / AnimationState::SWEEP_ANIM_MS;
+        if (_anim.aniSweepProgress > 1.0f) {
+            _anim.aniSweepProgress = 1.0f;
+        }
+        needsRedraw = true;
+    }
+    
+    // Update value animation
+    if (_anim.valueAnimating) {
+        uint32_t elapsed = now - _anim.valueStartMs;
+        _anim.valueProgress = (float)elapsed / AnimationState::VALUE_ANIM_MS;
+        if (_anim.valueProgress >= 1.0f) {
+            _anim.valueProgress = 1.0f;
+            _anim.valueAnimating = false;
+        }
+        needsRedraw = true;
+    }
+    
+    if (needsRedraw) {
+        _dirty = true;
+    }
+
+    if (_anim.aniSweepActive && _anim.aniSweepProgress >= 1.0 && !_dirty && !_editMode) {
+        _anim.aniSweepActive = false;
+    }
+}
+
+/**
+ * Start focus transition animation when focus index changes.
+ */
+void Display::startFocusTransition() {
+    _anim.prevFocusIdx = _focusIdx;
+    _anim.focusTransition = 0.0f;
+    _anim.focusStartMs = millis();
+}
+
+/**
+ * Toggle edit mode and trigger sweep animation.
+ * Enter = left-to-right sweep
+ * Exit = right-to-left sweep (reverse)
+ */
+void Display::toggleEditMode() {
+    bool wasEdit = _editMode;
+    _editMode = !_editMode;
+    
+    // Trigger sweep animation when entering edit mode
+    if (!wasEdit && _editMode) {
+        _anim.aniSweepExit = false;
+        _anim.aniSweepActive = true;
+        _anim.aniSweepProgress = 0.0f;
+        _anim.aniSweepStartMs = millis();
+    }
+    
+    // Reverse sweep animation when exiting edit mode
+    if (wasEdit && !_editMode) {
+        _anim.aniSweepExit = true;
+        _anim.aniSweepProgress = 0.0f;
+        _anim.aniSweepStartMs = millis();
+    }
+}
+
+/**
+ * Start value animation for smooth number transitions.
+ */
+void Display::startValueAnimation(float from, float to) {
+    _anim.valueFrom = from;
+    _anim.valueTo = to;
+    _anim.valueProgress = 0.0f;
+    _anim.valueStartMs = millis();
+    _anim.valueAnimating = true;
+}
+
+/**
+ * Ease-out cubic: smooth deceleration
+ */
+float Display::easeOutCubic(float t) {
+    float f = 1.0f - t;
+    return 1.0f - f * f * f;
+}
+
+/**
+ * Ease-in-out quadratic: smooth acceleration and deceleration
+ */
+float Display::easeInOutQuad(float t) {
+    return t < 0.5f 
+        ? 2.0f * t * t 
+        : 1.0f - (-2.0f * t + 2.0f) * (-2.0f * t + 2.0f) / 2.0f;
+}
+
+/**
+ * Ease-out elastic: bouncy effect (optional, for special occasions)
+ */
+float Display::easeOutElastic(float t) {
+    constexpr float c4 = (2.0f * PI) / 3.0f;
+    
+    if (t == 0.0f) return 0.0f;
+    if (t == 1.0f) return 1.0f;
+    
+    return powf(2.0f, -10.0f * t) * sinf((t * 10.0f - 0.75f) * c4) + 1.0f;
+}
+
+/**
+ * Draw color sweep (horizontal wipe effect).
+ * Call this for the focused row when in edit mode.
+ * Enter = left-to-right sweep
+ * Exit = right-to-left sweep (reversed)
+ */
+void Display::drawSweepAnimation(int16_t x, int16_t y, int16_t w, int16_t h) {
+    if (!_editMode && _anim.aniSweepProgress >= 1.0f) {
+        // Fully transitioned out - just fill with background
+        _spr.fillRect(x, y, w, h, Color::BG);
+        return;
+    }
+    
+    if (_anim.aniSweepProgress >= 1.0f) {
+        // Fully transitioned in - just fill with accent
+        _spr.fillRect(x, y, w, h, Color::ACCENT);
+        return;
+    }
+    
+    // Apply easing
+    float eased = easeInOutQuad(_anim.aniSweepProgress);
+    
+    constexpr int16_t glowWidth = 20;
+    
+    if (!_anim.aniSweepExit) {
+        // ── Enter edit mode: sweep LEFT → RIGHT ─────────────────────────────────
+        int16_t sweepX = (int16_t)(eased * w);
+        
+        // Draw swept area (accent color)
+        if (sweepX > 0) {
+            _spr.fillRect(x, y, sweepX, h, Color::ACCENT);
+        }
+        
+        // Draw transition glow at the sweep edge
+        if (sweepX < w && sweepX > 0) {
+            for (int16_t dx = 0; dx < glowWidth && (sweepX + dx) < w; dx++) {
+                uint8_t alpha = 255 - (uint8_t)((float)dx / glowWidth * 255);
+                uint16_t col = blendColor(Color::ACCENT, Color::BG, 255 - alpha);
+                _spr.drawFastVLine(x + sweepX + dx, y, h, col);
+            }
+        }
+        
+        // Draw unswept area (background)
+        int16_t remainW = w - sweepX - glowWidth;
+        if (remainW > 0) {
+            _spr.fillRect(x + sweepX + glowWidth, y, remainW, h, Color::BG);
+        }
+    } else {
+        // ── Enter edit mode: sweep LEFT → RIGHT ─────────────────────────────────
+        int16_t sweepX = (int16_t)(eased * w);
+        
+        // Draw swept area (accent color)
+        if (sweepX > 0) {
+            _spr.fillRect(x, y, sweepX, h, Color::BG);
+        }
+        
+        // Draw transition glow at the sweep edge
+        if (sweepX < w && sweepX > 0) {
+            for (int16_t dx = 0; dx < glowWidth && (sweepX + dx) < w; dx++) {
+                uint8_t alpha = 255 - (uint8_t)((float)dx / glowWidth * 255);
+                uint16_t col = blendColor(Color::BG, Color::ACCENT, 255 - alpha);
+                _spr.drawFastVLine(x + sweepX + dx, y, h, col);
+            }
+        }
+        
+        // Draw unswept area (background)
+        int16_t remainW = w - sweepX - glowWidth;
+        if (remainW > 0) {
+            _spr.fillRect(x + sweepX + glowWidth, y, remainW, h, Color::ACCENT);
+        }
+    }
+}
+
+/**
+ * Get animated value for smooth number transitions.
+ * Returns interpolated value between _anim.valueFrom and _anim.valueTo.
+ */
+float Display::getAnimatedValue(float current) {
+    if (!_anim.valueAnimating) {
+        return current;
+    }
+    
+    float eased = easeOutCubic(_anim.valueProgress);
+    return _anim.valueFrom + (_anim.valueTo - _anim.valueFrom) * eased;
 }
 
 // ─── Legacy test ──────────────────────────────────────────────────────────────

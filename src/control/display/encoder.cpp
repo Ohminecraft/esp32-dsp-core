@@ -111,7 +111,7 @@ void Encoder::poll(EncoderEvent* event) {
 
     // ── Deliver rotation events ───────────────────────────────────────────────
     // Suppress rotation briefly after a button event to avoid mis-clicks
-    if (now - lastRotaryEventMs < 30) { 
+    if (now - lastRotaryEventMs < 10) { 
         *event = EncoderEvent::NONE;
         return;
     }

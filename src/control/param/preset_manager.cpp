@@ -55,7 +55,7 @@ struct PresetData {
 
     // ── Pre EQ ────────────────────────────────────────────────────────────────
     int16_t        preeq_pregainq88;
-    EQFilterParams preeq_bands[MAX_EQ_BANDS];
+    EQFilterParams preeq_bands[3];
 
     // ── Compander ─────────────────────────────────────────────────────────────
     int32_t cp_thresholdDb, cp_ratioBelow, cp_ratioAbove;
@@ -239,7 +239,7 @@ void PresetManager::init() {
         static MainMenuParam mmparam;
         memset(&mmparam, 0, sizeof(MainMenuParam));
         _prefs.begin("main_menu_param", false);
-        mmparam.vol = 100;
+        mmparam.vol = 32;
         mmparam.bass = 50;
         mmparam.mid = 50;
         mmparam.treble = 50;
@@ -364,6 +364,8 @@ void PresetManager::saveDefault(uint8_t slot) {
 bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     if (slot >= MAX_PRESET_SLOTS) return false;
 
+    g_inNvsSaving = true;
+
     static PresetData pd;
     memset(&pd, 0, sizeof(PresetData));
     pd.valid = true;
@@ -381,7 +383,7 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.pre_vol_mono = pipeline.getPreGain().isMono() ? 1 : 0;
 
     pd.preeq_pregainq88 = pipeline.getPreEq().getPregain();
-    for (int i = 0; i < MAX_EQ_BANDS; i++) {
+    for (int i = 0; i < 3; i++) {
         pd.preeq_bands[i] = pipeline.getPreEq()._params[i];
     }
 
@@ -464,6 +466,9 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     _prefs.end();
 
     LOG_INFO(TAG, "Saved preset to slot %d", slot);
+
+    g_inNvsSaving = false;
+
     return true;
 }
 
@@ -520,7 +525,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     pipeline.getPreGain().setMono(pd.pre_vol_mono != 0);
 
     pipeline.getPreEq().setPregain(pd.preeq_pregainq88);
-    for (int i = 0; i < MAX_EQ_BANDS; i++)
+    for (int i = 0; i < 3; i++)
         pipeline.getPreEq().setBand(i, pd.preeq_bands[i]);
 
     pipeline.getCompander().setThreshold(pd.cp_thresholdDb);
@@ -592,6 +597,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     currentpresetidx = slot;
 
     LOG_INFO(TAG, "Loaded preset from slot %d", slot);
+
     return true;
 }
 
@@ -608,9 +614,11 @@ void PresetManager::loadMainMenuParam(MainMenuParam* param) {
 
 void PresetManager::saveMainMenuParam(MainMenuParam* param) {
     if (!param) return;
+    g_inNvsSaving = true;
     _prefs.begin("main_menu_param", false);
     _prefs.putBytes("blob", param, sizeof(MainMenuParam));
     _prefs.end();
+    g_inNvsSaving = false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
