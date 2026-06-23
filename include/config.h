@@ -140,13 +140,17 @@
 #define AUDIO_TASK_STACK_SIZE   16000
 
 #define CONTROL_TASK_CORE       0
-#define CONTROL_TASK_PRIORITY   5
-#define CONTROL_TASK_STACK_SIZE 4096
+#define CONTROL_TASK_PRIORITY   12
+#define CONTROL_TASK_STACK_SIZE 8192
+
+#define DISPLAY_TASK_CORE       0
+#define DISPLAY_TASK_PRIORITY   8
+#define DISPLAY_TASK_STACK_SIZE 4096
 
 // AudioSync monitor task — Core 0, lower priority than audio task
 #define SYNC_TASK_CORE          0
-#define SYNC_TASK_PRIORITY      CONTROL_TASK_PRIORITY
-#define SYNC_TASK_STACK_SIZE    CONTROL_TASK_STACK_SIZE // Same as Control Task
+#define SYNC_TASK_PRIORITY      5
+#define SYNC_TASK_STACK_SIZE    4096
 
 // ============================================================================
 // UART Control Protocol

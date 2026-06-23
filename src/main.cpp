@@ -54,6 +54,7 @@ static float __attribute__((aligned(16))) g_audioBuf[DSP_FRAME_SAMPLES];
 static TaskHandle_t g_audioTaskHandle   = NULL;
 static TaskHandle_t g_controlTaskHandle = NULL;
 static TaskHandle_t g_syncTaskHandle    = NULL;
+static TaskHandle_t g_displayTaskHandle = NULL;
 
 // Current sample rate — updated by AudioSync callback, read by controlTask
 static volatile uint32_t g_currentSampleRate = DSP_SAMPLE_RATE_DEFAULT;
@@ -257,7 +258,7 @@ static void toggleWifiShutdown() {
 #endif // ONLY_SERIAL
 
 // ============================================================================
-// Control Task (Core 0, Priority 5)
+// Control Task (Core 0, Priority 12)
 // ============================================================================
 
 volatile uint16_t s_cpu_usage = 0;
@@ -478,11 +479,22 @@ void controlTask(void* param) {
         // Smooth RGB LED update (Core 0)
         g_statusLED.update(s_usage, s_heapPct, g_currentSampleRate, g_isclockabsent);
 
-        #ifdef USING_DISPLAY
+        vTaskDelay(1);
+    }
+}
+
+// ============================================================================
+// Display Task (Core 0, Priority 5)
+// ============================================================================
+
+void displayTask(void* param) {
+    LOG_INFO("Display", "Display task started on core %d", xPortGetCoreID());
+
+    while (true) {
+
         EncoderEvent ev;
         g_encoder.poll(&ev);
         g_display.update(ev);
-        #endif
 
         vTaskDelay(1);
     }
@@ -584,6 +596,19 @@ void setup() {
     // 5. Load Main Menu Param
     #ifdef USING_DISPLAY
         g_display.setPipeline(&g_pipeline, &g_presetMgr);
+    #endif
+
+    // 5.1 Start Display Task
+    #ifdef USING_DISPLAY
+    xTaskCreatePinnedToCore(
+        displayTask,
+        "DisplayTask",
+        DISPLAY_TASK_STACK_SIZE,
+        NULL,
+        DISPLAY_TASK_PRIORITY,
+        &g_displayTaskHandle,
+        DISPLAY_TASK_CORE
+    );
     #endif
 
     // 6. Create audio task (Core 1) — starts suspended, AudioSync resumes it

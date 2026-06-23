@@ -15,7 +15,7 @@
  *   - Rotate CW/CCW   : navigate focus or change value in edit mode
  *   - Focus on [SELECT] item and hold 1.2 s : auto-confirm (enter / toggle)
  *   - The focused item is always highlighted; actionable items are labelled
- *     [SELECT], [BACK], [EDIT], etc.
+ *     [SELECT], [BACK], [GRAPH], etc.
  */
 
 #pragma once
@@ -25,6 +25,7 @@
 #include "dsp_types.h"
 #include "pin_config.h"
 #include "../param/preset_manager.h"
+#include "config.h" // For MAX_PRESET_SLOTS and DSP_MODULE_COUNT
 
 extern volatile bool g_userShutdownRequest;
 
@@ -151,9 +152,29 @@ struct KeyboardState {
     ScreenID returnScreen;
 };
 
+// ─── Navigation stack entry ───────────────────────────────────────────────────
+struct NavEntry {
+    ScreenID         screen;
+    DisplayModuleID  module;
+    uint8_t          subContext; // e.g. ISF preset index, DRC band index
+};
+
+static constexpr uint8_t NAV_STACK_DEPTH = 8;
+
+// ─── Encoder event ────────────────────────────────────────────────────────────
+enum class EncoderEvent : int8_t {
+    NONE      = 0,
+    CW        = +1,
+    CCW       = -1,
+    SW        = 2,   // single click
+    SW_DOUBLE = 3,   // double click  (< 350 ms between presses)
+    SW_HOLD3  = 4,   // hold ≥ 3 s   → go to DSP list / back to main
+    SW_HOLD5  = 5,   // hold ≥ 5 s   → power off
+};
+
 // ─── Animation system ─────────────────────────────────────────────────────────
 /**
- * Animation state for smooth UI transitions (AAA-game style)
+ * Animation state for smooth UI transitions.
  */
 struct AnimationState {
     // Focus transition (when moving between items)
@@ -178,17 +199,44 @@ struct AnimationState {
     bool     volAnimating;
     float    volFrom;
     float    volTo;
+    float    volDisplay;       // animated volume for display (0.0f - 32.0f)
     uint32_t volStartMs;
-    static constexpr uint16_t VOL_ANIM_MS = 800;  // slower for volume
+    static constexpr uint16_t VOL_ANIM_MS = 1200;  // slower for volume with deceleration
     
-    // Save preset button animation state
-    bool     saveAnimating;
-    uint32_t saveAnimStartMs;
+    // ── Preset slot sweep (entry/exit when changing target) ─────────────────
+    bool     presetSweepActive;
+    int8_t   presetSweepSlot;     // new slot being swept
+    int8_t   presetPrevSlot;      // old slot being exited (-1 = none)
+    bool     presetSweepPhase2;   // false = phase 1 (exit old), true = phase 2 (entry new)
+    float    presetSweepProgress;
+    uint32_t presetSweepStartMs;
+    
+    // ── Module (effect) toggle sweep on DSP list ────────────────────────────
+    bool     modSweepActive;
+    bool     modSweepExit;        // true = exit (disable), false = entry (enable)
+    float    modSweepProgress;
+    uint32_t modSweepStartMs;
+    int8_t   modSweepIdx;         // which module index in MODULE_LIST (-1 = none)
+    
+    // ── Save preset button animation ────────────────────────────────────────
+    bool     saveSweepActive;
+    bool     saveSweepPhase2;     // false = entry, true = exit after entry
+    float    saveSweepProgress;
+    uint32_t saveSweepStartMs;
+    uint16_t saveSweepFinalBg;    // BG color to keep after animation completes
+    
+    // ── Final BG colors after animation completes ──────────────────────────
+    // For presets: 0xFFFF = accent (is target), 0x0841 = BG (not target)
+    // For modules: 0x07E0 = green (enabled), 0x0841 = BG (disabled)
+    uint16_t presetSweepFinishedBg[MAX_PRESET_SLOTS];
     
     // Timing constants
-    static constexpr uint16_t FOCUS_ANIM_MS = 200;
-    static constexpr uint16_t SWEEP_ANIM_MS = 300;
-    static constexpr uint16_t VALUE_ANIM_MS = 150;
+    static constexpr uint16_t FOCUS_ANIM_MS   = 200;
+    static constexpr uint16_t SWEEP_ANIM_MS   = 300;
+    static constexpr uint16_t VALUE_ANIM_MS   = 150;
+    static constexpr uint16_t PRESET_SWEEP_MS = 350;
+    static constexpr uint16_t MOD_SWEEP_MS    = 300;
+    static constexpr uint16_t SAVE_SWEEP_MS   = 400;
     
     void reset() {
         prevFocusIdx = 0;
@@ -206,30 +254,30 @@ struct AnimationState {
         volAnimating = false;
         volFrom = 0.0f;
         volTo = 0.0f;
+        volDisplay = 0.0f;
         volStartMs = 0;
-        saveAnimating = false;
-        saveAnimStartMs = 0;
+        // Preset sweep
+        presetSweepActive = false;
+        presetSweepSlot = -1;
+        presetPrevSlot = -1;
+        presetSweepPhase2 = false;
+        presetSweepProgress = 0.0f;
+        presetSweepStartMs = 0;
+        // Module sweep
+        modSweepActive = false;
+        modSweepExit = false;
+        modSweepProgress = 0.0f;
+        modSweepStartMs = 0;
+        modSweepIdx = -1;
+        // Save sweep
+        saveSweepActive = false;
+        saveSweepPhase2 = false;
+        saveSweepProgress = 0.0f;
+        saveSweepStartMs = 0;
+        saveSweepFinalBg = 0x0841; // Color::BG
+        // Clear finished BG arrays
+        for (uint8_t i = 0; i < MAX_PRESET_SLOTS; i++) presetSweepFinishedBg[i] = Color::BG;
     }
-};
-
-// ─── Navigation stack entry ───────────────────────────────────────────────────
-struct NavEntry {
-    ScreenID         screen;
-    DisplayModuleID  module;
-    uint8_t          subContext; // e.g. ISF preset index, DRC band index
-};
-
-static constexpr uint8_t NAV_STACK_DEPTH = 8;
-
-// ─── Encoder event ────────────────────────────────────────────────────────────
-enum class EncoderEvent : int8_t {
-    NONE      = 0,
-    CW        = +1,
-    CCW       = -1,
-    SW        = 2,   // single click
-    SW_DOUBLE = 3,   // double click  (< 350 ms between presses)
-    SW_HOLD3  = 4,   // hold ≥ 3 s   → go to DSP list / back to main
-    SW_HOLD5  = 5,   // hold ≥ 5 s   → power off
 };
 
 // ─── Display class ────────────────────────────────────────────────────────────
@@ -351,84 +399,38 @@ private:
     void editDelta(int8_t dir); // called when _editMode && encoder turned
 
     // ── Common widgets (draw into sprite) ─────────────────────────────────────
-    /**
-     * Draw a horizontal slider row.
-     * @param x,y     top-left of the row
-     * @param w       total width
-     * @param label   parameter name
-     * @param value   current value
-     * @param minV    minimum
-     * @param maxV    maximum
-     * @param unit    unit string ("dB", "ms", …)
-     * @param focused highlight this row
-     * @param editing show edit cursor on slider thumb
-     */
     void drawSliderRow(int16_t x, int16_t y, int16_t w,
                        const char* label, float value,
                        float minV, float maxV, const char* unit,
                        bool focused, bool editing);
 
-    // Overload with decimal control
     void drawSliderRow(int16_t x, int16_t y, int16_t w,
                        const char* label, float value,
                        float minV, float maxV, const char* unit,
                        bool focused, bool editing, uint8_t decimals);
 
-    /**
-     * Draw a switch row (boolean toggle).
-     */
     void drawSwitchRow(int16_t x, int16_t y, int16_t w,
                        const char* label, bool value,
                        bool focused);
 
-    /**
-     * Draw a value-only input row (e.g. for RMS window, freq without slider).
-     */
     void drawInputRow(int16_t x, int16_t y, int16_t w,
                       const char* label, float value, const char* unit,
                       bool focused);
 
-    /**
-     * Draw a segmented filter-type selector row.
-     * Shows all 7 types as pill buttons; active one is highlighted.
-     * When focused + editing, encoder CW/CCW cycles through types.
-     *
-     * @param x,y,w   row geometry
-     * @param current currently selected type
-     * @param focused row is focused
-     * @param editing encoder is changing this value
-     */
     void drawFilterTypeRow(int16_t x, int16_t y, int16_t w,
                            EQFilterType current,
                            bool focused, bool editing);
 
     void drawSideBars(int16_t x, int16_t y, int16_t h);
-
-    /**
-     * Draw WiFi status badge.
-     */
     void drawWifiBadge(int16_t x, int16_t y);
 
-    /**
-     * Draw a nav button (e.g. [BACK], [GRAPH], [SELECT]).
-     */
     void drawNavButton(int16_t x, int16_t y, int16_t w, int16_t h,
                        const char* label, bool focused, bool holdProgress,
                        float holdFrac = 0.0f);
 
-    /**
-     * Draw EQ frequency-response curve from band descriptors.
-     * @param bands   array of band descriptors
-     * @param nBands  length of array
-     * @param rx,ry   top-left of graph rect
-     * @param rw,rh   width / height of graph rect
-     */
     void drawEqCurve(const EqBandDesc* bands, uint8_t nBands,
                      int16_t rx, int16_t ry, int16_t rw, int16_t rh);
 
-    /**
-     * Draw DRC input/output curve for one band.
-     */
     void drawDrcCurve(float threshold, float ratio, float pregain,
                       int16_t rx, int16_t ry, int16_t rw, int16_t rh);
 
@@ -452,7 +454,7 @@ private:
     uint8_t  _drcCfType      = 2;   // crossover filter type
 
     // ── EQ band edit sub-state ────────────────────────────────────────────────
-    EQFilterType _bandEditType = EQFilterType::EQ_FILTER_TYPE_PEAKING;  // type of band being edited
+    EQFilterType _bandEditType = EQFilterType::EQ_FILTER_TYPE_PEAKING;
 
     float _maxRangeParam = 16.0f;
     uint8_t _eqBandCount = 6;
@@ -495,7 +497,10 @@ private:
     
     // ── Animation drawing helpers ─────────────────────────────────────────────
     void drawSweepAnimation(int16_t x, int16_t y, int16_t w, int16_t h);
+    void drawSweepAnimation(int16_t x, int16_t y, int16_t w, int16_t h, bool exit, float progress);
+    void drawSweepAnimation(int16_t x, int16_t y, int16_t w, int16_t h, bool exit, float progress, uint16_t entryColor);
     float getAnimatedValue(float current);
+    void getFocusColors(bool, uint16_t&, uint16_t&, uint16_t&);
 
     uint8_t getScreenParams(NavEntry nav, UiParam* outParams);
     float getParamValue(NavEntry nav, uint8_t idx);
@@ -506,5 +511,5 @@ private:
     // ── Utility ───────────────────────────────────────────────────────────────
     static void formatFloat(char* buf, uint8_t bufLen,
                             float val, uint8_t decimals);
-    static uint16_t blendColor(uint16_t a, uint16_t b, uint8_t t); // t 0-255
+    static uint16_t blendColor(uint16_t a, uint16_t b, uint8_t t);
 };
