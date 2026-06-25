@@ -25,6 +25,7 @@
 #include "dsp_types.h"
 #include "pin_config.h"
 #include "../param/preset_manager.h"
+#include "battery_monitor.h"
 #include "config.h" // For MAX_PRESET_SLOTS and DSP_MODULE_COUNT
 
 extern volatile bool g_userShutdownRequest;
@@ -166,10 +167,11 @@ enum class EncoderEvent : int8_t {
     NONE      = 0,
     CW        = +1,
     CCW       = -1,
-    SW        = 2,   // single click
+    SW        = 2,   // single click (confirmed on release)
     SW_DOUBLE = 3,   // double click  (< 350 ms between presses)
     SW_HOLD3  = 4,   // hold ≥ 3 s   → go to DSP list / back to main
     SW_HOLD5  = 5,   // hold ≥ 5 s   → power off
+    SW_PRESS  = 6,   // button went down (not debounce-confirmed) — for immediate arm
 };
 
 // ─── Animation system ─────────────────────────────────────────────────────────
@@ -233,7 +235,7 @@ struct AnimationState {
     // Timing constants
     static constexpr uint16_t FOCUS_ANIM_MS   = 200;
     static constexpr uint16_t SWEEP_ANIM_MS   = 300;
-    static constexpr uint16_t VALUE_ANIM_MS   = 150;
+    static constexpr uint16_t VALUE_ANIM_MS   = 400;
     static constexpr uint16_t PRESET_SWEEP_MS = 350;
     static constexpr uint16_t MOD_SWEEP_MS    = 300;
     static constexpr uint16_t SAVE_SWEEP_MS   = 400;
@@ -306,6 +308,9 @@ public:
 
     // ── Keyboard helper ───────────────────────────────────────────────────────
     void pushKeyboard(float* target, float minVal, float maxVal, bool allowDot, ScreenID returnTo);
+
+
+    void setBattery(BatteryMonitor* b) { _battery = b; }
 
     // ── Legacy test ───────────────────────────────────────────────────────────
     void drawTest();
@@ -481,9 +486,30 @@ private:
     int8_t VISIBLE_ISF_PRESET = 3;
 
     MainMenuParam _mmparam;
+    bool _mainmenufocus = false;
 
     // ── Animation state ───────────────────────────────────────────────────────
     AnimationState _anim;
+
+
+    BatteryMonitor* _battery = nullptr;
+    uint8_t  _mainMenuTab          = 0;
+    uint8_t  _mainMenuActiveParam  = 0;   // 0=Vol,1=Bass,2=Mid,3=Treble
+    bool     _powerOffUserRequest  = false;
+    bool     _powerOffScreenActive = false;
+    uint32_t _powerOffStartMs      = 0;
+    uint32_t _lastBatteryDrawMs    = 0;
+    bool     _settingsWifi         = false;
+    bool     _settingsTrigger      = false;
+    std::function<void()> onBtKick;
+
+    // ── Main menu tab-return hold (hold SW 500 ms to go back to tab bar) ─────
+    bool     _mmTabReturnArmed   = false;
+    uint32_t _mmTabReturnStartMs = 0;
+    static constexpr uint32_t TAB_RETURN_HOLD_MS = 500;
+
+    void drawBatteryWidget(int16_t x, int16_t y);
+    void drawPowerOffScreen();
     
     // ── Animation helpers ─────────────────────────────────────────────────────
     void updateAnimations();

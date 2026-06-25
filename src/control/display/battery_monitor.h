@@ -1,0 +1,134 @@
+/**
+ * @file battery_monitor.h
+ * @brief INA226-based battery monitor with coulomb counter and NVS persistence.
+ *
+ * Topology note: charging current bypasses the shunt (common in pack designs),
+ * so the coulomb counter only tracks discharge current (I > 0 drawn from pack).
+ *
+ * Cell chemistry: Li-Ion  (3.0 V min / 4.2 V max per cell)
+ * INA226 address: 0x40
+ * Shunt:          0.1 Ω (100 mΩ)
+ */
+
+
+#pragma once
+
+#include <cstdint>
+#include <functional>
+
+// ── INA226 register map ──────────────────────────────────────────────────────
+static constexpr uint8_t  INA226_ADDR           = 0x40;
+static constexpr uint8_t  INA226_REG_CONFIG      = 0x00;
+static constexpr uint8_t  INA226_REG_SHUNT_V     = 0x01;
+static constexpr uint8_t  INA226_REG_BUS_V       = 0x02;
+static constexpr uint8_t  INA226_REG_POWER        = 0x03;
+static constexpr uint8_t  INA226_REG_CURRENT      = 0x04;
+static constexpr uint8_t  INA226_REG_CALIBRATION  = 0x05;
+static constexpr uint8_t  INA226_REG_MASK_EN      = 0x06;
+static constexpr uint8_t  INA226_REG_ALERT_LIMIT  = 0x07;
+static constexpr uint8_t  INA226_REG_MFR_ID       = 0xFE;
+static constexpr uint8_t  INA226_REG_DIE_ID       = 0xFF;
+
+// ── Li-Ion cell limits ───────────────────────────────────────────────────────
+static constexpr float LIION_CELL_MIN_V = 3.0f;   // hard cutoff → shutdown
+static constexpr float LIION_CELL_MAX_V = 4.2f;
+static constexpr float LIION_CELL_WARN_V = 3.2f;  // warning threshold
+
+// ── NVS keys ─────────────────────────────────────────────────────────────────
+static constexpr const char* NVS_BAT_NS           = "bat_cfg";
+static constexpr const char* NVS_KEY_CELL_S        = "cell_s";      // uint8
+static constexpr const char* NVS_KEY_CELL_MAH      = "cell_mah";    // uint32
+static constexpr const char* NVS_KEY_SHUNT_MOHM    = "shunt_mohm";  // uint32 (mΩ)
+static constexpr const char* NVS_KEY_COULOMBS      = "coulombs";    // float (mAh consumed)
+
+// ── Config struct (persisted to NVS) ─────────────────────────────────────────
+struct BatteryConfig {
+    uint8_t  cellS       = 5;      // series cell count (1–6)
+    uint32_t cellMah     = 3000;   // capacity per cell in mAh
+    uint32_t shuntMOhm   = 100;    // shunt resistance in mΩ (default 100 = 0.1 Ω)
+};
+
+// ── Runtime state ─────────────────────────────────────────────────────────────
+enum class BatteryState : uint8_t {
+    UNKNOWN   = 0,
+    NORMAL    = 1,
+    WARNING   = 2,   // voltage < cell_warn × cellS
+    CRITICAL  = 3,   // voltage < cell_min  × cellS → triggers shutdown
+    CHARGING  = 4,   // current negative (if shunt sees charge current)
+};
+
+struct BatteryStatus {
+    float        busVoltage    = 0.0f;  // V  — pack voltage
+    float        currentMa     = 0.0f;  // mA — discharge positive, charge negative
+    float        powerMw       = 0.0f;  // mW
+    float        soc           = 0.0f;  // 0.0–1.0
+    float        consumedMah   = 0.0f;  // mAh discharged since last full
+    BatteryState state         = BatteryState::UNKNOWN;
+    bool         inaPresent    = false;
+};
+
+// ── BatteryMonitor class ──────────────────────────────────────────────────────
+class BatteryMonitor {
+public:
+    BatteryMonitor() = default;
+
+    /**
+     * @brief Initialise INA226, load NVS config, restore coulomb counter.
+     * @param sdaPin  I2C SDA GPIO
+     * @param sclPin  I2C SCL GPIO
+     * @return true if INA226 was found and configured.
+     */
+    bool begin(uint8_t sdaPin, uint8_t sclPin);
+
+    /** Call from a FreeRTOS task or periodic timer (≥1 Hz recommended). */
+    void update();
+
+    /** Save current config + coulomb counter to NVS. */
+    void saveConfig();
+
+    /** Load config from NVS. Returns false if no config found (uses defaults). */
+    bool loadConfig();
+
+    // ── Accessors ────────────────────────────────────────────────────────────
+    const BatteryStatus& getStatus()  const { return _status; }
+    const BatteryConfig& getConfig()  const { return _cfg; }
+    BatteryConfig&       editConfig()       { return _cfg; }
+
+    /** Apply edited config (recalculates calibration register). */
+    void applyConfig();
+
+    /**
+     * @brief Register a shutdown callback.
+     * Called once when state transitions to CRITICAL.
+     * Caller should set g_userShutdownRequest = true inside cb.
+     */
+    void onCritical(std::function<void()> cb) { _onCritical = cb; }
+
+    /** Reset coulomb counter to full (call after charging). */
+    void resetCoulombCounter();
+
+    bool isPresent() const { return _status.inaPresent; }
+
+private:
+    void     writeReg(uint8_t reg, uint16_t val);
+    uint16_t readReg(uint8_t reg);
+    void     configure();          // sets CONFIG + CALIBRATION registers
+    void     updateSoC();          // OCV-based SoC estimate blended with coulomb counter
+    float    ocvToSoc(float cellV) const; // Li-Ion OCV → SoC lookup
+
+    BatteryConfig  _cfg;
+    BatteryStatus  _status;
+
+    float          _consumedMah   = 0.0f;  // coulomb counter accumulator
+    uint32_t       _lastUpdateMs  = 0;
+    uint32_t       _lastNvsSaveMs = 0;
+    bool           _criticalFired = false;
+
+    uint8_t        _sdaPin = 21;
+    uint8_t        _sclPin = 22;
+
+    std::function<void()> _onCritical;
+ 
+    static constexpr uint32_t NVS_SAVE_INTERVAL_MS = 30000; // save every 30 s
+    static constexpr uint32_t UPDATE_INTERVAL_MS    = 1000;  // INA226 poll rate
+};

@@ -12,6 +12,7 @@
 #include "../../effects/dsp_pipeline.h"
 #include "../../control/param/preset_manager.h"
 #include "../../utils/debug_log.h"
+#include "battery_monitor.h"
 #include "customfonts/Century751BT_12pt_GFX.h"
 #include <cstdio>
 #include <cstring>
@@ -331,8 +332,9 @@ void Display::setParamValue(NavEntry nav, uint8_t idx, float val, UiParam* param
             d.setLookahead(val);
             if (val > 0 && param) { d.setAttackTime((int32_t)param[3].minVal); d.setReleaseTime((int32_t)param[4].minVal); }
             break;
-        } break;
         }
+        }
+        break; // ← fix: was missing, caused fall-through into ISF1/ISF2 case
     }
     case DisplayModuleID::ISF1:
     case DisplayModuleID::ISF2: {
@@ -348,9 +350,8 @@ void Display::setParamValue(NavEntry nav, uint8_t idx, float val, UiParam* param
 }
 
 void Display::formatFloat(char* buf, uint8_t bufLen, float val, uint8_t decimals) {
-    char fmt[8];
-    snprintf(fmt, sizeof(fmt), "%%.%df", (int)decimals);
-    snprintf(buf, bufLen, fmt, val);
+    static const char* const fmts[] = { "%.0f", "%.1f", "%.2f", "%.3f" };
+    snprintf(buf, bufLen, decimals < 4 ? fmts[decimals] : "%.2f", val);
 }
 
 uint16_t Display::blendColor(uint16_t a, uint16_t b, uint8_t t) {
@@ -360,6 +361,37 @@ uint16_t Display::blendColor(uint16_t a, uint16_t b, uint8_t t) {
     uint8_t rg = ag + ((int)(bg - ag) * t / 255);
     uint8_t rb = ab + ((int)(bb - ab) * t / 255);
     return (uint16_t)((rr << 11) | (rg << 5) | rb);
+}
+
+/**
+ * @brief Compute animated bg/border/text colors for a focusable row widget.
+ *
+ * Replaces the identical 3-color focus-blend block that was duplicated in
+ * drawSliderRow, drawSwitchRow, drawInputRow, and drawNavButton.
+ *
+ * @param focused   Whether this widget currently has focus.
+ * @param bg        [out] Background color.
+ * @param border    [out] Border color.
+ * @param textColor [out] Text color.
+ */
+void Display::getFocusColors(bool focused,
+                             uint16_t& bg, uint16_t& border, uint16_t& textColor) {
+    if (!focused) {
+        bg        = Color::BG;
+        border    = Color::BORDER;
+        textColor = Color::TEXT;
+        return;
+    }
+    if (_anim.focusTransition < 1.0f) {
+        uint8_t bl = (uint8_t)(_anim.focusTransition * 255);
+        bg        = blendColor(Color::BG,     Color::PANEL,       bl);
+        border    = blendColor(Color::BORDER, Color::ACCENT,      bl);
+        textColor = blendColor(Color::TEXT,   Color::TEXT_FOCUS,  bl);
+    } else {
+        bg        = Color::PANEL;
+        border    = Color::ACCENT;
+        textColor = Color::TEXT_FOCUS;
+    }
 }
 
 void Display::init() {
@@ -495,7 +527,50 @@ void Display::update(EncoderEvent enc) {
         }
     }
 
+    // ── Battery monitor poll + power-off trigger ──────────────────────────────
+    if (_battery && _battery->isPresent()) {
+        _battery->update();   // BatteryMonitor::update() is rate-limited internally
+        const BatteryStatus& bat = _battery->getStatus();
+
+        if (bat.state == BatteryState::CRITICAL && !_powerOffScreenActive) {
+            _powerOffScreenActive = true;
+            _powerOffStartMs = millis();
+            _dirty = true;
+        }
+
+        // Hold power-off screen for 3 s then set shutdown flag
+        if (_powerOffScreenActive) {
+            if (millis() - _powerOffStartMs >= 3000) {
+                g_userShutdownRequest = true;
+            }
+            _dirty = true;  // keep re-drawing (countdown animation possible later)
+        }
+
+        // Battery badge makes header dirty ~1 Hz
+        if (millis() - _lastBatteryDrawMs >= 1000) {
+            _lastBatteryDrawMs = millis();
+            if (currentScreen() == ScreenID::MAIN_MENU) _dirty = true;
+        }
+    }
+
     updateAnimations();
+
+    // ── Main menu tab-return hold poll ────────────────────────────────────────
+    // SW_PRESS armed _mmTabReturnArmed. If still held after TAB_RETURN_HOLD_MS
+    // we jump focusIdx back to 0 (tab bar). The arm is cleared on SW release.
+    if (_mmTabReturnArmed && currentScreen() == ScreenID::MAIN_MENU) {
+        uint32_t held = millis() - _mmTabReturnStartMs;
+        if (held >= TAB_RETURN_HOLD_MS) {
+            _mmTabReturnArmed = false;
+            _anim.prevFocusIdx = _focusIdx;
+            _focusIdx = 0;
+            _anim.focusTransition = 0.0f;
+            _anim.focusStartMs = millis();
+            _dirty = true;
+        } else {
+            _dirty = true; // keep redrawing so progress indicator animates
+        }
+    }
 
     if (enc != EncoderEvent::NONE) handleEncoder(enc);
 
@@ -515,7 +590,33 @@ void Display::handleEncoder(EncoderEvent enc) {
     if      (enc == EncoderEvent::CW)  dir = +1;
     else if (enc == EncoderEvent::CCW) dir = -1;
 
-    if (enc == EncoderEvent::SW_HOLD5) { /* power off */ return; }
+    if (enc == EncoderEvent::SW_HOLD5) {
+        _powerOffUserRequest = true;
+        _powerOffScreenActive = true;
+        _powerOffStartMs = millis();
+        _dirty = true;
+         return; 
+    }
+
+    // ── SW_PRESS — arm tab-return hold in main menu ───────────────────────────
+    // Fires immediately on button-down. If the user releases within 500 ms the
+    // normal SW / SW_DOUBLE / SW_HOLD* events handle the action. If held ≥ 500 ms
+    // update() fires the tab-return before any hold event.
+    if (enc == EncoderEvent::SW_PRESS) {
+        if (s == ScreenID::MAIN_MENU && _focusIdx > 0) {
+            _mmTabReturnArmed   = true;
+            _mmTabReturnStartMs = millis();
+        }
+        return; // SW_PRESS is an arm signal only — no further action here
+    }
+
+    // ── SW release events — always disarm the tab-return hold ─────────────────
+    // SW, SW_DOUBLE, SW_HOLD3, SW_HOLD5 all represent button-released or
+    // threshold-fired; in any case the arm should be cleared.
+    if (enc == EncoderEvent::SW || enc == EncoderEvent::SW_DOUBLE ||
+        enc == EncoderEvent::SW_HOLD3) {
+        _mmTabReturnArmed = false;
+    }
 
     if (enc == EncoderEvent::SW_HOLD3) {
         if (s == ScreenID::MAIN_MENU) { pushScreen(ScreenID::SETTINGS); _dirty = true; return; }
@@ -529,7 +630,27 @@ void Display::handleEncoder(EncoderEvent enc) {
 
     if (dir != 0) {
         if (s == ScreenID::KEYBOARD) { editDelta(dir); _dirty = true; return; }
-        if (s == ScreenID::MAIN_MENU && _focusIdx < 4) { editDelta(dir); _dirty = true; return; }
+        if (s == ScreenID::MAIN_MENU) {
+            if (_focusIdx == 0) {
+                // At tab bar: CW/CCW switches the active tab
+                _mainMenuTab = (_mainMenuTab + (dir > 0 ? 1 : -1) + 2) % 2;
+                _focusIdx = 1;   // jump into first item of the newly selected tab
+                _mainMenuActiveParam = 0;   // keep big-value display in sync with pill 0 (Vol)
+                startFocusTransition();
+            } else if (_mainMenuTab == 0) {
+                // PARAMS tab: CW/CCW adjusts the value of the currently focused pill
+                editDelta(dir);
+            } else {
+                // CTRL tab: CW/CCW moves focus among the 4 buttons (wrap 1..4, never 0 —
+                // 0 is reserved for the tab bar)
+                int16_t next = (int16_t)_focusIdx + dir;
+                if (next < 1) next = 4;
+                if (next > 4) next = 1;
+                _focusIdx = (uint8_t)next;
+                startFocusTransition();
+            }
+            _dirty = true; return;
+        }
 
         uint8_t oldFocus = _focusIdx;
         int16_t next = (int16_t)_focusIdx + dir;
@@ -586,15 +707,80 @@ void Display::handleEncoder(EncoderEvent enc) {
 
     if (enc == EncoderEvent::SW) {
         if (s == ScreenID::MAIN_MENU) {
-            uint8_t oldIdx = _focusIdx;
-            _focusIdx = (_focusIdx + 1) % 4;
-            _holdTracking = false;
-            if (oldIdx != _focusIdx) startFocusTransition();
+            // If the tab-return hold already fired, _mmTabReturnArmed is false and
+            // _focusIdx is now 0. In that case the SW release should be swallowed
+            // (the action already happened during the hold). We detect this by
+            // checking whether _anim.prevFocusIdx was > 0 AND focusIdx is now 0
+            // AND the arm is disarmed — meaning we just returned via hold.
+            // Simple guard: if focusIdx==0 but prevFocusIdx>0 and transition
+            // is still running, this SW is the release of a hold — skip it.
+            bool tabReturnJustFired = (_focusIdx == 0)
+                                   && (_anim.prevFocusIdx > 0)
+                                   && (_anim.focusTransition < 1.0f);
+            if (tabReturnJustFired) { _dirty = true; return; }
+
+            if (_focusIdx == 0) {
+                // Tab bar focused → SW switches tab
+                _mainMenuTab = (_mainMenuTab + 1) % 2;
+                _focusIdx = 1;           // jump into first item of new tab
+                _mainMenuActiveParam = 0;   // keep big-value display in sync with pill 0 (Vol)
+                startFocusTransition();
+            } else if (_mainMenuTab == 0) {
+                // PARAMS tab: SW on pill 1-4 → cycle to next pill + update display
+                // Wrap is 1→2→3→4→1: must NEVER land on 0 (that's the tab-bar sentinel)
+                if (_focusIdx >= 1 && _focusIdx <= 4) {
+                    _focusIdx = (_focusIdx % 4) + 1;
+                    _mainMenuActiveParam = _focusIdx - 1;   // convert 1..4 → 0..3 index
+                    startFocusTransition();
+                }
+            } else {
+                // CTRL tab: SW activates the focused button
+                if (_focusIdx == 1) {
+                    // BT Kick
+                    // TODO: declare in display.h: std::function<void()> onBtKick;
+                    if (onBtKick) onBtKick();
+                } else if (_focusIdx == 2) {
+                    editDelta(+1);       // + button
+                } else if (_focusIdx == 3) {
+                    // Mute/unmute toggle
+                    if (_pipeline) {
+                        VolumeControl& pre = _pipeline->getPreGain();
+                        if (_mmparam.vol <= 0) {
+                            _mmparam.vol = 16;
+                            float db = -32.0f + _mmparam.vol * 32.0f / 32.0f;
+                            pre.setGainDb(FLOAT_TO_DB_Q8(db));
+                            pre.setMute(false);
+                        } else {
+                            pre.setMute(true);
+                            _mmparam.vol = 0;
+                        }
+                        _mainMenuLastEditMs = millis();
+                        _mainMenuAutosaveArmed = true;
+                    }
+                } else if (_focusIdx == 4) {
+                    editDelta(-1);       // − button
+                }
+            }
             _dirty = true; return;
         }
         if (s == ScreenID::SETTINGS) {
-            if (_focusIdx == 3) onConfirm();
-            else _editMode = !_editMode;
+            const uint8_t backIdx = getItemCount() - 1;
+            if (_focusIdx == backIdx) {
+                // BACK
+                popScreen(); _dirty = true; return;
+            }
+            if (_focusIdx < 2) {
+                // WiFi / Trigger toggles
+                _editMode = !_editMode;
+            } else if (_battery && _battery->isPresent()) {
+                if (_focusIdx == 5) {
+                    // Reset coulomb counter — only on hold (handled in hold handler),
+                    // but plain SW starts _editMode to give visual feedback
+                    _editMode = !_editMode;
+                } else {
+                    _editMode = !_editMode;
+                }
+            }
             _dirty = true; return;
         }
         if (s == ScreenID::DSP_LIST) {
@@ -703,10 +889,18 @@ void Display::onFocusChanged() { startFocusTransition();
 void Display::onConfirm() {
     ScreenID s = currentScreen(); NavEntry& nav = currentNav();
     switch (s) {
-    case ScreenID::SETTINGS:
-        if (_focusIdx == 3) popScreen();
-        else _editMode = !_editMode;
+    case ScreenID::SETTINGS: {
+        const uint8_t backIdx = getItemCount() - 1;
+        if (_focusIdx == backIdx) {
+            popScreen();
+        } else if (_battery && _battery->isPresent() && _focusIdx == 5) {
+            // Reset coulomb counter (triggered by hold via SW_HOLD handler)
+            _battery->resetCoulombCounter();
+        } else {
+            _editMode = !_editMode;
+        }
         break;
+    }
     case ScreenID::EFFECT_COMMON: {
         uint8_t cnt = getItemCount();
         if (_focusIdx == cnt - 1) popScreen(); else toggleEditMode();
@@ -820,35 +1014,42 @@ void Display::onConfirm() {
 
 void Display::editDelta(int8_t dir) {
     ScreenID s = currentScreen(); NavEntry& nav = currentNav();
-    if (s == ScreenID::MAIN_MENU && _focusIdx < 4 && _pipeline) {
+    if (s == ScreenID::MAIN_MENU && _pipeline) {
+        // Active param: in PARAMS tab use pill focus (1-4 → 0-3),
+        // in CTRL tab or tab bar → use _mainMenuActiveParam directly.
+        uint8_t p = _mainMenuActiveParam;
+        if (_mainMenuTab == 0)
+            p = _focusIdx - 1;   // focusIdx is 1..4 in PARAMS tab; paramValues[]/_mmparam fields are 0..3
+
         float oldValue = 0.0f, newValue = 0.0f;
-        if (_focusIdx == 0) {
+        if (p == 0) {
             VolumeControl& pre = _pipeline->getPreGain();
-            oldValue = (float)_mmparam.vol; _mmparam.vol += dir; _mmparam.vol = constrain(_mmparam.vol, 0, 32);
+            oldValue = (float)_mmparam.vol;
+            _mmparam.vol = constrain(_mmparam.vol + dir, 0, 32);
             newValue = (float)_mmparam.vol;
             float db = -32.0f + _mmparam.vol * 32.0f / 32.0f;
             pre.setGainDb(FLOAT_TO_DB_Q8(db)); pre.setMute(_mmparam.vol <= 0);
-        } else if (_focusIdx == 1) {
+        } else if (p == 1) {
             ParametricEQ& pre = _pipeline->getPreEq();
-            float oldBass = ((float)_mmparam.bass / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
-            _mmparam.bass += dir; _mmparam.bass = constrain(_mmparam.bass, 0, 100);
-            float newBass = ((float)_mmparam.bass / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
-            oldValue = oldBass; newValue = newBass;
-            EQFilterParams p = pre.getBandParams(0); p.gain = FLOAT_TO_DB_Q8(newBass); pre.setBand(0, p);
-        } else if (_focusIdx == 2) {
+            float old = ((float)_mmparam.bass / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            _mmparam.bass = constrain(_mmparam.bass + dir, 0, 100);
+            float nxt = ((float)_mmparam.bass / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            oldValue = old; newValue = nxt;
+            EQFilterParams fp = pre.getBandParams(0); fp.gain = FLOAT_TO_DB_Q8(nxt); pre.setBand(0, fp);
+        } else if (p == 2) {
             ParametricEQ& pre = _pipeline->getPreEq();
-            float oldMid = ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
-            _mmparam.mid += dir; _mmparam.mid = constrain(_mmparam.mid, 0, 100);
-            float newMid = ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
-            oldValue = oldMid; newValue = newMid;
-            EQFilterParams p = pre.getBandParams(1); p.gain = FLOAT_TO_DB_Q8(newMid); pre.setBand(1, p);
-        } else if (_focusIdx == 3) {
+            float old = ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            _mmparam.mid = constrain(_mmparam.mid + dir, 0, 100);
+            float nxt = ((float)_mmparam.mid / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            oldValue = old; newValue = nxt;
+            EQFilterParams fp = pre.getBandParams(1); fp.gain = FLOAT_TO_DB_Q8(nxt); pre.setBand(1, fp);
+        } else if (p == 3) {
             ParametricEQ& pre = _pipeline->getPreEq();
-            float oldTreble = ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
-            _mmparam.treble += dir; _mmparam.treble = constrain(_mmparam.treble, 0, 100);
-            float newTreble = ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
-            oldValue = oldTreble; newValue = newTreble;
-            EQFilterParams p = pre.getBandParams(2); p.gain = FLOAT_TO_DB_Q8(newTreble); pre.setBand(2, p);
+            float old = ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            _mmparam.treble = constrain(_mmparam.treble + dir, 0, 100);
+            float nxt = ((float)_mmparam.treble / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+            oldValue = old; newValue = nxt;
+            EQFilterParams fp = pre.getBandParams(2); fp.gain = FLOAT_TO_DB_Q8(nxt); pre.setBand(2, fp);
         }
         startValueAnimation(oldValue, newValue);
         _mainMenuLastEditMs = millis(); _mainMenuAutosaveArmed = true;
@@ -949,6 +1150,32 @@ void Display::editDelta(int8_t dir) {
         }
         return;
     }
+    if (s == ScreenID::SETTINGS && _editMode && _battery && _battery->isPresent()) {
+        BatteryConfig& cfg = _battery->editConfig();
+        if (_focusIdx == 2) {
+            // Cell count 1S–6S
+            int8_t cs = (int8_t)cfg.cellS + dir;
+            if (cs < 1) cs = 6;
+            if (cs > 6) cs = 1;
+            cfg.cellS = (uint8_t)cs;
+            _battery->applyConfig();
+        } else if (_focusIdx == 3) {
+            // Cell mAh: step 50 mAh, range 100–20000
+            int32_t mah = (int32_t)cfg.cellMah + dir * 50;
+            if (mah < 100)   mah = 100;
+            if (mah > 20000) mah = 20000;
+            cfg.cellMah = (uint32_t)mah;
+            _battery->applyConfig();
+        } else if (_focusIdx == 4) {
+            // Shunt mΩ: step 1 mΩ, range 1–1000
+            int32_t shunt = (int32_t)cfg.shuntMOhm + dir;
+            if (shunt < 1)    shunt = 1;
+            if (shunt > 1000) shunt = 1000;
+            cfg.shuntMOhm = (uint32_t)shunt;
+            _battery->applyConfig();
+        }
+        _dirty = true; return;
+    }
     if (s == ScreenID::SETTINGS && _editMode) { _editMode = false; _dirty = true; return; }
     (void)dir;
 }
@@ -956,8 +1183,14 @@ void Display::editDelta(int8_t dir) {
 uint8_t Display::getItemCount() const {
     switch (currentScreen()) {
     case ScreenID::SPLASH:    return 0;
-    case ScreenID::MAIN_MENU: return 4;
-    case ScreenID::SETTINGS:  return 4;
+    case ScreenID::MAIN_MENU: return 5;   // 0=tab bar, 1-4=items in active tab
+    case ScreenID::SETTINGS: {
+        // 0=WiFi, 1=Trigger, then battery items (if present): 2=cellS, 3=cellMah,
+        // 4=shuntMOhm, 5=resetCoulomb. Last = BACK.
+        uint8_t n = 2; // WiFi + Trigger
+        if (_battery && _battery->isPresent()) n += 4; // cellS + mAh + shunt + reset
+        return n + 1; // +1 for BACK
+    }
     case ScreenID::DSP_LIST:  return MAX_PRESET_SLOTS + 1 + MODULE_COUNT + 1;
     case ScreenID::EFFECT_COMMON: { 
         NavEntry nav = _navStack[_navTop];
@@ -1019,8 +1252,105 @@ void Display::drawSplash() {
     TFT_eSprite& d = _spr;
     for (int16_t y = 0; y < DISP_H; y++) d.drawFastHLine(0, y, DISP_W, blendColor(Color::BG, Color::PANEL, (uint8_t)(y*255/DISP_H)));
     d.setTextDatum(MC_DATUM); d.setTextColor(Color::ACCENT, Color::BG); d.setTextSize(3); d.drawString("DSP CORE", DISP_W/2, DISP_H/2-30);
-    d.setTextColor(Color::TEXT, Color::BG); d.setTextSize(1); d.drawString("v" FIRMWARE_VERSION, DISP_W/2, DISP_H/2+4); d.drawString("by Nagumo", DISP_W/2, DISP_H/2+18);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  drawBatteryWidget — top-right corner battery icon + SoC %
+//  Called from any screen that wants to show battery status.
+//
+//  x, y = top-right corner of the widget bounding box (icon right-aligns here)
+// ─────────────────────────────────────────────────────────────────────────────
+void Display::drawBatteryWidget(int16_t x, int16_t y) {
+    if (!_battery || !_battery->isPresent()) return;
+
+    TFT_eSprite& d = _spr;
+    const BatteryStatus& bat = _battery->getStatus();
+
+    // ── Color by state ────────────────────────────────────────────────────────
+    uint16_t col;
+    switch (bat.state) {
+    case BatteryState::CRITICAL: col = Color::RED;    break;
+    case BatteryState::WARNING:  col = Color::YELLOW; break;
+    case BatteryState::CHARGING: col = Color::ACCENT; break;
+    default:                     col = Color::GREEN;  break;
+    }
+
+    // ── Battery icon: outer rect + nub + fill ────────────────────────────────
+    constexpr int16_t ICON_W  = 22;
+    constexpr int16_t ICON_H  = 11;
+    constexpr int16_t NUB_W   = 3;
+    constexpr int16_t NUB_H   = 5;
+    int16_t ix = x - ICON_W - NUB_W;
+    int16_t iy = y;
+
+    d.drawRect(ix, iy, ICON_W, ICON_H, col);
+    d.fillRect(ix + ICON_W, iy + (ICON_H - NUB_H) / 2, NUB_W, NUB_H, col);
+
+    // Fill proportion
+    int16_t fillW = (int16_t)(bat.soc * (ICON_W - 4));
+    if (fillW > 0)
+        d.fillRect(ix + 2, iy + 2, fillW, ICON_H - 4, col);
+
+    // ── SoC % text right of icon (actually left, after icon) ─────────────────
+    char pctBuf[6];
+    snprintf(pctBuf, sizeof(pctBuf), "%u%%", (unsigned)(bat.soc * 100));
+    d.setTextDatum(MR_DATUM);
+    d.setTextColor(col, Color::BG);
+    d.setTextSize(1);
+    d.drawString(pctBuf, ix - 2, iy + ICON_H / 2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  drawPowerOffScreen — full-screen low-battery warning before shutdown
+// ─────────────────────────────────────────────────────────────────────────────
+void Display::drawPowerOffScreen() {
+    TFT_eSprite& d = _spr;
+
+    // Dark White gradient background
+    for (int16_t y = 0; y < DISP_H; y++)
+        d.drawFastHLine(0, y, DISP_W, blendColor(Color::BG, Color::ACCENT,
+                                                   (uint8_t)(y * 60 / DISP_H)));
+
+    d.setTextDatum(MC_DATUM);
+    d.setTextSize(2);
+    d.setTextColor(_powerOffUserRequest ? Color::ACCENT : Color::RED, Color::BG);
+    d.drawString(_powerOffUserRequest ? "See You Next Time" : "LOW BATTERY", DISP_W / 2, DISP_H / 2 - 28);
+
+    d.setTextSize(1);
+    d.setTextColor(Color::TEXT, Color::BG);
+
+    if (_battery) {
+        char vBuf[16];
+        snprintf(vBuf, sizeof(vBuf), "%.2f V", _battery->getStatus().busVoltage);
+        d.drawString(vBuf, DISP_W / 2, DISP_H / 2);
+    }
+
+    d.drawString("Shutting down...", DISP_W / 2, DISP_H / 2 + 18);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  drawMainMenu — two-tab layout
+//
+//  Tab 0 "PARAMS" — Vol/Bass/Mid/Treble big value display (encoder adjusts)
+//  Tab 1 "CTRL"   — BT kick, +, pause/mute, − buttons (SW activates focused btn)
+//
+//  SW press when on tab row  → switches tab
+//  SW press when inside tab  → activates focused item (CTRL tab), or cycles
+//                              param selector (PARAMS tab)
+//  CW/CCW always adjusts the active param regardless of which tab
+//
+//  focusIdx layout:
+//    0   = Tab bar (PARAMS / CTRL selector)
+//    PARAMS tab (mainMenuTab == 0):
+//      1 = Vol selector
+//      2 = Bass selector
+//      3 = Mid selector
+//      4 = Treble selector
+//    CTRL tab (mainMenuTab == 1):
+//      1 = BT Kick
+//      2 = + (increment active param)
+//      3 = pause / mute
+//      4 = − (decrement active param)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // drawMainMenu — new layout (sketch 2025)
@@ -1046,11 +1376,20 @@ void Display::drawSplash() {
 void Display::drawMainMenu() {
     TFT_eSprite& d = _spr;
 
+    // ── Power-off screen overrides everything ─────────────────────────────────
+    if (_powerOffScreenActive) {
+        drawPowerOffScreen();
+        return;
+    }
+
+    // ── Sidebar (CPU / Heap bars + status) ────────────────────────────────────
+    drawSideBars(SIDEBAR_X, HEADER_H + 4, DISP_H - HEADER_H - 32);
+ 
     // ── Sidebar (CPU / Heap bars + status text) ──────────────────────────────
     constexpr int16_t SIDE_BAR_TOP = HEADER_H + 4;
     constexpr int16_t SIDE_BAR_H   = DISP_H - SIDE_BAR_TOP - 32;
     drawSideBars(SIDEBAR_X, SIDE_BAR_TOP, SIDE_BAR_H);
-
+ 
     // Sample-rate below bars
     d.setTextDatum(ML_DATUM);
     d.setTextColor(Color::TEXT_DIM, Color::BG);
@@ -1059,54 +1398,91 @@ void Display::drawMainMenu() {
     snprintf(srBuf, sizeof(srBuf), _sampleRate > 0 ? "%lukHz" : "--",
              (unsigned long)(_sampleRate / 1000));
     d.drawString(srBuf, SIDEBAR_X, DISP_H - 20);
-
+ 
     // WiFi badge
     drawWifiBadge(SIDEBAR_X, DISP_H - 10);
-
-    // ── Header bar ───────────────────────────────────────────────────────────
+ 
+    // ── Header ───────────────────────────────────────────────────────────
     d.setTextDatum(ML_DATUM);
     d.setTextColor(Color::ACCENT, Color::BG);
     d.setTextSize(1);
     d.drawString("ESP32 DSP CORE", CONTENT_X, 10);
+
+    // Voltage + current draw — top-middle of header
+    if (_battery && _battery->isPresent()) {
+        const BatteryStatus& bat = _battery->getStatus();
+        char vaBuf[24];
+        snprintf(vaBuf, sizeof(vaBuf), "%.2fV  %.0fmA", bat.busVoltage, bat.currentMa);
+        uint16_t vaCol = (bat.state == BatteryState::CRITICAL) ? Color::RED
+                        : (bat.state == BatteryState::WARNING)  ? Color::YELLOW
+                                                                  : Color::TEXT_DIM;
+        d.setTextDatum(MC_DATUM);
+        d.setTextColor(vaCol, Color::BG);
+        d.setTextSize(1);
+        d.drawString(vaBuf, CONTENT_X + CONTENT_W / 2, 10);
+    }
+
+    // Battery widget — top right corner (icon + SoC %)
+    drawBatteryWidget(DISP_W - 2, 4);
+
     d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
+ 
+    // ── Tab bar ───────────────────────────────────────────────────────────────
+    constexpr int16_t TAB_Y   = HEADER_H + 3;
+    constexpr int16_t TAB_H   = 18;
+    constexpr int16_t TAB_W   = (CONTENT_W - 4) / 2;
+    constexpr int16_t TAB_GAP = 4;
+    const char* tabLabels[]   = { "PARAMS", "CTRL" };
 
-    // ── Layout constants ─────────────────────────────────────────────────────
-    // Upper panel: from just below header to above meter box
-    constexpr int16_t UPPER_Y      = HEADER_H + 4;
-    constexpr int16_t UPPER_H      = 112;   // leaves ~84px for meters at bottom
+    for (uint8_t t = 0; t < 2; t++) {
+        int16_t tx      = CONTENT_X + t * (TAB_W + TAB_GAP);
+        bool    isActive = (_mainMenuTab == t);
+        bool    focused  = (_focusIdx == 0); // focus on tab bar
 
-    // Left column: Bluetooth + +/pause/- buttons
-    constexpr int16_t LEFT_COL_X   = CONTENT_X;
-    constexpr int16_t LEFT_COL_W   = 80;
+        uint16_t tabBg, tabBorder, tabText;
+        if (isActive) {
+            tabBg     = Color::ACCENT;
+            tabBorder = Color::ACCENT;
+            tabText   = Color::BG;
+        } else if (focused) {
+            // Animate non-active tab when tab bar is focused
+            uint8_t bl = (uint8_t)(_anim.focusTransition * 200);
+            tabBg     = blendColor(Color::BG, Color::PANEL, bl);
+            tabBorder = blendColor(Color::BORDER, Color::ACCENT, bl);
+            tabText   = blendColor(Color::TEXT_DIM, Color::TEXT, bl);
+        } else {
+            tabBg     = Color::BG;
+            tabBorder = Color::BORDER;
+            tabText   = Color::TEXT_DIM;
+        }
 
-    // Right column: big value display
-    constexpr int16_t RIGHT_COL_X  = LEFT_COL_X + LEFT_COL_W + 6;
-    constexpr int16_t RIGHT_COL_W  = CONTENT_W - LEFT_COL_W - 6;
+        d.fillRoundRect(tx, TAB_Y, TAB_W, TAB_H, 3, tabBg);
+        d.drawRoundRect(tx, TAB_Y, TAB_W, TAB_H, 3, tabBorder);
+        d.setTextColor(tabText, tabBg);
+        d.setTextDatum(MC_DATUM);
+        d.setTextSize(1);
+        d.drawString(tabLabels[t], tx + TAB_W / 2, TAB_Y + TAB_H / 2);
+    }
 
-    // ── Button geometry (left column) ────────────────────────────────────────
-    // Bluetooth kick button (square, top of left col)
-    constexpr int16_t BT_BTN_W     = 36;
-    constexpr int16_t BT_BTN_H     = 36;
-    constexpr int16_t BT_BTN_X     = LEFT_COL_X;
-    constexpr int16_t BT_BTN_Y     = UPPER_Y + 4;
+    // ── Hold-progress indicator: fill a thin bar at the bottom of the tab bar ──
+    // Visible while the user is holding SW inside a tab (tab-return hold).
+    if (_mmTabReturnArmed && _focusIdx > 0) {
+        float frac = constrain(
+            (float)(millis() - _mmTabReturnStartMs) / TAB_RETURN_HOLD_MS,
+            0.0f, 1.0f);
+        int16_t barY = TAB_Y + TAB_H - 3;
+        int16_t barW = (int16_t)(frac * CONTENT_W);
+        if (barW > 0) d.fillRect(CONTENT_X, barY, barW, 2, Color::ACCENT2);
+    }
 
-    // +  / pause / −  buttons (stacked vertically, right of BT btn)
-    constexpr int16_t CTL_BTN_W    = 32;
-    constexpr int16_t CTL_BTN_H    = 24;
-    constexpr int16_t CTL_BTN_GAP  = 4;
-    constexpr int16_t CTL_BTN_X    = BT_BTN_X + BT_BTN_W + 6;
-    constexpr int16_t CTL_BTN_Y0   = UPPER_Y + 4;   // "+" button top
+    // ── Content area (below tab bar) ──────────────────────────────────────────
+    constexpr int16_t CONTENT_Y = TAB_Y + TAB_H + 4;
+    constexpr int16_t CONTENT_H = DISP_H - CONTENT_Y - 4;
 
-    // Focus indices:
-    //   0 = Vol, 1 = Bass, 2 = Mid, 3 = Treble   (param select via SW)
-    //   4 = Bluetooth kick
-    //   5 = "+" (increment active param)
-    //   6 = pause/mute toggle
-    //   7 = "−" (decrement active param)
-
-    // ── Compute current param display values ─────────────────────────────────
-    const uint8_t paramIdx = (_focusIdx < 4) ? _focusIdx : 0; // which param is "active"
-
+    if (_mainMenuTab == 0) {
+        // ════════════════════════════════════════════════════════════════════
+        //  PARAMS tab — Vol/Bass/Mid/Treble selector + big value
+        // ════════════════════════════════════════════════════════════════════
     const char* paramLabels[] = { "Vol", "Bass", "Mid", "Treble" };
     float paramValues[] = {
         _anim.volAnimating ? _anim.volDisplay : (float)_mmparam.vol,
@@ -1116,54 +1492,151 @@ void Display::drawMainMenu() {
     };
     const char* paramUnits[]  = { "",   "dB", "dB", "dB" };
     const uint8_t paramDecs[] = { 0,     1,    1,    1   };
+ 
+    // active param = focusIdx 1-4 mapped to 0-3
+        const uint8_t activeParam = _mainMenuActiveParam;
 
-    float displayValue = paramValues[paramIdx];
-    if (_anim.valueAnimating && _focusIdx < 4) {
-        displayValue = getAnimatedValue(displayValue);
-    }
+        float displayValue = paramValues[activeParam];
+        if (_anim.valueAnimating) displayValue = getAnimatedValue(displayValue);
 
-    // ── Bluetooth kick button ─────────────────────────────────────────────────
-    {
-        bool focused = (_focusIdx == 4);
-        uint16_t btBg     = focused ? Color::ACCENT  : Color::PANEL;
-        uint16_t btBorder = focused ? Color::TEXT     : Color::BORDER;
-        uint16_t btText   = focused ? Color::BG       : Color::ACCENT;
-        if (focused && _anim.focusTransition < 1.0f) {
-            uint8_t bl = (uint8_t)(_anim.focusTransition * 255);
-            btBg     = blendColor(Color::PANEL,  Color::ACCENT, bl);
-            btBorder = blendColor(Color::BORDER, Color::TEXT,   bl);
-            btText   = blendColor(Color::ACCENT, Color::BG,     bl);
+        // Param selector pills (4 items, horizontal)
+        constexpr int16_t PILL_H   = 16;
+        constexpr int16_t PILL_GAP = 3;
+        int16_t pillW = (CONTENT_W - 3 * PILL_GAP) / 4;
+
+        for (uint8_t i = 0; i < 4; i++) {
+            int16_t px      = CONTENT_X + i * (pillW + PILL_GAP);
+            bool    isAct   = (i == activeParam);
+            bool    focused = (_focusIdx == (uint8_t)(i + 1));
+
+            float focusBlend = 0.0f;
+            if (focused) {
+                focusBlend = (_anim.focusTransition < 1.0f) ? _anim.focusTransition : 1.0f;
+            } else if (_anim.prevFocusIdx == (int8_t)(i + 1) && _anim.focusTransition < 1.0f) {
+                focusBlend = 1.0f - _anim.focusTransition;
+            }
+
+            uint16_t pillBg, pillText;
+            if (isAct) {
+                pillBg   = Color::ACCENT;
+                pillText = Color::BG;
+            } else if (focusBlend > 0.0f) {
+                uint8_t bl = (uint8_t)(focusBlend * 255);
+                pillBg   = blendColor(Color::PANEL, Color::ACCENT2, bl);
+                pillText = blendColor(Color::TEXT_DIM, Color::TEXT_FOCUS, bl);
+            } else {
+                pillBg   = Color::PANEL;
+                pillText = Color::TEXT_DIM;
+            }
+
+            d.fillRoundRect(px, CONTENT_Y, pillW, PILL_H, 3, pillBg);
+            d.setTextColor(pillText, pillBg);
+            d.setTextDatum(MC_DATUM);
+            d.setTextSize(1);
+            d.drawString(paramLabels[i], px + pillW / 2, CONTENT_Y + PILL_H / 2);
         }
-        d.fillRoundRect(BT_BTN_X, BT_BTN_Y, BT_BTN_W, BT_BTN_H, 4, btBg);
-        d.drawRoundRect(BT_BTN_X, BT_BTN_Y, BT_BTN_W, BT_BTN_H, 4, btBorder);
-        // Bluetooth symbol — simplified "B" glyph
-        d.setTextColor(btText, btBg);
+
+        // Big value
+        constexpr int16_t BIG_Y    = CONTENT_Y + PILL_H + 4;
+        constexpr int16_t BIG_AREA = 54;
+        char bigBuf[10];
+        formatFloat(bigBuf, sizeof(bigBuf), displayValue, paramDecs[activeParam]);
         d.setTextDatum(MC_DATUM);
-        d.setTextSize(2);
-        d.drawString("BT", BT_BTN_X + BT_BTN_W / 2, BT_BTN_Y + BT_BTN_H / 2);
-        // Small label below
+        d.setTextColor(Color::TEXT, Color::BG);
+        d.setTextSize(4);
+        d.drawString(bigBuf, CONTENT_X + CONTENT_W / 2, BIG_Y + BIG_AREA / 2);
+
+        // Unit + param name below value
         d.setTextSize(1);
         d.setTextColor(Color::TEXT_DIM, Color::BG);
-        d.setTextDatum(MC_DATUM);
-        d.drawString("Kick", BT_BTN_X + BT_BTN_W / 2, BT_BTN_Y + BT_BTN_H + 6);
-    }
+        d.drawString(paramUnits[activeParam],
+                     CONTENT_X + CONTENT_W / 2, BIG_Y + BIG_AREA + 2);
 
-    // ── +  /  ⏸  /  −  control buttons ──────────────────────────────────────
-    {
-        const char* ctlLabels[]  = { "+",  "||", "-" };
-        const uint8_t ctlFocus[] = { 5,     6,    7  };
+        // ── Live meter panel ──────────────────────────────────────────────────
+        constexpr int16_t METER_Y = CONTENT_Y + PILL_H + BIG_AREA + 28;
+        int16_t meterH = DISP_H - METER_Y - 4;
 
-        for (uint8_t i = 0; i < 3; i++) {
-            int16_t  cy  = CTL_BTN_Y0 + i * (CTL_BTN_H + CTL_BTN_GAP);
-            bool focused = (_focusIdx == ctlFocus[i]);
+        if (meterH > 35 && _pipeline) {
+            d.fillRoundRect(CONTENT_X, METER_Y, CONTENT_W, meterH, 4, Color::PANEL);
+            d.drawRoundRect(CONTENT_X, METER_Y, CONTENT_W, meterH, 4, Color::BORDER);
+            d.setTextColor(Color::TEXT_DIM, Color::PANEL);
+            d.setTextDatum(TC_DATUM);
+            d.setTextSize(1);
+            d.drawString("LIVE", CONTENT_X + CONTENT_W / 2, METER_Y + 2);
+
+            constexpr int16_t LBL_W  = 44;
+            constexpr int16_t ROW_HM = 12;
+            int16_t mW      = CONTENT_W - LBL_W - 12;
+            int16_t lblX    = CONTENT_X + 4;
+            int16_t mX      = CONTENT_X + LBL_W + 4;
+            int16_t rowY    = METER_Y + 12;
+
+            auto hBar = [&](const char* lbl, float frac, uint16_t col) {
+                d.setTextColor(Color::TEXT, Color::PANEL);
+                d.setTextDatum(ML_DATUM);
+                d.setTextSize(1);
+                d.drawString(lbl, lblX, rowY + ROW_HM / 2);
+                constexpr int16_t bH = 6;
+                int16_t bY = rowY + (ROW_HM - bH) / 2;
+                d.drawRect(mX, bY, mW, bH, Color::BORDER);
+                int16_t fw = (int16_t)(constrain(frac, 0.0f, 1.0f) * (mW - 2));
+                if (fw > 0) d.fillRect(mX + 1, bY + 1, fw, bH - 2, col);
+                rowY += ROW_HM;
+            };
+
+            Compander& comp = _pipeline->getCompander();
+            if (comp.isEnabled()) {
+                float gr = constrain(-_companderGainDb, 0.0f, 30.0f);
+                hBar("Comp", gr / 30.0f,
+                     gr > 20 ? Color::RED : gr > 12 ? Color::YELLOW : Color::GREEN);
+            }
+            DynamicBass& db = _pipeline->getDynamicBass();
+            if (db.isEnabled()) {
+                float a = constrain(_dynBassAlpha, 0.0f, 1.0f);
+                hBar("DBass", a, Color::GREEN);
+            }
+            DynamicEQ& deq = _pipeline->getDynamicEq();
+            if (deq.isEnabled()) {
+                float a = constrain((_dynEqAlphaLow + _dynEqAlphaHigh) * 0.5f, 0.0f, 1.0f);
+                hBar("DEQ", a, Color::ACCENT);
+            }
+        }
+
+    } else {
+        // ════════════════════════════════════════════════════════════════════
+        //  CTRL tab — BT kick, +, pause/mute, −
+        //  focusIdx 1-4 map to these buttons
+        // ════════════════════════════════════════════════════════════════════
+        struct CtrlBtn {
+            const char* label;
+            const char* sublabel;
+        };
+        const CtrlBtn btns[] = {
+            { "BT",   "Kick"    },
+            { "+",    "Param"   },
+            { "||",   "Mute"    },
+            { "-",    "Param"   },
+        };
+
+        constexpr int16_t BTN_W   = 56;
+        constexpr int16_t BTN_H   = 56;
+        constexpr int16_t BTN_GAP = 8;
+        // 4 buttons in a row, centred
+        int16_t totalW = 4 * BTN_W + 3 * BTN_GAP;
+        int16_t startX = CONTENT_X + (CONTENT_W - totalW) / 2;
+        int16_t btnY   = CONTENT_Y + (CONTENT_H - BTN_H - 14) / 2;
+
+        for (uint8_t i = 0; i < 4; i++) {
+            int16_t bx     = startX + i * (BTN_W + BTN_GAP);
+            bool    focused = (_focusIdx == (int)i + 1);
 
             uint16_t bg, border, textCol;
             if (focused) {
                 if (_anim.focusTransition < 1.0f) {
                     uint8_t bl = (uint8_t)(_anim.focusTransition * 255);
-                    bg      = blendColor(Color::PANEL,  Color::ACCENT, bl);
-                    border  = blendColor(Color::BORDER, Color::TEXT,   bl);
-                    textCol = blendColor(Color::TEXT,   Color::BG,     bl);
+                    bg      = blendColor(Color::PANEL, Color::ACCENT, bl);
+                    border  = blendColor(Color::BORDER, Color::TEXT,  bl);
+                    textCol = blendColor(Color::TEXT,   Color::BG,    bl);
                 } else {
                     bg = Color::ACCENT; border = Color::TEXT; textCol = Color::BG;
                 }
@@ -1171,183 +1644,26 @@ void Display::drawMainMenu() {
                 bg = Color::PANEL; border = Color::BORDER; textCol = Color::TEXT;
             }
 
-            d.fillRoundRect(CTL_BTN_X, cy, CTL_BTN_W, CTL_BTN_H, 3, bg);
-            d.drawRoundRect(CTL_BTN_X, cy, CTL_BTN_W, CTL_BTN_H, 3, border);
+            d.fillRoundRect(bx, btnY, BTN_W, BTN_H, 6, bg);
+            d.drawRoundRect(bx, btnY, BTN_W, BTN_H, 6, border);
+
             d.setTextColor(textCol, bg);
             d.setTextDatum(MC_DATUM);
-            d.setTextSize(i == 0 || i == 2 ? 2 : 1);  // bigger +/−, smaller pause
-            d.drawString(ctlLabels[i], CTL_BTN_X + CTL_BTN_W / 2, cy + CTL_BTN_H / 2);
-        }
-    }
+            d.setTextSize(i == 0 ? 2 : 3);  // BT smaller, +/||/- bigger
+            d.drawString(btns[i].label, bx + BTN_W / 2, btnY + BTN_H / 2 - 2);
 
-    // ── Big value display (right column) ─────────────────────────────────────
-    {
-        // Param selector tabs at top of right column (Vol / Bass / Mid / Treble)
-        constexpr int16_t TAB_H   = 16;
-        constexpr int16_t TAB_GAP = 2;
-        int16_t tabW = (RIGHT_COL_W - 3 * TAB_GAP) / 4;
-
-        for (uint8_t i = 0; i < 4; i++) {
-            int16_t tx      = RIGHT_COL_X + i * (tabW + TAB_GAP);
-            bool isActive   = (i == paramIdx);
-            bool isFocused  = (_focusIdx == i);
-
-            // Focus blend for tab
-            float focusBlend = 0.0f;
-            if (_anim.focusTransition < 1.0f) {
-                if (i == (uint8_t)_anim.prevFocusIdx && _anim.prevFocusIdx < 4)
-                    focusBlend = 1.0f - _anim.focusTransition;
-                else if (isFocused && _focusIdx < 4)
-                    focusBlend = _anim.focusTransition;
-            } else if (isFocused && _focusIdx < 4) {
-                focusBlend = 1.0f;
-            }
-
-            uint16_t tabBg, tabText;
-            if (isActive) {
-                tabBg   = Color::ACCENT;
-                tabText = Color::BG;
-            } else if (focusBlend > 0.0f) {
-                uint8_t bl = (uint8_t)(focusBlend * 255);
-                tabBg   = blendColor(Color::PANEL, Color::ACCENT, bl / 2);
-                tabText = blendColor(Color::TEXT_DIM, Color::TEXT_FOCUS, bl);
-            } else {
-                tabBg   = Color::PANEL;
-                tabText = Color::TEXT_DIM;
-            }
-
-            d.fillRoundRect(tx, UPPER_Y + 2, tabW, TAB_H, 2, tabBg);
-            d.setTextColor(tabText, tabBg);
-            d.setTextDatum(MC_DATUM);
+            // Sub-label below button
             d.setTextSize(1);
-            d.drawString(paramLabels[i], tx + tabW / 2, UPPER_Y + 2 + TAB_H / 2);
+            d.setTextColor(focused ? Color::TEXT : Color::TEXT_DIM, Color::BG);
+            d.drawString(btns[i].sublabel, bx + BTN_W / 2, btnY + BTN_H + 7);
         }
 
-        // Big number
-        constexpr int16_t BIG_Y = UPPER_Y + TAB_H + 8;
-        constexpr int16_t BIG_H = UPPER_H - TAB_H - 20;
-
-        char bigBuf[10];
-        formatFloat(bigBuf, sizeof(bigBuf), displayValue, paramDecs[paramIdx]);
+        // Hint text at bottom
         d.setTextDatum(MC_DATUM);
-        d.setTextColor(Color::TEXT, Color::BG);
-        d.setTextSize(4);   // large font ~32px
-        d.drawString(bigBuf, RIGHT_COL_X + RIGHT_COL_W / 2, BIG_Y + BIG_H / 2 - 6);
-
-        // Unit below big number
-        d.setTextSize(1);
         d.setTextColor(Color::TEXT_DIM, Color::BG);
-        d.setTextDatum(MC_DATUM);
-        d.drawString(paramUnits[paramIdx],
-                     RIGHT_COL_X + RIGHT_COL_W / 2,
-                     BIG_Y + BIG_H / 2 + 18);
-    }
-
-    // ── Live meter panel ──────────────────────────────────────────────────────
-    constexpr int16_t METER_Y  = UPPER_Y + UPPER_H + 4;
-    constexpr int16_t METER_H  = DISP_H - METER_Y - 4;
-
-    if (METER_H > 40 && _pipeline) {
-        d.fillRoundRect(CONTENT_X, METER_Y, CONTENT_W, METER_H, 4, Color::PANEL);
-        d.drawRoundRect(CONTENT_X, METER_Y, CONTENT_W, METER_H, 4, Color::BORDER);
-
-        d.setTextColor(Color::TEXT_DIM, Color::PANEL);
-        d.setTextDatum(TC_DATUM);
         d.setTextSize(1);
-        d.drawString("LIVE METERS", CONTENT_X + CONTENT_W / 2, METER_Y + 3);
-
-        constexpr int16_t LABEL_W  = 52;
-        constexpr int16_t ROW_H_M  = 14;
-        int16_t meterW  = CONTENT_W - LABEL_W - 14;
-        int16_t labelX  = CONTENT_X + 5;
-        int16_t meterX  = CONTENT_X + LABEL_W + 4;
-        int16_t rowY    = METER_Y + 15;
-
-        auto drawHBar = [&](const char* lbl, float frac, uint16_t col) {
-            d.setTextColor(Color::TEXT, Color::PANEL);
-            d.setTextDatum(ML_DATUM);
-            d.setTextSize(1);
-            d.drawString(lbl, labelX, rowY + ROW_H_M / 2);
-            constexpr int16_t mH = 7;
-            int16_t mY = rowY + (ROW_H_M - mH) / 2;
-            d.drawRect(meterX, mY, meterW, mH, Color::BORDER);
-            int16_t fw = (int16_t)(constrain(frac, 0.0f, 1.0f) * (meterW - 2));
-            if (fw > 0) d.fillRect(meterX + 1, mY + 1, fw, mH - 2, col);
-            rowY += ROW_H_M;
-        };
-
-        // Compander GR
-        Compander& comp = _pipeline->getCompander();
-        if (comp.isEnabled()) {
-            float gr   = constrain(-_companderGainDb, 0.0f, 30.0f);
-            uint16_t c = gr > 20.0f ? Color::RED : gr > 12.0f ? Color::YELLOW : Color::GREEN;
-            drawHBar("Comp", gr / 30.0f, c);
-        }
-
-        // Dynamic Bass (bidirectional)
-        DynamicBass& dynBass = _pipeline->getDynamicBass();
-        if (dynBass.isEnabled()) {
-            d.setTextColor(Color::TEXT, Color::PANEL);
-            d.setTextDatum(ML_DATUM);
-            d.setTextSize(1);
-            d.drawString("D.Bass", labelX, rowY + ROW_H_M / 2);
-            constexpr int16_t mH = 7;
-            int16_t mY    = rowY + (ROW_H_M - mH) / 2;
-            int16_t halfW = (meterW - 2) / 2;
-            int16_t midX  = meterX + halfW;
-            d.drawRect(meterX, mY, meterW, mH, Color::BORDER);
-            d.drawFastVLine(midX, mY, mH, Color::TEXT_DIM);
-            float alpha = constrain(_dynBassAlpha, -1.0f, 1.0f);
-            if (alpha < 0.0f) {
-                int16_t fw = (int16_t)((-alpha) * (halfW - 1));
-                if (fw > 0) d.fillRect(midX - fw, mY + 1, fw, mH - 2, Color::RED);
-            } else if (alpha > 0.0f) {
-                int16_t fw = (int16_t)(alpha * (halfW - 1));
-                if (fw > 0) d.fillRect(midX + 1, mY + 1, fw, mH - 2, Color::GREEN);
-            }
-            rowY += ROW_H_M;
-        }
-
-        // Dynamic EQ (dual mini bars)
-        DynamicEQ& dynEq = _pipeline->getDynamicEq();
-        if (dynEq.isEnabled()) {
-            d.setTextColor(Color::TEXT, Color::PANEL);
-            d.setTextDatum(ML_DATUM);
-            d.setTextSize(1);
-            d.drawString("D.EQ", labelX, rowY + ROW_H_M / 2);
-            constexpr int16_t barH = 3, gap = 1;
-            int16_t mY = rowY + (ROW_H_M - barH * 2 - gap) / 2;
-            // Low
-            d.drawRect(meterX, mY, meterW, barH, Color::BORDER);
-            int16_t flw = (int16_t)(constrain(_dynEqAlphaLow, 0.0f, 1.0f) * (meterW - 2));
-            if (flw > 0) d.fillRect(meterX + 1, mY + 1, flw, barH - 2, Color::ACCENT2);
-            // High
-            d.drawRect(meterX, mY + barH + gap, meterW, barH, Color::BORDER);
-            int16_t fhw = (int16_t)(constrain(_dynEqAlphaHigh, 0.0f, 1.0f) * (meterW - 2));
-            if (fhw > 0) d.fillRect(meterX + 1, mY + barH + gap + 1, fhw, barH - 2, Color::ACCENT);
-            rowY += ROW_H_M;
-        }
-
-        // DRC (4 vertical bars)
-        DRC& drc = _pipeline->getDrc();
-        if (drc.isEnabled()) {
-            d.setTextColor(Color::TEXT, Color::PANEL);
-            d.setTextDatum(ML_DATUM);
-            d.setTextSize(1);
-            d.drawString("DRC", labelX, rowY + ROW_H_M / 2);
-            constexpr int16_t vBarH = 10;
-            int16_t mY   = rowY + (ROW_H_M - vBarH) / 2;
-            int16_t barW = (meterW / 4) - 2;
-            for (uint8_t b = 0; b < 4; b++) {
-                int16_t bx  = meterX + b * (barW + 2);
-                float   gr  = constrain(-_drcGainDb[b], 0.0f, 30.0f);
-                float   frc = gr / 30.0f;
-                uint16_t c  = gr > 20.0f ? Color::RED : gr > 12.0f ? Color::YELLOW : Color::GREEN;
-                d.drawRect(bx, mY, barW, vBarH, Color::BORDER);
-                int16_t fh = (int16_t)(frc * (vBarH - 2));
-                if (fh > 0) d.fillRect(bx + 1, mY + vBarH - 1 - fh, barW - 2, fh, c);
-            }
-        }
+        d.drawString("CW/CCW = chon nut  |  SW = activate",
+                     CONTENT_X + CONTENT_W / 2, DISP_H - 8);
     }
 }
 
@@ -1360,33 +1676,132 @@ void Display::drawSettings() {
     d.drawString("SETTINGS", CONTENT_X, 10);
     d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
 
-    struct Item {
-        const char* name;
-        bool active;
-    };
-    Item items[] = {
-        { "WiFi",     true  },
-        { "Trigger",  false },
-        { "Shutdown", false },
-    };
+     // ── Settings item list ────────────────────────────────────────────────────
+    // focusIdx:
+    //   0  = WiFi switch
+    //   1  = Trigger switch
+    //   2  = Cell count   (1S–6S)    — battery
+    //   3  = Cell mAh                — battery
+    //   4  = Shunt mΩ               — battery
+    //   5  = Reset coulomb counter   — battery nav button
+    //   6  = BACK
 
-    for (uint8_t i = 0; i < 3; i++) {
-        int16_t y = HEADER_H + 4 + i * ROW_H;
-        bool focused = (_focusIdx == i);
-        if (i < 2) {
-            drawSwitchRow(CONTENT_X, y, CONTENT_W, items[i].name,
-                          items[i].active, focused);
-        } else {
-            drawNavButton(CONTENT_X, y, CONTENT_W, ROW_H - 2,
-                          "SHUTDOWN (hold 5s in main)", focused, false, 0);
+    int16_t y = HEADER_H + 4;
+
+    // WiFi switch
+    drawSwitchRow(CONTENT_X, y, CONTENT_W, "WiFi", _settingsWifi, _focusIdx == 0);
+    y += ROW_H;
+
+    // Trigger switch
+    drawSwitchRow(CONTENT_X, y, CONTENT_W, "Trigger", _settingsTrigger, _focusIdx == 1);
+    y += ROW_H;
+
+    // ── Battery section header ────────────────────────────────────────────────
+    d.drawFastHLine(CONTENT_X, y, CONTENT_W, Color::BORDER);
+    d.setTextDatum(ML_DATUM);
+    d.setTextColor(Color::TEXT_DIM, Color::BG);
+    d.setTextSize(1);
+    d.drawString("BATTERY", CONTENT_X + 2, y + 5);
+    y += 12;
+
+    if (_battery && _battery->isPresent()) {
+        const BatteryConfig& cfg = _battery->getConfig();
+
+        // Cell count selector (1S–6S)
+        {
+            bool focused = (_focusIdx == 2);
+            uint16_t bg, border, textCol;
+            getFocusColors(focused, bg, border, textCol);
+            d.fillRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, bg);
+            d.drawRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, border);
+            d.setTextDatum(ML_DATUM);
+            d.setTextColor(textCol, bg);
+            d.setTextSize(1);
+            d.drawString("Cells (S)", CONTENT_X + 6, y + (ROW_H - 2) / 2);
+
+            // Value box with arrows
+            char cellBuf[8];
+            snprintf(cellBuf, sizeof(cellBuf), "< %dS >", cfg.cellS);
+            d.setTextDatum(MR_DATUM);
+            d.drawString(cellBuf, CONTENT_X + CONTENT_W - 6, y + (ROW_H - 2) / 2);
+
+            // Voltage hint
+            if (!focused) {
+                char vBuf[16];
+                snprintf(vBuf, sizeof(vBuf), "%.1f-%.1fV",
+                         LIION_CELL_MIN_V * cfg.cellS,
+                         LIION_CELL_MAX_V * cfg.cellS);
+                d.setTextColor(Color::TEXT_DIM, bg);
+                d.setTextDatum(MC_DATUM);
+                d.drawString(vBuf, CONTENT_X + CONTENT_W / 2, y + (ROW_H - 2) / 2);
+            }
         }
+        y += ROW_H;
+
+        // Cell mAh
+        {
+            bool focused = (_focusIdx == 3);
+            uint16_t bg, border, textCol;
+            getFocusColors(focused, bg, border, textCol);
+            d.fillRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, bg);
+            d.drawRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, border);
+            d.setTextDatum(ML_DATUM);
+            d.setTextColor(textCol, bg);
+            d.setTextSize(1);
+            d.drawString("Cell mAh", CONTENT_X + 6, y + (ROW_H - 2) / 2);
+            char mBuf[12];
+            snprintf(mBuf, sizeof(mBuf), "%lumAh", (unsigned long)cfg.cellMah);
+            d.setTextDatum(MR_DATUM);
+            d.drawString(mBuf, CONTENT_X + CONTENT_W - 6, y + (ROW_H - 2) / 2);
+        }
+        y += ROW_H;
+
+        // Shunt mΩ
+        {
+            bool focused = (_focusIdx == 4);
+            uint16_t bg, border, textCol;
+            getFocusColors(focused, bg, border, textCol);
+            d.fillRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, bg);
+            d.drawRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, border);
+            d.setTextDatum(ML_DATUM);
+            d.setTextColor(textCol, bg);
+            d.setTextSize(1);
+            d.drawString("Shunt", CONTENT_X + 6, y + (ROW_H - 2) / 2);
+            char sBuf[12];
+            snprintf(sBuf, sizeof(sBuf), "%lumΩ", (unsigned long)cfg.shuntMOhm);
+            d.setTextDatum(MR_DATUM);
+            d.drawString(sBuf, CONTENT_X + CONTENT_W - 6, y + (ROW_H - 2) / 2);
+        }
+        y += ROW_H;
+
+        // Reset coulomb counter button
+        {
+            float holdFrac = (_holdTracking && _focusIdx == 5)
+                             ? (float)(millis() - _focusHoldStartMs) / 2000.0f
+                             : 0.0f;
+            drawNavButton(CONTENT_X, y, CONTENT_W, ROW_H - 2,
+                          "Reset Coulomb Counter (hold)",
+                          _focusIdx == 5,
+                          _holdTracking && _focusIdx == 5, holdFrac);
+        }
+        y += ROW_H;
+    } else {
+        // INA226 not found
+        d.setTextColor(Color::TEXT_DIM, Color::BG);
+        d.setTextDatum(ML_DATUM);
+        d.setTextSize(1);
+        d.drawString("INA226 not found", CONTENT_X + 6, y + 10);
+        y += ROW_H * 2;
     }
 
-    float holdFrac = (_holdTracking && _focusIdx == 3)
-                          ? (float)(millis() - _focusHoldStartMs) / AUTO_CONFIRM_MS
-                          : 0;
+    // BACK button (always last)
+    const uint8_t backIdx = getItemCount() - 1;
+    float holdFrac = (_holdTracking && _focusIdx == backIdx)
+                     ? (float)(millis() - _focusHoldStartMs) / AUTO_CONFIRM_MS
+                     : 0.0f;
     drawNavButton(CONTENT_X, FOOTER_Y, CONTENT_W, NAV_BTN_H, "BACK",
-                  _focusIdx == 3, _holdTracking && _focusIdx == 3, holdFrac);
+                  _focusIdx == backIdx,
+                  _holdTracking && _focusIdx == backIdx, holdFrac);
 }
 
 void Display::drawDspList() {
@@ -1450,9 +1865,9 @@ void Display::drawDspList() {
 
         d.fillRect(x, yPos, presetBoxW, presetBoxH, bg);
         if (focused) { // Draw a focus rectangle for the focused preset
-            d.drawRoundRect(x, yPos, presetBoxW, presetBoxH, 2, Color::TEXT_FOCUS); // Thicker border for focus
+            d.drawRoundRect(x, yPos, presetBoxW, presetBoxH, 2, border); // Thicker border for focus
         } else {
-            d.drawRect(x, yPos, presetBoxW, presetBoxH, border);
+            d.drawRect(x, yPos, presetBoxW, presetBoxH, Color::BORDER);
         }
 
         // Preset sweep overlay (only on entry, for visual flair)
@@ -1542,7 +1957,7 @@ void Display::drawDspList() {
         } else if (focused) {
             // Focus transition animation
             if (_anim.focusTransition < 1) {
-                uint8_t bl = (uint8_t)(_anim.focusTransition * 255);
+                uint8_t bl = (uint8_t)(_anim.focusTransition * 255.0f);
                 if (isOn) {
                     // Enabled module - focus transition: BG → ACCENT
                     bg = blendColor(Color::BG, Color::ACCENT, bl);
@@ -1562,17 +1977,27 @@ void Display::drawDspList() {
         }
         
         textColor = (bg == Color::ACCENT) ? Color::BG : (focused ? Color::TEXT_FOCUS : Color::TEXT);
-        
+
         // During animation - draw sweep and DON'T overwrite with solid fill
         if (isModAnimating) {
             // Exit=true (disable): sweep BG from left, trailing shows ACCENT
             // Exit=false (enable): sweep ACCENT from left, trailing shows BG
             drawSweepAnimation(CONTENT_X, yPos, CONTENT_W, ROW_H - 2,
                                _anim.modSweepExit, _anim.modSweepProgress, Color::ACCENT);
-            // Don't draw solid bg/border - sweep animation handles complete draw
+            // Blend text color to match sweep progress so it stays readable.
+            // When enabling (exit=false): text transitions TEXT → BG (row goes BG→ACCENT)
+            // When disabling (exit=true): text transitions BG → TEXT (row goes ACCENT→BG)
+            uint8_t blend = (uint8_t)(_anim.modSweepProgress * 255);
+            if (!_anim.modSweepExit)
+                textColor = blendColor(Color::TEXT, Color::BG, blend);
+            else
+                textColor = blendColor(Color::BG, Color::TEXT, blend);
+            // For drawCentreString we still need a bg hint; use mid-animation blend
+            bg = blendColor(Color::BG, Color::ACCENT,
+                            _anim.modSweepExit ? 255 - blend : blend);
         } else {
             d.fillRect(CONTENT_X, yPos, CONTENT_W, ROW_H - 2, bg);
-            d.drawRect(CONTENT_X, yPos, CONTENT_W, ROW_H - 2, focused ? Color::ACCENT2 : border);
+            d.drawRect(CONTENT_X, yPos, CONTENT_W, ROW_H - 2, border);
         }
 
         d.setTextColor(textColor, bg);
@@ -2382,26 +2807,14 @@ void Display::drawInputRow(int16_t x, int16_t y, int16_t w, const char* label,
     TFT_eSprite& d = _spr;
     int16_t h = ROW_H - 2;
 
-    uint16_t bg, borderColor;
-    if (focused) {
-        if (_anim.focusTransition < 1) {
-            uint8_t bl = (uint8_t)(_anim.focusTransition * 255);
-            bg = blendColor(Color::BG, Color::PANEL, bl);
-            borderColor = blendColor(Color::BORDER, Color::ACCENT, bl);
-        } else {
-            bg = Color::PANEL;
-            borderColor = Color::ACCENT;
-        }
-    } else {
-        bg = Color::BG;
-        borderColor = Color::BORDER;
-    }
+    uint16_t bg, borderColor, textColor;
+    getFocusColors(focused, bg, borderColor, textColor);
 
     d.fillRect(x, y, w, h, bg);
     d.drawRect(x, y, w, h, borderColor);
 
     d.setTextDatum(ML_DATUM);
-    d.setTextColor(focused ? Color::TEXT_FOCUS : Color::TEXT, bg);
+    d.setTextColor(textColor, bg);
     d.setTextSize(1);
     d.drawString(label, x + 4, y + h / 2);
 
@@ -2410,11 +2823,13 @@ void Display::drawInputRow(int16_t x, int16_t y, int16_t w, const char* label,
     char valBuf[12];
     snprintf(valBuf, sizeof(valBuf), "%.1f %s", value, unit ? unit : "");
 
-    d.fillRect(valX, y + 2, VAL_W, h - 4, focused ? 0x18A3 : 0x1082);
+    constexpr uint16_t VAL_BG_FOCUSED = 0x18A3;
+    constexpr uint16_t VAL_BG_NORMAL  = 0x1082;
+    uint16_t valBg = focused ? VAL_BG_FOCUSED : VAL_BG_NORMAL;
+    d.fillRect(valX, y + 2, VAL_W, h - 4, valBg);
     d.drawRect(valX, y + 2, VAL_W, h - 4, borderColor);
     d.setTextDatum(MC_DATUM);
-    d.setTextColor(focused ? Color::TEXT_FOCUS : Color::TEXT,
-                   focused ? 0x18A3 : 0x1082);
+    d.setTextColor(textColor, valBg);
     d.drawString(valBuf, valX + VAL_W / 2, y + h / 2);
 }
 
@@ -2424,22 +2839,7 @@ void Display::drawNavButton(int16_t x, int16_t y, int16_t w, int16_t h,
     TFT_eSprite& d = _spr;
 
     uint16_t bg, borderColor, textColor;
-    if (focused) {
-        if (_anim.focusTransition < 1) {
-            uint8_t bl = (uint8_t)(_anim.focusTransition * 255);
-            bg = blendColor(Color::BG, Color::PANEL, bl);
-            borderColor = blendColor(Color::BORDER, Color::ACCENT, bl);
-            textColor = blendColor(Color::TEXT, Color::TEXT_FOCUS, bl);
-        } else {
-            bg = Color::PANEL;
-            borderColor = Color::ACCENT;
-            textColor = Color::TEXT_FOCUS;
-        }
-    } else {
-        bg = Color::BG;
-        borderColor = Color::BORDER;
-        textColor = Color::TEXT;
-    }
+    getFocusColors(focused, bg, borderColor, textColor);
 
     d.fillRect(x, y, w, h, bg);
     d.drawRect(x, y, w, h, borderColor);
@@ -2516,15 +2916,41 @@ void Display::drawFilterTypeRow(int16_t x, int16_t y, int16_t w,
     }
 }
 
-void Display::drawSideBars(int16_t x,int16_t y,int16_t h){
-    TFT_eSprite& d=_spr; constexpr int16_t BAR_W=10;
-    d.drawRect(x,y,BAR_W,h,Color::BORDER); uint8_t cpuPct=(uint8_t)(_cpuTenths/10); if(cpuPct>100)cpuPct=100; int16_t cpuH=(int16_t)((uint32_t)cpuPct*h/100); uint16_t cpuCol=cpuPct>80?Color::RED:cpuPct>60?Color::YELLOW:Color::GREEN; d.fillRect(x+1,y+h-cpuH,BAR_W-2,cpuH,cpuCol);
-    d.setTextDatum(TC_DATUM); d.setTextColor(Color::TEXT_DIM,Color::BG); d.setTextSize(1); d.drawString("C",x+BAR_W/2,y-10);
-    int16_t hx=x+BAR_W+2; d.drawRect(hx,y,BAR_W,h,Color::BORDER); int16_t heapH=(int16_t)((uint32_t)_heapPct*h/100); uint16_t heapCol=_heapPct<20?Color::RED:_heapPct<40?Color::YELLOW:Color::GREEN; d.fillRect(hx+1,y+h-heapH,BAR_W-2,heapH,heapCol);
-    d.setTextDatum(TC_DATUM); d.setTextColor(Color::TEXT_DIM,Color::BG); d.drawString("H",hx+BAR_W/2,y-10);
+void Display::drawSideBars(int16_t x, int16_t y, int16_t h) {
+    TFT_eSprite& d = _spr;
+    constexpr int16_t BAR_W = 10;
+
+    // CPU bar
+    uint8_t cpuPct = (uint8_t)(_cpuTenths / 10);
+    if (cpuPct > 100) cpuPct = 100;
+    int16_t  cpuH   = (int16_t)((uint32_t)cpuPct * h / 100);
+    uint16_t cpuCol = cpuPct > 80 ? Color::RED : cpuPct > 60 ? Color::YELLOW : Color::GREEN;
+    d.drawRect(x, y, BAR_W, h, Color::BORDER);
+    if (cpuH > 0) d.fillRect(x + 1, y + h - cpuH, BAR_W - 2, cpuH, cpuCol);
+    d.setTextDatum(TC_DATUM);
+    d.setTextColor(Color::TEXT_DIM, Color::BG);
+    d.setTextSize(1);
+    d.drawString("C", x + BAR_W / 2, y - 10);
+
+    // Heap bar
+    int16_t  hx     = x + BAR_W + 2;
+    int16_t  heapH  = (int16_t)((uint32_t)_heapPct * h / 100);
+    uint16_t heapCol = _heapPct < 20 ? Color::RED : _heapPct < 40 ? Color::YELLOW : Color::GREEN;
+    d.drawRect(hx, y, BAR_W, h, Color::BORDER);
+    if (heapH > 0) d.fillRect(hx + 1, y + h - heapH, BAR_W - 2, heapH, heapCol);
+    d.setTextDatum(TC_DATUM);
+    d.setTextColor(Color::TEXT_DIM, Color::BG);
+    d.drawString("H", hx + BAR_W / 2, y - 10);
 }
 
-void Display::drawWifiBadge(int16_t x,int16_t y){TFT_eSprite& d=_spr; uint16_t col=_wifiConn?Color::ACCENT:Color::TEXT_DIM; d.setTextDatum(ML_DATUM); d.setTextColor(col,Color::BG); d.setTextSize(1); d.drawString(_wifiConn?"W+":"W-",x,y);}
+void Display::drawWifiBadge(int16_t x, int16_t y) {
+    TFT_eSprite& d = _spr;
+    uint16_t col = _wifiConn ? Color::ACCENT : Color::TEXT_DIM;
+    d.setTextDatum(ML_DATUM);
+    d.setTextColor(col, Color::BG);
+    d.setTextSize(1);
+    d.drawString(_wifiConn ? "W+" : "W-", x, y);
+}
 
 static float biquadMagnitudeDb(uint8_t type,float freq,float f0,float Q,float gainDb,float fs){
     float A=powf(10,gainDb/40); float w0=TWO_PI*f0/fs, w=TWO_PI*freq/fs;
@@ -2547,22 +2973,105 @@ static float biquadMagnitudeDb(uint8_t type,float freq,float f0,float Q,float ga
     if(denMagSq<1e-20f)return 0; return 10*log10f(numMagSq/denMagSq);
 }
 
-void Display::drawEqCurve(const EqBandDesc* bands,uint8_t nBands,int16_t rx,int16_t ry,int16_t rw,int16_t rh){
-    TFT_eSprite& d=_spr; constexpr int STEPS=DISP_W; constexpr float FS=96000;
-    int16_t prevY=-1; for(int px=0;px<STEPS;px++){float logF=(float)px/STEPS; float freq=20*powf(1000,logF); float totalDb=0; for(uint8_t b=0;b<nBands;b++){if(!bands[b].enabled)continue; totalDb+=biquadMagnitudeDb((uint8_t)bands[b].type,freq,bands[b].freq,bands[b].q,bands[b].gain,FS);} totalDb=totalDb<-24?-24:(totalDb>24?24:totalDb); int16_t curY=ry+rh/2-(int16_t)(totalDb*rh/48), cx=rx+px*rw/STEPS; if(prevY>=0&&px>0)d.drawLine(cx-rw/STEPS,prevY,cx,curY,Color::ACCENT); prevY=curY;}
+void Display::drawEqCurve(const EqBandDesc* bands, uint8_t nBands,
+                          int16_t rx, int16_t ry, int16_t rw, int16_t rh) {
+    TFT_eSprite& d = _spr;
+    // Use rw as step count so each pixel column is drawn exactly once.
+    // DISP_W was used before, causing multiple draws per pixel when rw < DISP_W.
+    const int steps = rw;
+    constexpr float FS = 96000.0f;
+    int16_t prevY = -1;
+    for (int px = 0; px < steps; px++) {
+        float logF  = (float)px / steps;
+        float freq  = 20.0f * powf(1000.0f, logF);
+        float totalDb = 0.0f;
+        for (uint8_t b = 0; b < nBands; b++) {
+            if (!bands[b].enabled) continue;
+            totalDb += biquadMagnitudeDb((uint8_t)bands[b].type, freq,
+                                         bands[b].freq, bands[b].q,
+                                         bands[b].gain, FS);
+        }
+        totalDb = totalDb < -24.0f ? -24.0f : (totalDb > 24.0f ? 24.0f : totalDb);
+        int16_t curY = ry + rh / 2 - (int16_t)(totalDb * rh / 48);
+        int16_t cx   = rx + px;
+        if (prevY >= 0 && px > 0)
+            d.drawLine(cx - 1, prevY, cx, curY, Color::ACCENT);
+        prevY = curY;
+    }
 }
 
-void Display::drawDrcCurve(float threshold,float ratio,float pregain,int16_t rx,int16_t ry,int16_t rw,int16_t rh){
-    TFT_eSprite& d=_spr; constexpr float RANGE_DB=90;
-    auto dbToX=[&](float db)->int16_t{return rx+(int16_t)((db+RANGE_DB)/RANGE_DB*rw);};
-    auto dbToY=[&](float db)->int16_t{return ry+rh-(int16_t)((db+RANGE_DB)/RANGE_DB*rh);};
-    d.fillRect(rx,ry,rw,rh,0x0821); const int8_t gridSteps[]={-80,-70,-60,-50,-40,-30,-20,-10,0}; d.setTextSize(1);
-    for(int8_t db:gridSteps){int16_t gx=dbToX(db), gy=dbToY(db); uint16_t gridCol=(db==0)?Color::BORDER:0x18C3; d.drawFastVLine(gx,ry,rh,gridCol); d.drawFastHLine(rx,gy,rw,gridCol); if(db!=0&&rx>16){char lbl[6]; snprintf(lbl,sizeof(lbl),"%d",db); d.setTextColor(Color::TEXT_DIM,0x0821); d.setTextDatum(MR_DATUM); d.drawString(lbl,rx-2,gy);}}
-    d.setTextSize(1); for(int px=0;px<rw;px+=4){float db=((float)px/rw)*RANGE_DB-RANGE_DB; int16_t x=dbToX(db), y=dbToY(db); d.drawPixel(x,y,0xC618);}
-    int16_t tx=dbToX(threshold), ty=dbToY(threshold); for(int16_t y=ry;y<ry+rh;y+=4)d.drawPixel(tx,y,Color::RED); for(int16_t x=rx;x<rx+rw;x+=4)d.drawPixel(x,ty,Color::RED);
-    auto transferFn=[&](float inputDb)->float{if(inputDb<=threshold)return inputDb; return threshold+(inputDb-threshold)/ratio;};
-    int16_t prevX=-1,prevY=-1; for(int px=0;px<=rw;px++){float inputDb=((float)px/rw)*RANGE_DB-RANGE_DB, outputDb=transferFn(inputDb)+pregain; int16_t cx=rx+px, cy=dbToY(outputDb); if(prevX>=0)d.drawLine(prevX,prevY,cx,cy,Color::GREEN); prevX=cx; prevY=cy;}
-    if(rh>40){int16_t lx=rx+4, ly=ry+rh-32; d.setTextColor(Color::RED,0x0821); d.setTextDatum(ML_DATUM); d.setTextSize(1); char thrLbl[16]; snprintf(thrLbl,sizeof(thrLbl),"Thr %.0fdB",threshold); d.drawString(thrLbl,lx,ly); d.setTextColor(Color::GREEN,0x0821); char ratLbl[12]; snprintf(ratLbl,sizeof(ratLbl),"%.0f:1",ratio); d.drawString(ratLbl,lx,ly+12);}
+void Display::drawDrcCurve(float threshold, float ratio, float pregain,
+                           int16_t rx, int16_t ry, int16_t rw, int16_t rh) {
+    TFT_eSprite& d = _spr;
+    constexpr float    RANGE_DB   = 90.0f;
+    constexpr uint16_t COL_BG     = 0x0821; // dark graph background
+    constexpr uint16_t COL_GRID   = 0x18C3; // dim grid lines
+    constexpr uint16_t COL_UNITY  = 0xC618; // unity-gain diagonal (grey)
+
+    auto dbToX = [&](float db) -> int16_t {
+        return rx + (int16_t)((db + RANGE_DB) / RANGE_DB * rw);
+    };
+    auto dbToY = [&](float db) -> int16_t {
+        return ry + rh - (int16_t)((db + RANGE_DB) / RANGE_DB * rh);
+    };
+    auto transferFn = [&](float inputDb) -> float {
+        if (inputDb <= threshold) return inputDb;
+        return threshold + (inputDb - threshold) / ratio;
+    };
+
+    d.fillRect(rx, ry, rw, rh, COL_BG);
+
+    // Grid lines
+    d.setTextSize(1);
+    const int8_t gridSteps[] = { -80, -70, -60, -50, -40, -30, -20, -10, 0 };
+    for (int8_t db : gridSteps) {
+        int16_t  gx      = dbToX(db);
+        int16_t  gy      = dbToY(db);
+        uint16_t gridCol = (db == 0) ? Color::BORDER : COL_GRID;
+        d.drawFastVLine(gx, ry, rh, gridCol);
+        d.drawFastHLine(rx, gy, rw, gridCol);
+        if (db != 0 && rx > 16) {
+            char lbl[6];
+            snprintf(lbl, sizeof(lbl), "%d", db);
+            d.setTextColor(Color::TEXT_DIM, COL_BG);
+            d.setTextDatum(MR_DATUM);
+            d.drawString(lbl, rx - 2, gy);
+        }
+    }
+
+    // Unity-gain diagonal (dotted)
+    for (int px = 0; px < rw; px += 4) {
+        float   db = ((float)px / rw) * RANGE_DB - RANGE_DB;
+        int16_t ux = dbToX(db), uy = dbToY(db);
+        d.drawPixel(ux, uy, COL_UNITY);
+    }
+
+    // Threshold crosshair (dotted red)
+    int16_t tx = dbToX(threshold), ty = dbToY(threshold);
+    for (int16_t py = ry; py < ry + rh; py += 4) d.drawPixel(tx, py, Color::RED);
+    for (int16_t px = rx; px < rx + rw; px += 4) d.drawPixel(px, ty, Color::RED);
+
+    // Transfer function curve (green)
+    int16_t prevX = -1, prevY = -1;
+    for (int px = 0; px <= rw; px++) {
+        float   inputDb  = ((float)px / rw) * RANGE_DB - RANGE_DB;
+        float   outputDb = transferFn(inputDb) + pregain;
+        int16_t cx = rx + px, cy = dbToY(outputDb);
+        if (prevX >= 0) d.drawLine(prevX, prevY, cx, cy, Color::GREEN);
+        prevX = cx; prevY = cy;
+    }
+
+    // Labels
+    if (rh > 40) {
+        int16_t lx = rx + 4, ly = ry + rh - 32;
+        char thrLbl[16], ratLbl[12];
+        snprintf(thrLbl, sizeof(thrLbl), "Thr %.0fdB", threshold);
+        snprintf(ratLbl, sizeof(ratLbl), "%.0f:1",     ratio);
+        d.setTextDatum(ML_DATUM);
+        d.setTextSize(1);
+        d.setTextColor(Color::RED,   COL_BG); d.drawString(thrLbl, lx, ly);
+        d.setTextColor(Color::GREEN, COL_BG); d.drawString(ratLbl, lx, ly + 12);
+    }
 }
 
 void Display::updateAnimations() {

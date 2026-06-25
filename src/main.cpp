@@ -28,6 +28,7 @@
 #include "control/wifi/web_server.h"
 #include "control/display/display.h"
 #include "control/display/encoder.h"
+#include "control/display/battery_monitor.h"
 #include "utils/status_led.h"
 #include "utils/debug_log.h"
 
@@ -46,6 +47,7 @@ static DspWebServer    g_webServer;
 static StatusLED       g_statusLED;
 static Display         g_display;
 static Encoder         g_encoder;
+static BatteryMonitor  g_battery;
 
 // Audio processing buffer (16-byte aligned for SIMD)
 static float __attribute__((aligned(16))) g_audioBuf[DSP_FRAME_SAMPLES];
@@ -589,7 +591,10 @@ void setup() {
     }
 
     #ifdef USING_DISPLAY
+        g_battery.begin(BATT_SDA, BATT_SCL);
+        g_battery.onCritical([]{ g_userShutdownRequest = true; });
         g_display.init();
+        g_display.setBattery(&g_battery);
         g_encoder.init(ENCODER_A_PIN, ENCODER_B_PIN, ENCODER_BTN_PIN);
     #endif
 

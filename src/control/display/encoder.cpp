@@ -59,6 +59,10 @@ void Encoder::poll(EncoderEvent* event) {
             _btnState   = BtnState::PRESSED;
             _btnPressMs = now;
             _holdFired  = false;
+            // Fire SW_PRESS immediately so the display can arm timers on button-down.
+            // This event does NOT replace SW / SW_DOUBLE / SW_HOLD* — those still fire
+            // on release / at threshold as normal.
+            _pendingBtn = EncoderEvent::SW_PRESS;
         }
         break;
 
