@@ -495,6 +495,7 @@ private:
     BatteryMonitor* _battery = nullptr;
     uint8_t  _mainMenuTab          = 0;
     uint8_t  _mainMenuActiveParam  = 0;   // 0=Vol,1=Bass,2=Mid,3=Treble
+    bool     _mmTabReturnViaHold   = false;
     bool     _powerOffUserRequest  = false;
     bool     _powerOffScreenActive = false;
     uint32_t _powerOffStartMs      = 0;

@@ -267,7 +267,7 @@ volatile uint16_t s_cpu_usage = 0;
 volatile uint8_t  s_heapPct = 0;
 volatile uint32_t s_fs = 0;
 
-void controlTask(void* param) {
+void IRAM_ATTR controlTask(void* param) {
     LOG_INFO("CTRL", "Control task started on core %d", xPortGetCoreID());
     LOG_INFO("INIT", "System Ready, CPU: %lu MHz, Free Heap: %lu bytes",
              (unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFreeHeap());
@@ -489,7 +489,7 @@ void controlTask(void* param) {
 // Display Task (Core 0, Priority 5)
 // ============================================================================
 
-void displayTask(void* param) {
+void IRAM_ATTR displayTask(void* param) {
     LOG_INFO("Display", "Display task started on core %d", xPortGetCoreID());
 
     while (true) {

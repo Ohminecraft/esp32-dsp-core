@@ -2,16 +2,16 @@
  * @file battery_monitor.cpp
  * @brief INA226-based battery monitor implementation.
  *
- * INA226 config used:
+ * Uses RobTillaart/INA226 for the I2C layer and calibration-register math.
+ * Configuration is kept equivalent to the original driver:
  *   AVG = 16 samples, VBUS CT = 1.1 ms, VSHUNT CT = 1.1 ms, mode = continuous
- *   CONFIG register = 0x4527
+ *   (continuous shunt+bus is the library's default mode, no need to set it again)
  *
- * Calibration formula (from datasheet):
- *   CAL = 0.00512 / (CurrentLSB × Rshunt)
- *   CurrentLSB = maxCurrent / 32768
- *   We target maxCurrent = 20 A → CurrentLSB = 610.35 µA ≈ 0.0006104 A
- *
- * Shunt voltage LSB = 2.5 µV (fixed by INA226 hardware)
+ * Calibration: uses setMaxCurrentShunt(maxCurrent, shuntOhm) instead of the
+ * hand-written CAL = 0.00512 / (CurrentLSB × Rshunt) formula — the library
+ * computes it for you, with normalization to reduce truncation/rounding
+ * error, and returns an error code if shunt × maxCurrent would exceed the
+ * 81.9 mV the INA226 can actually measure.
  */
 
 #include "battery_monitor.h"
@@ -22,20 +22,7 @@
 #include <Arduino.h>
 #include <cmath>
 #include <algorithm>
-
-// ── INA226 CONFIG register value ─────────────────────────────────────────────
-// Bits[15:13] = 010 (reset bit clear)
-// Bits[11:9]  = 010 (AVG = 16)
-// Bits[8:6]   = 100 (VBUS CT = 1.1 ms)
-// Bits[5:3]   = 100 (VSHUNT CT = 1.1 ms)
-// Bits[2:0]   = 111 (continuous shunt + bus)
-static constexpr uint16_t INA226_CONFIG_VALUE = 0x4527;
-
-// INA226 fixed shunt voltage LSB = 2.5 µV
-static constexpr float SHUNT_LSB_UV = 2.5f;
-
-// Bus voltage LSB = 1.25 mV
-static constexpr float BUS_LSB_MV   = 1.25f;
+#include <cstring>
 
 // ── Li-Ion OCV → SoC lookup table (per-cell, 11 points) ─────────────────────
 // Source: typical Li-Ion discharge curve
@@ -50,45 +37,40 @@ static constexpr float OCV_SOC[OCV_TABLE_SIZE] = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// I2C helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-void BatteryMonitor::writeReg(uint8_t reg, uint16_t val) {
-    Wire.beginTransmission(INA226_ADDR);
-    Wire.write(reg);
-    Wire.write((uint8_t)(val >> 8));
-    Wire.write((uint8_t)(val & 0xFF));
-    Wire.endTransmission();
-}
-
-uint16_t BatteryMonitor::readReg(uint8_t reg) {
-    Wire.beginTransmission(INA226_ADDR);
-    Wire.write(reg);
-    Wire.endTransmission(false);
-    Wire.requestFrom((uint8_t)INA226_ADDR, (uint8_t)2);
-    if (Wire.available() < 2) return 0xFFFF;
-    uint16_t hi = Wire.read();
-    uint16_t lo = Wire.read();
-    return (uint16_t)((hi << 8) | lo);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Calibration — recomputed whenever config changes
 // ─────────────────────────────────────────────────────────────────────────────
 
-void BatteryMonitor::configure() {
-    // currentLSB in Amperes, targeting max 20 A range
-    float rShuntOhm  = (float)_cfg.shuntMOhm / 1000.0f;
-    float currentLSB = 20.0f / 32768.0f;                 // ~610 µA
-    float calRaw     = 0.00512f / (currentLSB * rShuntOhm);
-    uint16_t calReg  = (uint16_t)calRaw;
+bool BatteryMonitor::configure() {
+    // AVG = 16, VBUS CT = VSHUNT CT = 1.1 ms (same as original 0x4527 config).
+    // The library's default mode is already ShuntBusContinuous (7), so no
+    // need to set it explicitly.
+    _ina.setAverage(INA226_16_SAMPLES);
+    _ina.setBusVoltageConversionTime(INA226_1100_us);
+    _ina.setShuntVoltageConversionTime(INA226_1100_us);
 
-    writeReg(INA226_REG_CONFIG,      INA226_CONFIG_VALUE);
-    writeReg(INA226_REG_CALIBRATION, calReg);
+    float rShuntOhm = (float)_cfg.shuntMOhm / 1000.0f;
 
-    // Store currentLSB for later use in update() — encode in µA as integer
-    // We re-derive it in update() from the same formula to stay self-contained.
-    (void)currentLSB; // used inline in update()
+    // The INA226 shunt ADC only covers ±81.92 mV (hardware limit).
+    // The original code's "maxCurrent = 20 A" target was never physically
+    // reachable with a 100 mΩ shunt: 20 A x 0.1 Ω = 2000 mV, way above
+    // 81.92 mV — the hand-rolled driver just never validated that, so the
+    // bug stayed silent (real measurable range was capped at ~0.82 A all
+    // along). RobTillaart's setMaxCurrentShunt() correctly rejects it with
+    // INA226_ERR_SHUNTVOLTAGE_HIGH.
+    //
+    // Derive the actual max current the configured shunt allows, with a
+    // ~10% margin under the hardware ceiling, and cap at 20 A (the
+    // application's intended upper bound) in case shuntMOhm is later
+    // changed to something very small.
+    constexpr float INA226_MAX_SHUNT_V = 0.073f; // 73 mV, ~10% margin under 81.92 mV
+    float maxCurrent = std::min(20.0f, INA226_MAX_SHUNT_V / rShuntOhm);
+
+    int err = _ina.setMaxCurrentShunt(maxCurrent, rShuntOhm);
+    if (err != INA226_ERR_NONE) {
+        LOG_ERROR("BATT", "Ina226 calibration failed, err=0x%04X", err);
+        return false;
+    }
+    return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,25 +83,29 @@ bool BatteryMonitor::begin(uint8_t sdaPin, uint8_t sclPin) {
 
     Wire.begin(sdaPin, sclPin);
 
-    // Check manufacturer ID (should be 0x5449)
-    uint16_t mfrId = readReg(INA226_REG_MFR_ID);
-    if (mfrId != 0x5449) {
+    // _ina.begin() only checks whether the address ACKs on the bus.
+    // Also check the Manufacturer ID (0x5449) to make sure it's really an INA226.
+    if (!_ina.begin() || _ina.getManufacturerID() != 0x5449) {
         _status.inaPresent = false;
-        return false;
         LOG_ERROR("BATT", "Unable to detect Ina226");
+        return false;
     }
 
     _status.inaPresent = true;
 
     loadConfig();
-    configure();
+    if (!configure()) {
+        // Chip is still present, just current/power readings will be wrong
+        // until calibration is fixed (e.g. by setting a more sane shuntMOhm).
+        LOG_ERROR("BATT", "Ina226 found but calibration failed");
+    }
 
     // Restore coulomb counter from NVS
     nvs_handle_t nvs;
     if (nvs_open(NVS_BAT_NS, NVS_READONLY, &nvs) == ESP_OK) {
         uint32_t rawBits = 0;
         if (nvs_get_u32(nvs, NVS_KEY_COULOMBS, &rawBits) == ESP_OK) {
-            _consumedMah = *reinterpret_cast<float*>(&rawBits);
+            std::memcpy(&_consumedMah, &rawBits, sizeof(_consumedMah));
             if (!std::isfinite(_consumedMah) || _consumedMah < 0.0f)
                 _consumedMah = 0.0f;
         }
@@ -144,19 +130,15 @@ void BatteryMonitor::update() {
     float dtS = (float)(now - _lastUpdateMs) / 1000.0f;
     _lastUpdateMs = now;
 
-    // ── Read bus voltage ──────────────────────────────────────────────────────
-    int16_t busRaw   = (int16_t)readReg(INA226_REG_BUS_V);
-    _status.busVoltage = busRaw * BUS_LSB_MV / 1000.0f;   // → Volts
+    // ── Read directly through the library (sign + LSB scaling handled for us) ──
+    _status.busVoltage = _ina.getBusVoltage();    // V
+    _status.currentMa  = _ina.getCurrent_mA();    // mA — discharge positive, charge negative
+    _status.powerMw    = _ina.getPower_mW();      // mW (measured by the chip, not a manual V×I)
 
-    // ── Read shunt voltage → current ─────────────────────────────────────────
-    // INA226 shunt reg is signed 16-bit, LSB = 2.5 µV
-    int16_t shuntRaw = (int16_t)readReg(INA226_REG_SHUNT_V);
-    float shuntUv    = shuntRaw * SHUNT_LSB_UV;            // µV
-    float rShuntOhm  = (float)_cfg.shuntMOhm / 1000.0f;
-    _status.currentMa = (shuntUv / 1e6f) / rShuntOhm * 1000.0f; // → mA
-
-    // ── Power ────────────────────────────────────────────────────────────────
-    _status.powerMw = _status.busVoltage * _status.currentMa;
+    // NOTE: the sign convention (positive = discharge) depends on shunt wiring
+    // polarity. Double-check on real hardware after flashing — if it's
+    // reversed, swap the V+/V- shunt connections or flip the sign of
+    // currentMa here.
 
     // ── Coulomb counter (only track discharge; positive current = discharging) ─
     if (_status.currentMa > 0.0f) {
@@ -164,17 +146,18 @@ void BatteryMonitor::update() {
         float totalMah = (float)(_cfg.cellMah);
         if (_consumedMah > totalMah) _consumedMah = totalMah;
     }
-    _status.consumedMah = _consumedMah;
 
     // ── SoC ──────────────────────────────────────────────────────────────────
+    // (may re-anchor _consumedMah at the OCV table's top/bottom — see below)
     updateSoC();
+    _status.consumedMah = _consumedMah;
 
     // ── State machine ─────────────────────────────────────────────────────────
-    float packMinV = LIION_CELL_MIN_V  * _cfg.cellS;
+    float packMinV  = LIION_CELL_MIN_V  * _cfg.cellS;
     float packWarnV = LIION_CELL_WARN_V * _cfg.cellS;
 
     BatteryState newState;
-    if (_status.currentMa < -50.0f) {          // >50 mA flowing in = charging
+    if (_status.currentMa < 0.0f) {          // >0.0 mA flowing in = charging
         newState = BatteryState::CHARGING;
     } else if (_status.busVoltage < packMinV) {
         newState = BatteryState::CRITICAL;
@@ -201,7 +184,7 @@ void BatteryMonitor::update() {
         nvs_handle_t nvs;
         if (nvs_open(NVS_BAT_NS, NVS_READWRITE, &nvs) == ESP_OK) {
             uint32_t rawBits;
-            memcpy(&rawBits, &_consumedMah, sizeof(rawBits));
+            std::memcpy(&rawBits, &_consumedMah, sizeof(rawBits));
             nvs_set_u32(nvs, NVS_KEY_COULOMBS, rawBits);
             nvs_commit(nvs);
             nvs_close(nvs);
@@ -214,8 +197,8 @@ void BatteryMonitor::update() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 float BatteryMonitor::ocvToSoc(float cellV) const {
-    if (cellV <= OCV_V[0])                    return OCV_SOC[0];
-    if (cellV >= OCV_V[OCV_TABLE_SIZE - 1])   return OCV_SOC[OCV_TABLE_SIZE - 1];
+    if (cellV <= OCV_V[0])                   return OCV_SOC[0];
+    if (cellV >= OCV_V[OCV_TABLE_SIZE - 1])  return OCV_SOC[OCV_TABLE_SIZE - 1];
     for (uint8_t i = 1; i < OCV_TABLE_SIZE; i++) {
         if (cellV <= OCV_V[i]) {
             float t = (cellV - OCV_V[i-1]) / (OCV_V[i] - OCV_V[i-1]);
@@ -227,13 +210,34 @@ float BatteryMonitor::ocvToSoc(float cellV) const {
 
 void BatteryMonitor::updateSoC() {
     float cellV    = _status.busVoltage / (float)_cfg.cellS;
-    float ocvSoc   = ocvToSoc(cellV);
+    float totalMah = (float)_cfg.cellMah;
+
+    // Anchor full/empty against the real-world voltage limits (charger
+    // cutoff / hard shutdown threshold) rather than the raw OCV table
+    // extremes (3.00 V / 4.20 V), since a real pack's charger will stop at
+    // LIION_CELL_MAX_V and the system shuts down at LIION_CELL_MIN_V long
+    // before the table's edges are ever reached. At these points the
+    // voltage reading is unambiguous regardless of instantaneous current,
+    // so we re-anchor the coulomb counter instead of blending — otherwise
+    // SoC could drift below 100% (or above 0%) forever, since _consumedMah
+    // only ever moves one direction without an explicit reset.
+    if (cellV >= LIION_CELL_MAX_V) {
+        _consumedMah = 0.0f;
+        _status.soc  = 1.0f;
+        return;
+    }
+    if (cellV <= LIION_CELL_MIN_V) {
+        _consumedMah = totalMah;
+        _status.soc  = 0.0f;
+        return;
+    }
+
+    float ocvSoc = ocvToSoc(cellV);
 
     // Coulomb counter SoC
-    float totalMah  = (float)_cfg.cellMah;
-    float ccSoc     = (totalMah > 0.0f)
-                      ? 1.0f - (_consumedMah / totalMah)
-                      : 0.0f;
+    float ccSoc = (totalMah > 0.0f)
+                  ? 1.0f - (_consumedMah / totalMah)
+                  : 0.0f;
     ccSoc = std::max(0.0f, std::min(1.0f, ccSoc));
 
     // When at rest (|I| < 50 mA), OCV is reliable → weight it heavily.
@@ -251,8 +255,8 @@ bool BatteryMonitor::loadConfig() {
     nvs_handle_t nvs;
     if (nvs_open(NVS_BAT_NS, NVS_READONLY, &nvs) != ESP_OK) return false;
 
-    uint8_t  cellS    = _cfg.cellS;
-    uint32_t cellMah  = _cfg.cellMah;
+    uint8_t  cellS     = _cfg.cellS;
+    uint32_t cellMah   = _cfg.cellMah;
     uint32_t shuntMOhm = _cfg.shuntMOhm;
 
     nvs_get_u8 (nvs, NVS_KEY_CELL_S,     &cellS);
@@ -273,14 +277,16 @@ void BatteryMonitor::saveConfig() {
     nvs_set_u32(nvs, NVS_KEY_CELL_MAH,   _cfg.cellMah);
     nvs_set_u32(nvs, NVS_KEY_SHUNT_MOHM, _cfg.shuntMOhm);
     uint32_t rawBits;
-    memcpy(&rawBits, &_consumedMah, sizeof(rawBits));
+    std::memcpy(&rawBits, &_consumedMah, sizeof(rawBits));
     nvs_set_u32(nvs, NVS_KEY_COULOMBS, rawBits);
     nvs_commit(nvs);
     nvs_close(nvs);
 }
 
 void BatteryMonitor::applyConfig() {
-    configure();
+    if (!configure()) {
+        LOG_ERROR("BATT", "Ina226 re-calibration failed");
+    }
     saveConfig();
 }
 

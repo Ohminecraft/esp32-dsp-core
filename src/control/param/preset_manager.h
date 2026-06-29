@@ -6,7 +6,7 @@
 #ifndef PRESET_MANAGER_H
 #define PRESET_MANAGER_H
 
-#include <Preferences.h>
+#include <nvs.h>
 #include "config.h"
 #include "../../effects/dsp_pipeline.h"
 
@@ -60,7 +60,6 @@ public:
 
 
 private:
-    Preferences _prefs;
     uint8_t currentpresetidx = 0;
 
     String getSlotKey(uint8_t slot);

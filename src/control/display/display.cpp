@@ -497,7 +497,7 @@ void Display::update(EncoderEvent enc) {
     if (currentScreen() == ScreenID::SPLASH) {
         if (millis() - _splashStartMs >= SPLASH_DURATION_MS) {
             _navStack[_navTop] = { ScreenID::MAIN_MENU, DisplayModuleID::NONE, 0 };
-            _focusIdx = 0; _dirty = true;
+            _focusIdx = 0; _mainMenuTab = 0; _dirty = true;
             // ── Start volume animation: 0 → vol with deceleration ──
             _anim.volAnimating = true;
             _anim.volFrom = 0.0f;
@@ -562,6 +562,7 @@ void Display::update(EncoderEvent enc) {
         uint32_t held = millis() - _mmTabReturnStartMs;
         if (held >= TAB_RETURN_HOLD_MS) {
             _mmTabReturnArmed = false;
+            _mmTabReturnViaHold = true;   // next SW release at the tab bar should flip tabs
             _anim.prevFocusIdx = _focusIdx;
             _focusIdx = 0;
             _anim.focusTransition = 0.0f;
@@ -618,6 +619,12 @@ void Display::handleEncoder(EncoderEvent enc) {
         _mmTabReturnArmed = false;
     }
 
+    // A double-click or HOLD3 means something other than a plain tab-bar release
+    // happened — cancel any pending hold-to-switch-tab flip so it doesn't fire later.
+    if (enc == EncoderEvent::SW_DOUBLE || enc == EncoderEvent::SW_HOLD3) {
+        _mmTabReturnViaHold = false;
+    }
+
     if (enc == EncoderEvent::SW_HOLD3) {
         if (s == ScreenID::MAIN_MENU) { pushScreen(ScreenID::SETTINGS); _dirty = true; return; }
         if (s != ScreenID::SPLASH) { while (_navTop > 0) _navTop--;
@@ -635,7 +642,8 @@ void Display::handleEncoder(EncoderEvent enc) {
                 // At tab bar: CW/CCW switches the active tab
                 _mainMenuTab = (_mainMenuTab + (dir > 0 ? 1 : -1) + 2) % 2;
                 _focusIdx = 1;   // jump into first item of the newly selected tab
-                _mainMenuActiveParam = 0;   // keep big-value display in sync with pill 0 (Vol)
+                _mmTabReturnViaHold = false;   // explicit rotate overrides any pending hold-flip
+                if (_mainMenuTab == 0) _mainMenuActiveParam = 0;   // sync with pill 0 (Vol)
                 startFocusTransition();
             } else if (_mainMenuTab == 0) {
                 // PARAMS tab: CW/CCW adjusts the value of the currently focused pill
@@ -707,24 +715,17 @@ void Display::handleEncoder(EncoderEvent enc) {
 
     if (enc == EncoderEvent::SW) {
         if (s == ScreenID::MAIN_MENU) {
-            // If the tab-return hold already fired, _mmTabReturnArmed is false and
-            // _focusIdx is now 0. In that case the SW release should be swallowed
-            // (the action already happened during the hold). We detect this by
-            // checking whether _anim.prevFocusIdx was > 0 AND focusIdx is now 0
-            // AND the arm is disarmed — meaning we just returned via hold.
-            // Simple guard: if focusIdx==0 but prevFocusIdx>0 and transition
-            // is still running, this SW is the release of a hold — skip it.
-            bool tabReturnJustFired = (_focusIdx == 0)
-                                   && (_anim.prevFocusIdx > 0)
-                                   && (_anim.focusTransition < 1.0f);
-            if (tabReturnJustFired) { _dirty = true; return; }
-
             if (_focusIdx == 0) {
-                // Tab bar focused → SW switches tab
-                _mainMenuTab = (_mainMenuTab + 1) % 2;
-                _focusIdx = 1;           // jump into first item of new tab
-                _mainMenuActiveParam = 0;   // keep big-value display in sync with pill 0 (Vol)
-                startFocusTransition();
+                if (_mmTabReturnViaHold && enc != EncoderEvent::SW_DOUBLE && enc != EncoderEvent::SW_HOLD3) {
+                        // This SW release completes a hold-to-switch gesture (held inside
+                        // a tab until the hold-poll snapped focus back to the tab bar) →
+                        // flip to the other tab as the shortcut.
+                        _mmTabReturnViaHold = false;
+                        _mainMenuTab = (_mainMenuTab + 1) % 2;
+                    }
+                    _focusIdx = 1;           // jump into first item of the (possibly new) tab
+                    if (_mainMenuTab == 0) _mainMenuActiveParam = 0;   // sync with pill 0 (Vol)
+                    startFocusTransition();
             } else if (_mainMenuTab == 0) {
                 // PARAMS tab: SW on pill 1-4 → cycle to next pill + update display
                 // Wrap is 1→2→3→4→1: must NEVER land on 0 (that's the tab-bar sentinel)
@@ -1060,14 +1061,20 @@ void Display::editDelta(int8_t dir) {
         uint8_t bandIdx = nav.subContext;
         EQFilterType oldType = _bandEditType;
         int8_t t = (int8_t)_bandEditType + dir;
+
         if (t < 0) t = (int8_t)EQFilterType::EQ_FILTER_TYPE_COUNT - 3;
         if (t >= (int8_t)EQFilterType::EQ_FILTER_TYPE_COUNT - 2) t = 0;
         _bandEditType = (EQFilterType)t;
+
         bool oldGain = EQ_FILTER_HAS_GAIN[(uint8_t)oldType], newGain = EQ_FILTER_HAS_GAIN[(uint8_t)_bandEditType];
         if (oldGain && !newGain && _focusIdx > 1) _focusIdx--;
         else if (!oldGain && newGain && _focusIdx > 0) _focusIdx++;
-        _itemCount = getItemCount(); if (_focusIdx >= _itemCount) _focusIdx = _itemCount - 1;
-        if (eq && bandIdx < MAX_EQ_BANDS) { EQFilterParams p = eq->getBandParams(bandIdx); p.type = (int16_t)_bandEditType; eq->setBand(bandIdx, p); }
+        _itemCount = getItemCount();
+        if (_focusIdx >= _itemCount) _focusIdx = _itemCount - 1;
+        if (eq && bandIdx < MAX_EQ_BANDS) {
+            EQFilterParams p = eq->getBandParams(bandIdx);
+            p.type = (int16_t)_bandEditType; eq->setBand(bandIdx, p); 
+        }
         _dirty = true; return;
     }
     if (s == ScreenID::KEYBOARD) {
@@ -1083,8 +1090,10 @@ void Display::editDelta(int8_t dir) {
         bool hasGain = EQ_FILTER_HAS_GAIN[(uint8_t)_bandEditType];
         uint8_t qItem = hasGain ? 3 : 2;
         if (_focusIdx == 1) {
-            float newF = constrain((float)p.f0 + dir * 10.0f, 20.0f, 20000.0f);
-            p.f0 = (uint16_t)newF; p.type = (int16_t)_bandEditType; eq->setBand(bandIdx, p); _dirty = true;
+            uint16_t newF = constrain(p.f0 < 1000 ? (p.f0 + dir * 10) : p.f0 < 10000 ? (p.f0 + dir * 100) : (p.f0 + dir * 1000), 20, 20000);
+            p.f0 = newF;
+            p.type = (int16_t)_bandEditType;
+            eq->setBand(bandIdx, p); _dirty = true;
         } else if (hasGain && _focusIdx == 2) {
             float curGain = DB_Q8_TO_FLOAT(p.gain);
             float newGain = constrain(curGain + dir * 0.5f, -24.0f, 24.0f);
@@ -1250,8 +1259,29 @@ void Display::draw() {
 
 void Display::drawSplash() {
     TFT_eSprite& d = _spr;
-    for (int16_t y = 0; y < DISP_H; y++) d.drawFastHLine(0, y, DISP_W, blendColor(Color::BG, Color::PANEL, (uint8_t)(y*255/DISP_H)));
-    d.setTextDatum(MC_DATUM); d.setTextColor(Color::ACCENT, Color::BG); d.setTextSize(3); d.drawString("DSP CORE", DISP_W/2, DISP_H/2-30);
+
+    // ── Gradient chéo: trái-trên → phải-dưới ──────────────────────────────────
+    // t = (x + y) chuẩn hóa về 0..255, thay cho chỉ dùng y như cũ
+    constexpr int16_t maxSum = (DISP_W - 1) + (DISP_H - 1);
+    for (int16_t y = 0; y < DISP_H; y++) {
+        for (int16_t x = 0; x < DISP_W; x++) {
+            uint8_t t = (uint8_t)(((int32_t)(x + y) * 255) / maxSum);
+            d.drawPixel(x, y, blendColor(Color::BG, Color::ACCENT2, t));
+        }
+    }
+
+    // ── Text vẽ 1 lần (không lặp theo y nữa), nền trong suốt để gradient
+    //    hiện ra phía sau chữ thay vì 1 màu nền cố định ──────────────────────
+    d.setTextDatum(MC_DATUM);
+    d.setFreeFont(&Century751BT12);
+    d.setTextSize(1);
+    d.setTextColor(Color::ACCENT);                       // 1-arg = transparent bg
+    d.drawString("ESP32 DSP CORE", DISP_W / 2, DISP_H / 2 - 30);
+    d.setTextSize(2);
+    d.setTextFont(1);
+    d.setTextColor(Color::TEXT);                          // transparent bg
+    d.drawString("v" FIRMWARE_VERSION, DISP_W / 2, DISP_H / 2 + 6);
+    d.drawString("by Nagumo", DISP_W / 2, DISP_H / 2 + 24);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1412,7 +1442,7 @@ void Display::drawMainMenu() {
     if (_battery && _battery->isPresent()) {
         const BatteryStatus& bat = _battery->getStatus();
         char vaBuf[24];
-        snprintf(vaBuf, sizeof(vaBuf), "%.2fV  %.0fmA", bat.busVoltage, bat.currentMa);
+        snprintf(vaBuf, sizeof(vaBuf), "%.2fV  %.2fA", bat.busVoltage, bat.currentMa / 1000);
         uint16_t vaCol = (bat.state == BatteryState::CRITICAL) ? Color::RED
                         : (bat.state == BatteryState::WARNING)  ? Color::YELLOW
                                                                   : Color::TEXT_DIM;
@@ -1542,7 +1572,7 @@ void Display::drawMainMenu() {
         char bigBuf[10];
         formatFloat(bigBuf, sizeof(bigBuf), displayValue, paramDecs[activeParam]);
         d.setTextDatum(MC_DATUM);
-        d.setTextColor(Color::TEXT, Color::BG);
+        d.setTextColor(_mainMenuAutosaveArmed ? Color::TEXT_FOCUS : Color::TEXT, Color::BG);
         d.setTextSize(4);
         d.drawString(bigBuf, CONTENT_X + CONTENT_W / 2, BIG_Y + BIG_AREA / 2);
 
@@ -1882,7 +1912,7 @@ void Display::drawDspList() {
         if (isAnimEntry) textColor = blendColor(Color::TEXT, Color::BG, (uint8_t)(_anim.presetSweepProgress * 255));
         if (isAnimExit) textColor = blendColor(Color::BG, Color::TEXT, (uint8_t)(_anim.presetSweepProgress * 255));
 
-        d.setTextColor(textColor, bg);
+        d.setTextColor(textColor);
         d.setTextDatum(MC_DATUM);
         d.drawString(label, x + presetBoxW / 2, yPos + presetBoxH / 2 - 4);
     }
@@ -1922,7 +1952,7 @@ void Display::drawDspList() {
     snprintf(saveLabel, sizeof(saveLabel), "SAVE PRESET %u",
             (unsigned)(_presetTargetSlot + 1));
 
-    d.setTextColor(saveFocused ? Color::TEXT_FOCUS : Color::TEXT, saveBg);
+    d.setTextColor(saveFocused ? Color::TEXT_FOCUS : Color::TEXT);
     d.setTextDatum(MC_DATUM);
     d.drawString(saveLabel, saveX + saveW / 2, yPos + saveH / 2);
 
@@ -2000,7 +2030,7 @@ void Display::drawDspList() {
             d.drawRect(CONTENT_X, yPos, CONTENT_W, ROW_H - 2, border);
         }
 
-        d.setTextColor(textColor, bg);
+        d.setTextColor(textColor);
         d.setTextDatum(ML_DATUM);
         d.drawCentreString(MODULE_LIST[mi].name, CONTENT_X + CONTENT_W / 2, yPos + (ROW_H - 6) / 2, 1);
 
@@ -2016,7 +2046,7 @@ void Display::drawDspList() {
     d.drawRect(CONTENT_X, backY, CONTENT_W, NAV_BTN_H,
                backFocused ? Color::ACCENT : Color::BORDER);
 
-    d.setTextColor(backFocused ? Color::TEXT_FOCUS : Color::TEXT, backBg);
+    d.setTextColor(backFocused ? Color::TEXT_FOCUS : Color::TEXT);
     d.setTextDatum(MC_DATUM);
     d.drawString("BACK", CONTENT_X + CONTENT_W / 2, backY + NAV_BTN_H / 2);
 
@@ -2283,7 +2313,7 @@ void Display::drawEqBandEdit() {
 
     drawSliderRow(CONTENT_X, HEADER_H + 4 + ROW_H, CONTENT_W, "Freq", curFreq,
                   20, 20000, "Hz", _focusIdx == 1,
-                  _focusIdx == 1 && _editMode);
+                  _focusIdx == 1 && _editMode, 0);
 
     uint8_t qItem = hasGain ? 3 : 2;
     uint8_t backItem = qItem + 1;
@@ -2712,7 +2742,7 @@ void Display::drawSliderRow(int16_t x, int16_t y, int16_t w, const char* label,
     }
 
     d.setTextDatum(ML_DATUM);
-    d.setTextColor(textColor, bg);
+    d.setTextColor(textColor);
     d.setTextSize(1);
     d.drawString(label, x + 4, y + h / 2);
 
@@ -2786,7 +2816,7 @@ void Display::drawSwitchRow(int16_t x, int16_t y, int16_t w,
     }
 
     d.setTextDatum(ML_DATUM);
-    d.setTextColor(textColor, bg);
+    d.setTextColor(textColor);
     d.setTextSize(1);
     d.drawString(label, x + 4, y + h / 2);
 
@@ -2814,7 +2844,7 @@ void Display::drawInputRow(int16_t x, int16_t y, int16_t w, const char* label,
     d.drawRect(x, y, w, h, borderColor);
 
     d.setTextDatum(ML_DATUM);
-    d.setTextColor(textColor, bg);
+    d.setTextColor(textColor);
     d.setTextSize(1);
     d.drawString(label, x + 4, y + h / 2);
 
@@ -2829,7 +2859,7 @@ void Display::drawInputRow(int16_t x, int16_t y, int16_t w, const char* label,
     d.fillRect(valX, y + 2, VAL_W, h - 4, valBg);
     d.drawRect(valX, y + 2, VAL_W, h - 4, borderColor);
     d.setTextDatum(MC_DATUM);
-    d.setTextColor(textColor, valBg);
+    d.setTextColor(textColor);
     d.drawString(valBuf, valX + VAL_W / 2, y + h / 2);
 }
 
@@ -2845,7 +2875,7 @@ void Display::drawNavButton(int16_t x, int16_t y, int16_t w, int16_t h,
     d.drawRect(x, y, w, h, borderColor);
 
     d.setTextDatum(MC_DATUM);
-    d.setTextColor(textColor, bg);
+    d.setTextColor(textColor);
     d.setTextSize(1);
     d.drawString(label, x + w / 2, y + h / 2);
 

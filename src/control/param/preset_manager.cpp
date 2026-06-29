@@ -238,27 +238,33 @@ void PresetManager::init() {
     if (!hasMainMenuParam()) {
         static MainMenuParam mmparam;
         memset(&mmparam, 0, sizeof(MainMenuParam));
-        _prefs.begin("main_menu_param", false);
+        nvs_handle_t nvs;
+        nvs_open("main_menu_param", NVS_READWRITE, &nvs);
         mmparam.vol = 32;
         mmparam.bass = 50;
         mmparam.mid = 50;
         mmparam.treble = 50;
-        _prefs.putBytes("blob", &mmparam, sizeof(MainMenuParam));
-        _prefs.end();
+        nvs_set_blob(nvs, "blob", &mmparam, sizeof(MainMenuParam));
+        nvs_commit(nvs);
+        nvs_close(nvs);
     }
 }
 
 void PresetManager::saveCurrentSlotIndex(uint8_t slot) {
     if (slot >= MAX_PRESET_SLOTS) return;
-    _prefs.begin("meta", false);
-    _prefs.putUChar("cur_slot", slot);
-    _prefs.end();
+    nvs_handle_t nvs;
+    nvs_open("settings", NVS_READWRITE, &nvs);
+    nvs_set_u8(nvs, "current_slot_activate", slot);
+    nvs_commit(nvs);
+    nvs_close(nvs);
 }
 
 uint8_t PresetManager::getCurrentSlotIndex() {
-    _prefs.begin("meta", true);
-    uint8_t slot = _prefs.getUChar("cur_slot", 0);
-    _prefs.end();
+    nvs_handle_t nvs;
+    uint8_t slot;
+    nvs_open("settings", NVS_READWRITE, &nvs);
+    nvs_get_u8(nvs, "current_slot_activate", &slot);
+    nvs_close(nvs);
     if (slot >= MAX_PRESET_SLOTS) return 0;
     return slot;
 }
@@ -352,9 +358,11 @@ void PresetManager::saveDefault(uint8_t slot) {
     makeDefaultIsfInstance(pd.isf2, false, DSP_SAMPLE_RATE_DEFAULT);
 
     String key = getSlotKey(slot);
-    _prefs.begin(key.c_str(), false);
-    _prefs.putBytes("blob", &pd, sizeof(PresetData));
-    _prefs.end();
+    nvs_handle_t nvssave;
+    nvs_open(key.c_str(), NVS_READWRITE, &nvssave);
+    nvs_set_blob(nvssave, "blob", &pd, sizeof(PresetData));
+    nvs_commit(nvssave);
+    nvs_close(nvssave);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -461,9 +469,11 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     saveIsfInstance(pd.isf2, pipeline.getIsf2());
 
     String key = getSlotKey(slot);
-    _prefs.begin(key.c_str(), false);
-    _prefs.putBytes("blob", &pd, sizeof(PresetData));
-    _prefs.end();
+    nvs_handle_t nvssave;
+    nvs_open(key.c_str(), NVS_READWRITE, &nvssave);
+    nvs_set_blob(nvssave, "blob", &pd, sizeof(PresetData));
+    nvs_commit(nvssave);
+    nvs_close(nvssave);
 
     LOG_INFO(TAG, "Saved preset to slot %d", slot);
 
@@ -480,19 +490,23 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     if (slot >= MAX_PRESET_SLOTS) return false;
 
     String key = getSlotKey(slot);
-    _prefs.begin(key.c_str(), true);
+    nvs_handle_t nvsload;
+    nvs_open(key.c_str(), NVS_READONLY, &nvsload);
+
     static PresetData pd;
     memset(&pd, 0, sizeof(PresetData));
-    size_t len = _prefs.getBytesLength("blob");
+    size_t len;
+    nvs_get_blob(nvsload, "blob", &pd, &len);
+
     if (len != sizeof(PresetData)) {
-        _prefs.end();
+        nvs_close(nvsload);
         LOG_WARN(TAG, "Slot %d incompatible (got %u, expected %u). Re-initializing.",
             slot, len, sizeof(PresetData));
         saveDefault(slot);
         return false;
     }
-    _prefs.getBytes("blob", &pd, sizeof(PresetData));
-    _prefs.end();
+
+    nvs_close(nvsload);
 
     if (!pd.valid) {
         LOG_WARN(TAG, "Slot %d invalid flag.", slot);
@@ -607,17 +621,20 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
 
 void PresetManager::loadMainMenuParam(MainMenuParam* param) {
     if (!param) return;
-    _prefs.begin("main_menu_param", true);
-    _prefs.getBytes("blob", param, sizeof(MainMenuParam));
-    _prefs.end();
+    nvs_handle_t nvsload;
+    nvs_open("main_menu_param", NVS_READONLY, &nvsload);
+    nvs_get_blob(nvsload, "blob", &param, NULL);
+    nvs_close(nvsload);
 }
 
 void PresetManager::saveMainMenuParam(MainMenuParam* param) {
     if (!param) return;
     g_inNvsSaving = true;
-    _prefs.begin("main_menu_param", false);
-    _prefs.putBytes("blob", param, sizeof(MainMenuParam));
-    _prefs.end();
+    nvs_handle_t nvssave;
+    nvs_open("main_menu_param", NVS_READWRITE, &nvssave);
+    nvs_set_blob(nvssave, "blob", &param, NULL);
+    nvs_commit(nvssave);
+    nvs_close(nvssave);
     g_inNvsSaving = false;
 }
 
@@ -626,18 +643,22 @@ void PresetManager::saveMainMenuParam(MainMenuParam* param) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool PresetManager::hasMainMenuParam() {
-    _prefs.begin("main_menu_param", true);
-    size_t len = _prefs.getBytesLength("blob");
-    _prefs.end();
+    size_t len;
+    nvs_handle_t nvsload;
+    nvs_open("main_menu_param", NVS_READONLY, &nvsload);
+    nvs_get_blob(nvsload, "blob", NULL, &len);
+    nvs_close(nvsload);
     return len == sizeof(MainMenuParam);
 }
 
 bool PresetManager::hasPreset(uint8_t slot) {
     if (slot >= MAX_PRESET_SLOTS) return false;
     String key = getSlotKey(slot);
-    _prefs.begin(key.c_str(), true);
-    size_t len = _prefs.getBytesLength("blob");
-    _prefs.end();
+    size_t len;
+    nvs_handle_t nvsload;
+    nvs_open(key.c_str(), NVS_READONLY, &nvsload);
+    nvs_get_blob(nvsload, "blob", NULL, &len);
+    nvs_close(nvsload);
     return len == sizeof(PresetData);
 }
 

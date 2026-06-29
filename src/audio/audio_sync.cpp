@@ -44,6 +44,8 @@ static constexpr int16_t PCNT_LOW_LIMIT  = -1;
 // Rate tolerance: ±6%
 static constexpr float RATE_TOLERANCE = 0.06f;
 
+static constexpr int   RATE_CONFIRM_WINDOWS = 2;
+
 // ---------------------------------------------------------------------------
 // Static members
 // ---------------------------------------------------------------------------
@@ -59,6 +61,11 @@ static pcnt_channel_handle_t s_pcnt_ch   = nullptr;
 // Use portMUX for atomic access (ISR-safe on ESP32 dual-core)
 static volatile uint32_t   s_overflowCount = 0;
 static portMUX_TYPE        s_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static ClockState lastState    = ClockState::ABSENT;
+static ClockState pendingState = ClockState::ABSENT;
+static uint32_t   pendingRate  = 0;
+static int        pendingCount = 0;
 
 // ---------------------------------------------------------------------------
 // PCNT overflow ISR
@@ -122,7 +129,7 @@ void AudioSync::init(RateChangeCallback cb) {
 // Monitor task
 // ---------------------------------------------------------------------------
 
-void AudioSync::monitorTask(void* arg) {
+void IRAM_ATTR AudioSync::monitorTask(void* arg) {
     LOG_INFO(TAG, "Monitor task running on Core %d", xPortGetCoreID());
     ESP_ERROR_CHECK(pcnt_unit_start(s_pcnt_unit));
 
@@ -169,20 +176,22 @@ void AudioSync::monitorTask(void* arg) {
             newState = classifyRate(newRate);
         }
 
-        if (newState != lastState) {
-            LOG_INFO(TAG, "Clock state: %d → %d  (%lu Hz raw)",
-                     (int)lastState, (int)newState, (unsigned long)newRate);
+        if (newState == lastState) {
+        pendingCount = 0;
+        } else if (newState == ClockState::ABSENT) {
 
-            _state    = newState;
-            _rateHz   = newRate;
-            lastState = newState;
+            pendingState = newState; pendingRate = newRate;
+            pendingCount = RATE_CONFIRM_WINDOWS;
+        } else if (newState == pendingState) {
+            pendingCount++;
+        } else {
+            pendingState = newState; pendingRate = newRate; pendingCount = 1;
+        }
 
-            if (_cb) {
-                // Pass nominal rate (44100/48000/96000) to reinit,
-                // not the raw measured value which may be slightly off
-                uint32_t nominalRate = nominalRateHz(newState);
-                _cb(newState, nominalRate);
-            }
+        if (pendingCount >= RATE_CONFIRM_WINDOWS && pendingState != lastState) {
+            _state = pendingState; _rateHz = pendingRate; lastState = pendingState;
+            pendingCount = 0;
+            if (_cb) _cb(pendingState, nominalRateHz(pendingState));
         }
     }
 }
