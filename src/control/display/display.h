@@ -25,6 +25,7 @@
 #include "dsp_types.h"
 #include "pin_config.h"
 #include "../param/preset_manager.h"
+#include "../param/settings_manager.h"
 #include "battery_monitor.h"
 #include "config.h" // For MAX_PRESET_SLOTS and DSP_MODULE_COUNT
 
@@ -306,6 +307,11 @@ public:
      */
     void setPipeline(DspPipeline* pipeline, PresetManager* presetMgr);
 
+    /**
+     * Inject settings manager pointer after init.
+     */
+    void setSettings(SettingsManager* settingsMgr);
+
     // ── Keyboard helper ───────────────────────────────────────────────────────
     void pushKeyboard(float* target, float minVal, float maxVal, bool allowDot, ScreenID returnTo);
 
@@ -364,8 +370,9 @@ private:
     static constexpr uint32_t METER_UPDATE_INTERVAL_MS = 100; // 10 Hz refresh
 
     // ── Pipeline (injected) ───────────────────────────────────────────────────
-    DspPipeline*   _pipeline   = nullptr;
-    PresetManager* _presetMgr  = nullptr;
+    DspPipeline*     _pipeline    = nullptr;
+    PresetManager*   _presetMgr   = nullptr;
+    SettingsManager* _settingsMgr = nullptr;
 
     // ── Navigation ────────────────────────────────────────────────────────────
     void pushScreen(ScreenID s, DisplayModuleID mod = DisplayModuleID::NONE,
@@ -503,6 +510,10 @@ private:
     bool     _settingsWifi         = false;
     bool     _settingsTrigger      = false;
     std::function<void()> onBtKick;
+
+    // ── Global hold tracking (3s = Settings, 5s = Shutdown) ──────────────────
+    bool     _globalHoldArmed    = false;
+    uint32_t _globalHoldStartMs  = 0;
 
     // ── Main menu tab-return hold (hold SW 500 ms to go back to tab bar) ─────
     bool     _mmTabReturnArmed   = false;

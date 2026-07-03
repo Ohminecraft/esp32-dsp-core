@@ -91,10 +91,8 @@ void Encoder::poll(EncoderEvent* event) {
             if (!_holdFired && holdDur >= HOLD5_MS) {
                 _pendingBtn = EncoderEvent::SW_HOLD5;
                 _holdFired  = true;
-            } else if (!_holdFired && holdDur >= HOLD3_MS) {
-                _pendingBtn = EncoderEvent::SW_HOLD3;
-                _holdFired  = true;
             }
+            // Note: SW_HOLD3 fires on release (lines 76-81) if duration is 3-5s
         }
         break;
 

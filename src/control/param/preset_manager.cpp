@@ -261,10 +261,12 @@ void PresetManager::saveCurrentSlotIndex(uint8_t slot) {
 
 uint8_t PresetManager::getCurrentSlotIndex() {
     nvs_handle_t nvs;
-    uint8_t slot;
-    nvs_open("settings", NVS_READWRITE, &nvs);
-    nvs_get_u8(nvs, "current_slot_activate", &slot);
-    nvs_close(nvs);
+    uint8_t slot = 0;
+    esp_err_t openErr = nvs_open("settings", NVS_READWRITE, &nvs);
+    if (openErr == ESP_OK) {
+        nvs_get_u8(nvs, "current_slot_activate", &slot);
+        nvs_close(nvs);
+    }
     if (slot >= MAX_PRESET_SLOTS) return 0;
     return slot;
 }
@@ -491,17 +493,22 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
 
     String key = getSlotKey(slot);
     nvs_handle_t nvsload;
-    nvs_open(key.c_str(), NVS_READONLY, &nvsload);
+    esp_err_t openErr = nvs_open(key.c_str(), NVS_READONLY, &nvsload);
+    if (openErr != ESP_OK) {
+        LOG_WARN(TAG, "Slot %d nvs_open failed (err=%d). Re-initializing.", slot, openErr);
+        saveDefault(slot);
+        return false;
+    }
 
     static PresetData pd;
     memset(&pd, 0, sizeof(PresetData));
-    size_t len;
-    nvs_get_blob(nvsload, "blob", &pd, &len);
+    size_t len = sizeof(PresetData);  // MUST be set to buffer capacity before nvs_get_blob
+    esp_err_t getErr = nvs_get_blob(nvsload, "blob", &pd, &len);
 
-    if (len != sizeof(PresetData)) {
+    if (getErr != ESP_OK || len != sizeof(PresetData)) {
         nvs_close(nvsload);
-        LOG_WARN(TAG, "Slot %d incompatible (got %u, expected %u). Re-initializing.",
-            slot, len, sizeof(PresetData));
+        LOG_WARN(TAG, "Slot %d incompatible (err=%d, got %u, expected %u). Re-initializing.",
+            slot, getErr, (unsigned)len, (unsigned)sizeof(PresetData));
         saveDefault(slot);
         return false;
     }
@@ -622,19 +629,34 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
 void PresetManager::loadMainMenuParam(MainMenuParam* param) {
     if (!param) return;
     nvs_handle_t nvsload;
-    nvs_open("main_menu_param", NVS_READONLY, &nvsload);
-    nvs_get_blob(nvsload, "blob", &param, NULL);
+    esp_err_t openErr = nvs_open("main_menu_param", NVS_READONLY, &nvsload);
+    if (openErr != ESP_OK) {
+        LOG_WARN(TAG, "main_menu_param nvs_open failed (err=%d)", openErr);
+        return;
+    }
+
+    size_t len = sizeof(MainMenuParam);  // buffer capacity, input to nvs_get_blob
+    esp_err_t getErr = nvs_get_blob(nvsload, "blob", param, &len);
     nvs_close(nvsload);
+
+    if (getErr != ESP_OK || len != sizeof(MainMenuParam)) {
+        LOG_WARN(TAG, "main_menu_param read failed (err=%d, got %u, expected %u)",
+            getErr, (unsigned)len, (unsigned)sizeof(MainMenuParam));
+    }
 }
 
 void PresetManager::saveMainMenuParam(MainMenuParam* param) {
     if (!param) return;
     g_inNvsSaving = true;
     nvs_handle_t nvssave;
-    nvs_open("main_menu_param", NVS_READWRITE, &nvssave);
-    nvs_set_blob(nvssave, "blob", &param, NULL);
-    nvs_commit(nvssave);
-    nvs_close(nvssave);
+    esp_err_t openErr = nvs_open("main_menu_param", NVS_READWRITE, &nvssave);
+    if (openErr == ESP_OK) {
+        nvs_set_blob(nvssave, "blob", param, sizeof(MainMenuParam));
+        nvs_commit(nvssave);
+        nvs_close(nvssave);
+    } else {
+        LOG_WARN(TAG, "main_menu_param nvs_open failed (err=%d)", openErr);
+    }
     g_inNvsSaving = false;
 }
 

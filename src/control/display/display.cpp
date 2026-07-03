@@ -398,6 +398,13 @@ void Display::init() {
     _tft.init();
     _tft.setRotation(1);
     _tft.fillScreen(Color::BG);
+
+    // Setup PWM for TFT backlight control
+    #if defined(TFT_BACKLIGHT_PIN) && TFT_BACKLIGHT_PIN >= 0
+        ledcAttach(TFT_BACKLIGHT_PIN, 5000, 8);  // 5kHz, 8-bit resolution
+        ledcWrite(TFT_BACKLIGHT_PIN, 255);        // Full brightness on init
+    #endif
+
     #ifdef CONFIG_SPIRAM
         _spr.setColorDepth(16);
     #else
@@ -444,6 +451,23 @@ void Display::setPipeline(DspPipeline* pipeline, PresetManager* presetMgr) {
     }
 }
 
+void Display::setSettings(SettingsManager* settingsMgr) {
+    _settingsMgr = settingsMgr;
+    if (_settingsMgr) {
+        // Load WiFi setting
+        _settingsWifi = _settingsMgr->getWifiEnabled();
+        
+        // Display brightness - apply PWM duty cycle
+        #if defined(TFT_BACKLIGHT_PIN) && TFT_BACKLIGHT_PIN >= 0
+            uint8_t brightness = _settingsMgr->getBrightness();
+            // Brightness is stored as 0-255, use directly
+            ledcWrite(TFT_BACKLIGHT_PIN, brightness);
+        #endif
+        
+        // Other settings (auto-save interval, default preset) will be used by settings UI
+    }
+}
+
 void Display::pushKeyboard(float* target, float minVal, float maxVal, bool allowDot, ScreenID returnTo) {
     _kb.target = target; _kb.minVal = minVal; _kb.maxVal = maxVal;
     _kb.allowDot = allowDot; _kb.returnScreen = returnTo;
@@ -486,7 +510,7 @@ void Display::pushScreen(ScreenID s, DisplayModuleID mod, uint8_t subCtx) {
 
 void Display::popScreen() {
     if (_navTop > 0) _navTop--;
-    _focusIdx = 0; _editMode = false; _paramScroll = 0; _holdTracking = false; _dirty = true;
+    _focusIdx = 1; _mainMenuTab = 0; _mainMenuActiveParam = 0; _editMode = false; _paramScroll = 0; _holdTracking = false; _dirty = true;
 }
 
 NavEntry& Display::currentNav() { return _navStack[_navTop]; }
@@ -497,7 +521,7 @@ void Display::update(EncoderEvent enc) {
     if (currentScreen() == ScreenID::SPLASH) {
         if (millis() - _splashStartMs >= SPLASH_DURATION_MS) {
             _navStack[_navTop] = { ScreenID::MAIN_MENU, DisplayModuleID::NONE, 0 };
-            _focusIdx = 0; _mainMenuTab = 0; _dirty = true;
+            _focusIdx = 1; _mainMenuTab = 0; _mainMenuActiveParam = 0; _dirty = true;
             // ── Start volume animation: 0 → vol with deceleration ──
             _anim.volAnimating = true;
             _anim.volFrom = 0.0f;
@@ -604,6 +628,8 @@ void Display::handleEncoder(EncoderEvent enc) {
     // normal SW / SW_DOUBLE / SW_HOLD* events handle the action. If held ≥ 500 ms
     // update() fires the tab-return before any hold event.
     if (enc == EncoderEvent::SW_PRESS) {
+        _globalHoldArmed    = true;
+        _globalHoldStartMs  = millis();
         if (s == ScreenID::MAIN_MENU && _focusIdx > 0) {
             _mmTabReturnArmed   = true;
             _mmTabReturnStartMs = millis();
@@ -615,8 +641,9 @@ void Display::handleEncoder(EncoderEvent enc) {
     // SW, SW_DOUBLE, SW_HOLD3, SW_HOLD5 all represent button-released or
     // threshold-fired; in any case the arm should be cleared.
     if (enc == EncoderEvent::SW || enc == EncoderEvent::SW_DOUBLE ||
-        enc == EncoderEvent::SW_HOLD3) {
+        enc == EncoderEvent::SW_HOLD3 || enc == EncoderEvent::SW_HOLD5) {
         _mmTabReturnArmed = false;
+        _globalHoldArmed  = false;
     }
 
     // A double-click or HOLD3 means something other than a plain tab-bar release
@@ -894,6 +921,10 @@ void Display::onConfirm() {
         const uint8_t backIdx = getItemCount() - 1;
         if (_focusIdx == backIdx) {
             popScreen();
+        } else if (_focusIdx == 0) {
+            // WiFi Toggle - directly toggle and save
+            _settingsWifi = !_settingsWifi;
+            if (_settingsMgr) _settingsMgr->setWifiEnabled(_settingsWifi);
         } else if (_battery && _battery->isPresent() && _focusIdx == 5) {
             // Reset coulomb counter (triggered by hold via SW_HOLD handler)
             _battery->resetCoulombCounter();
@@ -1168,6 +1199,7 @@ void Display::editDelta(int8_t dir) {
             if (cs > 6) cs = 1;
             cfg.cellS = (uint8_t)cs;
             _battery->applyConfig();
+            if (_settingsMgr) _settingsMgr->setBatteryCellCount(cfg.cellS);
         } else if (_focusIdx == 3) {
             // Cell mAh: step 50 mAh, range 100–20000
             int32_t mah = (int32_t)cfg.cellMah + dir * 50;
@@ -1175,6 +1207,7 @@ void Display::editDelta(int8_t dir) {
             if (mah > 20000) mah = 20000;
             cfg.cellMah = (uint32_t)mah;
             _battery->applyConfig();
+            if (_settingsMgr) _settingsMgr->setBatteryCellMah(cfg.cellMah);
         } else if (_focusIdx == 4) {
             // Shunt mΩ: step 1 mΩ, range 1–1000
             int32_t shunt = (int32_t)cfg.shuntMOhm + dir;
@@ -1182,6 +1215,7 @@ void Display::editDelta(int8_t dir) {
             if (shunt > 1000) shunt = 1000;
             cfg.shuntMOhm = (uint32_t)shunt;
             _battery->applyConfig();
+            if (_settingsMgr) _settingsMgr->setBatteryShuntMohm(cfg.shuntMOhm);
         }
         _dirty = true; return;
     }
@@ -1496,13 +1530,14 @@ void Display::drawMainMenu() {
 
     // ── Hold-progress indicator: fill a thin bar at the bottom of the tab bar ──
     // Visible while the user is holding SW inside a tab (tab-return hold).
-    if (_mmTabReturnArmed && _focusIdx > 0) {
-        float frac = constrain(
-            (float)(millis() - _mmTabReturnStartMs) / TAB_RETURN_HOLD_MS,
-            0.0f, 1.0f);
+    if (_globalHoldArmed) {
+        uint32_t elapsed = millis() - _globalHoldStartMs;
+        float frac = constrain((float)elapsed / 5000.0f, 0.0f, 1.0f);
+        uint16_t color = (elapsed < 3000) ? Color::GREEN : Color::RED;
+        
         int16_t barY = TAB_Y + TAB_H - 3;
         int16_t barW = (int16_t)(frac * CONTENT_W);
-        if (barW > 0) d.fillRect(CONTENT_X, barY, barW, 2, Color::ACCENT2);
+        if (barW > 0) d.fillRect(CONTENT_X, barY, barW, 2, color);
     }
 
     // ── Content area (below tab bar) ──────────────────────────────────────────

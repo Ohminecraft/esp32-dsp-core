@@ -24,6 +24,7 @@
 #include "control/uart_protocol.h"
 #include "control/param/param_controller.h"
 #include "control/param/preset_manager.h"
+#include "control/param/settings_manager.h"
 #include "control/wifi/wifi_manager.h"
 #include "control/wifi/web_server.h"
 #include "control/display/display.h"
@@ -42,6 +43,7 @@ static AudioSync       g_audioSync;
 static UartProtocol    g_uart;
 static ParamController g_paramCtrl;
 static PresetManager   g_presetMgr;
+static SettingsManager g_settingsMgr;
 static WiFiManager     g_wifiMgr;
 static DspWebServer    g_webServer;
 static StatusLED       g_statusLED;
@@ -557,6 +559,7 @@ void setup() {
     // 3. Init control layer
     LOG_INFO("INIT", "Initializing UART control...");
     g_uart.init();
+    g_settingsMgr.init();
     g_presetMgr.init();
 
     #ifndef ONLY_SERIAL
@@ -583,11 +586,11 @@ void setup() {
     }
     #endif
 
-    // 4. Load preset
-    uint8_t currentSlot = g_presetMgr.getCurrentSlotIndex();
-    if (g_presetMgr.hasPreset(currentSlot)) {
-        LOG_INFO("INIT", "Auto-loading Preset Slot %d from NVS", currentSlot);
-        g_presetMgr.loadPreset(currentSlot, g_pipeline);
+    // 4. Load preset from default slot (configured in settings)
+    uint8_t defaultSlot = g_settingsMgr.getDefaultPresetSlot();
+    if (g_presetMgr.hasPreset(defaultSlot)) {
+        LOG_INFO("INIT", "Auto-loading Preset Slot %d from NVS", defaultSlot);
+        g_presetMgr.loadPreset(defaultSlot, g_pipeline);
     }
 
     #ifdef USING_DISPLAY
@@ -601,6 +604,7 @@ void setup() {
     // 5. Load Main Menu Param
     #ifdef USING_DISPLAY
         g_display.setPipeline(&g_pipeline, &g_presetMgr);
+        g_display.setSettings(&g_settingsMgr);
     #endif
 
     // 5.1 Start Display Task

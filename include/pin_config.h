@@ -98,8 +98,6 @@
 // ============================================================================
 
 #define SYNC_BCK_MONITOR_PIN    I2S_IN_OUT_BCK_PIN      // Use same BCK pin for PCNT sync detection
-#define SYNC_DETECT_INTERVAL_MS 100     // Measurement window in ms
-#define SYNC_ABSENT_THRESHOLD   10      // Pulses below this = clock absent
 
 // ============================================================================
 // I2S Port Numbers — same for both targets
@@ -119,8 +117,16 @@
 //#define MUTE_PIN -1
 
 // ============================================================================
-// TFT Encoder
+// TFT Display & Encoder
 // ============================================================================
+
+// TFT Backlight (PWM control for brightness)
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#define TFT_BACKLIGHT_PIN 7
+#elif defined(CONFIG_IDF_TARGET_ESP32)
+#define TFT_BACKLIGHT_PIN 5
+#endif
+
 // Set these to the GPIOs wired to the rotary encoder. The display UI compiles
 // with the encoder disabled while the pins are left at -1.
 #ifndef ENCODER_A_PIN
@@ -139,8 +145,8 @@
 // Battery I2C Pin (INA226)
 // ============================================================================
 
-#define BATT_SCL 22
-#define BATT_SDA 21
+#define BATT_SCL 42
+#define BATT_SDA 41
 
 // ============================================================================
 // Trigger GPIO Settings (Single / Triple Click)
