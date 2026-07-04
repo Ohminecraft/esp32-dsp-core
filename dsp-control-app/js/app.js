@@ -13,7 +13,7 @@ import {
     buildSetIsfPreset, buildSetIsfConfig, buildGetIsfState,
     buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
     dbToQ88, dbToQ31, qToQ610,
-    leToInt16, leToInt32,
+    leToInt16, leToInt32, leToFloat,
     buildSetIsfBandParams
 } from './protocol.js';
 import { EQGraph } from './eq-graph.js';
@@ -373,27 +373,28 @@ parser.onFrame((frame) => {
     }
     else if (frame.cmd === CMD.SET_PARAM && frame.data.length >= 5) {
         const pIndex = frame.data[0];
-        const val = readInt32(frame.data, 1);
+        const val = leToFloat(frame.data, 1);  // float32 from firmware
 
         switch (frame.moduleId) {
             case MODULE.PRE_GAIN:
-                if (pIndex === 0) store.updateParam('preGain', 'gainDb', val);
+                if (pIndex === 0) store.updateParam('preGain', 'gainDb', val);      // already dB
                 else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
                 else if (pIndex === 2) store.updateParam('preGain', 'mono', val !== 0);
                 break;
             case MODULE.POST_GAIN:
-                if (pIndex === 0) {store.updateParam('postGain', 'gainDb', val); console.log(val);}
-                else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
+                if (pIndex === 0) store.updateParam('postGain', 'gainDb', val);     // already dB
+                else if (pIndex === 1) store.updateParam('postGain', 'mute', val !== 0);
                 else if (pIndex === 2) store.updateParam('postGain', 'mono', val !== 0);
                 break;
             case MODULE.COMPANDER:
-                if (pIndex === 0) store.updateParam('compander', 'threshold', val);
-                else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val);
-                else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val);
+                // Firmware now sends float32 values directly
+                if (pIndex === 0) store.updateParam('compander', 'threshold', val);      // dB
+                else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val * 256); // float → Q8.8
+                else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val * 256); // float → Q8.8
                 else if (pIndex === 3) store.updateParam('compander', 'attackMs', val);
                 else if (pIndex === 4) store.updateParam('compander', 'releaseMs', val);
-                else if (pIndex === 5) store.updateParam('compander', 'pregain', val);
-                else if (pIndex === 6) store.updateParam('compander', 'lookaheadMs', val / 10); // ms×10 → ms
+                else if (pIndex === 5) store.updateParam('compander', 'pregain', val * 4096);   // dB → Q4.12
+                else if (pIndex === 6) store.updateParam('compander', 'lookaheadMs', val);      // already ms
                 break;
             case MODULE.EXCITER:
                 if (pIndex === 0) store.updateParam('exciter', 'cutoffFreq', val);
@@ -402,45 +403,47 @@ parser.onFrame((frame) => {
                 break;
             case MODULE.DYNAMIC_BASS:
                 if (pIndex === 0) store.updateParam('dynamicBass', 'cutoffFreq', val);
-                else if (pIndex === 1) store.updateParam('dynamicBass', 'gainBoost', val);
+                else if (pIndex === 1) store.updateParam('dynamicBass', 'gainBoost', val * 100);      // dB → ×100
                 else if (pIndex === 2) store.updateParam('dynamicBass', 'enhanced', val);
                 else if (pIndex === 3) store.updateParam('dynamicBass', 'boostthreshold', val);
                 else if (pIndex === 4) store.updateParam('dynamicBass', 'neutralthreshold', val);
                 else if (pIndex === 5) store.updateParam('dynamicBass', 'clipthreshold', val);
                 else if (pIndex === 6) store.updateParam('dynamicBass', 'clipattack', val);
                 else if (pIndex === 7) store.updateParam('dynamicBass', 'cliprelease', val);
-                else if (pIndex === 8) store.updateParam('dynamicBass', 'lookaheadMs', val / 10);
+                else if (pIndex === 8) store.updateParam('dynamicBass', 'lookaheadMs', val);  // already ms
                 break;
             case MODULE.DRC: {
-                // New encoding:
-                //   pIndex 0x10 = mode
-                //   pIndex 0x20-0x3F = per-band: band=(pIndex-0x20)>>3, param=(pIndex-0x20)&7
+                // Firmware sends float32, convert to internal store format
                 if (pIndex === 0x10) {
-                    store.drc.mode = val;
+                    store.drc.mode = val;  // enum, keep as int
                 } else if (pIndex >= 0x20 && pIndex <= 0x3F) {
-                    const bandIdx = (pIndex - 0x20) >> 3;   // 0-3
-                    const param   = (pIndex - 0x20) & 0x07; // 0-4
+                    const bandIdx = (pIndex - 0x20) >> 3;
+                    const param   = (pIndex - 0x20) & 0x07;
                     const drcBand = store.drc.bands[bandIdx];
                     if (drcBand) {
-                        if (param === 0) drcBand.threshold = val;
-                        else if (param === 1) drcBand.ratio = val;
+                        if (param === 0) drcBand.threshold = val * 100;      // dB → ×100
+                        else if (param === 1) drcBand.ratio = val * 100;     // float → ×100
                         else if (param === 2) drcBand.attackMs = val;
                         else if (param === 3) drcBand.releaseMs = val;
-                        else if (param === 4) drcBand.pregain = val;
-                        else if (param === 5) drcBand.lookaheadMs = val / 10; // ms×10 → ms
+                        else if (param === 4) drcBand.pregain = val * 4096;  // dB → Q4.12
+                        else if (param === 5) drcBand.lookaheadMs = val;     // already ms
                     }
                 }
                 break;
             }
         }
     }
-    else if (frame.cmd === CMD.SET_EQ_BAND && frame.data.length >= 11) {
+    else if (frame.cmd === CMD.SET_EQ_BAND && frame.data.length >= 19) {
+        // New float32 layout: pregainDb(f32) + band(1) + enabled(1) + type(1) + freq(f32) + gainDb(f32) + Q(f32) = 19 bytes
         const d = frame.data;
-        const pregain = leToInt16(d, 0);
-        const b = d[2];
-        const gain = leToInt16(d, 7);
-        const qVal = leToInt16(d, 9);
-        const changes = { enabled: d[3] === 1, type: d[4], freq: d[5] | (d[6] << 8), gain: gain / 256, q: qVal / 1024 };
+        const pregain = leToFloat(d, 0);
+        const b = d[4];
+        const enabled = d[5];
+        const type = d[6];
+        const freq = leToFloat(d, 7);
+        const gain = leToFloat(d, 11);
+        const q = leToFloat(d, 15);
+        const changes = { enabled: enabled === 1, type, freq, gain, q };
         
         let eqState;
         let realBand = b;
@@ -460,30 +463,34 @@ parser.onFrame((frame) => {
         }
 
         if (eqState && eqState.bands[realBand]) {
-            eqState.pregain = pregain / 256;
+            eqState.pregain = pregain;
             Object.assign(eqState.bands[realBand], changes);
             store.emit('eq:changed');
         }
     }
-    else if ((frame.cmd === CMD.SET_DYNEQ_LOW_BAND || frame.cmd === CMD.SET_DYNEQ_HIGH_BAND) && frame.data.length >= 11) {
+    else if ((frame.cmd === CMD.SET_DYNEQ_LOW_BAND || frame.cmd === CMD.SET_DYNEQ_HIGH_BAND) && frame.data.length >= 19) {
+        // New float32 layout: pregainDb(f32) + band(1) + enabled(1) + type(1) + freq(f32) + gainDb(f32) + Q(f32) = 19 bytes
         const d = frame.data;
-        const pregain = leToInt16(d, 0);
-        const b = d[2];
-        const gain = leToInt16(d, 7);
-        const qVal = leToInt16(d, 9);
-        const changes = { enabled: d[3] === 1, type: d[4], freq: d[5] | (d[6] << 8), gain: gain / 256, q: qVal / 1024 };
+        const pregain = leToFloat(d, 0);
+        const b = d[4];
+        const enabled = d[5];
+        const type = d[6];
+        const freq = leToFloat(d, 7);
+        const gain = leToFloat(d, 11);
+        const q = leToFloat(d, 15);
+        const changes = { enabled: enabled === 1, type, freq, gain, q };
         const eqTarget = frame.cmd === CMD.SET_DYNEQ_HIGH_BAND ? store.dynamicEq.eqHigh : store.dynamicEq.eqLow;
-        eqTarget.pregain = pregain / 256;
+        eqTarget.pregain = pregain;
         Object.assign(eqTarget.bands[b], changes);
         store.emit('eq:changed');
     }
-    else if (frame.cmd === CMD.SET_DYNEQ_THRESH && frame.data.length >= 20) {
-        store.updateParam('dynamicEq', 'lowThresh', leToInt32(frame.data, 0));
-        store.updateParam('dynamicEq', 'normalThresh', leToInt32(frame.data, 4));
-        store.updateParam('dynamicEq', 'highThresh', leToInt32(frame.data, 8));
-        store.updateParam('dynamicEq', 'attackMs', leToInt32(frame.data, 12));
-        store.updateParam('dynamicEq', 'releaseMs', leToInt32(frame.data, 16));
-        store.updateParam('dynamicEq', 'lookaheadMs', leToInt32(frame.đata, 20) / 10);
+    else if (frame.cmd === CMD.SET_DYNEQ_THRESH && frame.data.length >= 24) {
+        store.updateParam('dynamicEq', 'lowThresh', Math.round(leToFloat(frame.data, 0) * 100));
+        store.updateParam('dynamicEq', 'normalThresh', Math.round(leToFloat(frame.data, 4) * 100));
+        store.updateParam('dynamicEq', 'highThresh', Math.round(leToFloat(frame.data, 8) * 100));
+        store.updateParam('dynamicEq', 'attackMs', Math.round(leToFloat(frame.data, 12)));
+        store.updateParam('dynamicEq', 'releaseMs', Math.round(leToFloat(frame.data, 16)));
+        store.updateParam('dynamicEq', 'lookaheadMs', leToFloat(frame.data, 20));
     }
     else if (frame.cmd === CMD.SEND_REPORT_CPU_USAGE && frame.data.length >= 7) {
         const cpu10 = frame.data[0] | (frame.data[1] << 8);
@@ -491,31 +498,31 @@ parser.onFrame((frame) => {
         const fs = readInt32(frame.data, 3);
         updateCpuUI(cpu10 / 10.0, 100 - heapPct, fs);
     }
-    else if (frame.cmd === CMD.REPORT_ISF && frame.data.length >= 7) {
-        // Data: instance(1)+level_q88(2)+slew_q88(2)+lookahead(4)+activeA(1)+activeB(1)+numPresets(1)
+    else if (frame.cmd === CMD.REPORT_ISF && frame.data.length >= 16) {
+        // Data: instance(1)+levelDb(f32)+slewIdx(f32)+lookaheadMs(f32)+activeA(1)+activeB(1)+numPresets(1) = 16 bytes
         const d = frame.data;
         const instanceIdx = d[0];
         const which = instanceIdx === 0 ? 'isf1' : 'isf2';
-        const levelDb    = leToInt16(d, 1) / 256;
-        const slewQ88    = leToInt16(d, 3);
-        const lookahead  = leToInt32(d, 5)
-        const slewIdx    = slewQ88 / 256;
-        const activeA    = d[9];
-        const activeB    = d[10];
-        const numPresets = d[11];
+        const levelDb    = leToFloat(d, 1);
+        const slewIdx    = leToFloat(d, 5);
+        const lookahead  = leToFloat(d, 9);
+        const activeA    = d[13];
+        const activeB    = d[14];
+        const numPresets = d[15];
         store.getIsfInstance(which).numPresets = numPresets;
-        store.getIsfInstance(which).lookaheadMs = lookahead / 10;
+        store.getIsfInstance(which).lookaheadMs = lookahead;
         store.updateIsfState(which, levelDb, slewIdx, activeA, activeB);
         renderIsfLevelMeter(which, levelDb, slewIdx, activeA, activeB);
     }
-    else if (frame.cmd === CMD.REPORT_ISF_BAND_PER_PRESET && frame.data.length >= 10) {
+    else if (frame.cmd === CMD.REPORT_ISF_BAND_PER_PRESET && frame.data.length >= 16) {
+        // Layout: presetIdx(1) + bandIdx(1) + enabled(1) + type(1) + freq(f32) + gain(f32) + Q(f32) = 16 bytes
         const d = frame.data;
         const moduleId  = frame.moduleId;
         const which     = (moduleId === MODULE.ISF_1) ? 'isf1' : 'isf2';
         const presetIdx = d[0];
         const bandIdx = d[1];
         const isf = store.getIsfInstance(which);
-        const changes = { enabled: d[2] === 1, type: d[3], freq: (d[4] | (d[5] << 8)), gain: leToInt16(d, 6) / 256, q: leToInt16(d, 8) / 1024};
+        const changes = { enabled: d[2] === 1, type: d[3], freq: leToFloat(d, 4), gain: leToFloat(d, 8), q: leToFloat(d, 12)};
         Object.assign(isf.presets[presetIdx].bands[bandIdx], changes);
         isf.presets[presetIdx].numBands = isf.presets[presetIdx].bands.filter(x => x.enabled).length;
         store.emit("isf:preset-data-update", which, presetIdx);
@@ -524,41 +531,39 @@ parser.onFrame((frame) => {
         store.setActivePreset(frame.data[0]);
     }
     // ── Live meter reports ───────────────────────────────────────────────────
-    else if (frame.cmd === CMD.REPORT_DYNBASS && frame.data.length >= 4 && !isFetchingState) {
-        const energyDb = leToInt16(frame.data, 0) / 256;  // Q8.8 → float dB
-        const alpha    = leToInt16(frame.data, 2) / 256;  // Q8.8 → float [-1..1]
+    else if (frame.cmd === CMD.REPORT_DYNBASS && frame.data.length >= 8 && !isFetchingState) {
+        const energyDb = leToFloat(frame.data, 0);
+        const alpha    = leToFloat(frame.data, 4);
         renderDynBassMeter(energyDb, alpha);
     }
-    else if (frame.cmd === CMD.REPORT_DYNEQ && frame.data.length >= 6 && !isFetchingState) {
-        const energyDb  = leToInt16(frame.data, 0) / 256;
-        const alphaLow  = leToInt16(frame.data, 2) / 256;
-        const alphaHigh = leToInt16(frame.data, 4) / 256;
+    else if (frame.cmd === CMD.REPORT_DYNEQ && frame.data.length >= 12 && !isFetchingState) {
+        const energyDb  = leToFloat(frame.data, 0);
+        const alphaLow  = leToFloat(frame.data, 4);
+        const alphaHigh = leToFloat(frame.data, 8);
         renderDynEqMeter(energyDb, alphaLow, alphaHigh);
     }
-    else if (frame.cmd === CMD.REPORT_COMPANDER && frame.data.length >= 4 && !isFetchingState) {
-        // envLinear Q1.14 (0..16384 = 0..1.0), gainDb Q8.8
-        const envLinear = (frame.data[0] | (frame.data[1] << 8)) / 16384;
-        const gainDb    = leToInt16(frame.data, 2) / 256;
+    else if (frame.cmd === CMD.REPORT_COMPANDER && frame.data.length >= 8 && !isFetchingState) {
+        const envLinear = leToFloat(frame.data, 0);
+        const gainDb    = leToFloat(frame.data, 4);
         renderCompanderMeter(envLinear, gainDb);
     }
-    else if (frame.cmd === CMD.REPORT_DRC && frame.data.length >= 8 && !isFetchingState) {
-        // 4 × int16 Q8.8 gain reduction dB (bands 0-2 + fullband)
+    else if (frame.cmd === CMD.REPORT_DRC && frame.data.length >= 16 && !isFetchingState) {
         const gains = [
-            leToInt16(frame.data, 0) / 256,
-            leToInt16(frame.data, 2) / 256,
-            leToInt16(frame.data, 4) / 256,
-            leToInt16(frame.data, 6) / 256,
+            leToFloat(frame.data, 0),
+            leToFloat(frame.data, 4),
+            leToFloat(frame.data, 8),
+            leToFloat(frame.data, 12),
         ];
         renderDrcMeter(gains);
     }
-    else if (frame.cmd === CMD.REPORT_ISF_PRESET && frame.data.length >= 5) {
-        // Data: preset_idx(1)+threshold(2)+pregain(2)
+    else if (frame.cmd === CMD.REPORT_ISF_PRESET && frame.data.length >= 9) {
+        // Data: preset_idx(1)+thresholdDb(f32)+pregainDb(f32) = 9 bytes
         const d = frame.data;
         const moduleId  = frame.moduleId;
         const which     = (moduleId === MODULE.ISF_1) ? 'isf1' : 'isf2';
         const presetIdx = d[0];
-        const threshDb  = leToInt16(d, 1) / 256;
-        const pregainDb = leToInt16(d, 3) / 256;
+        const threshDb  = leToFloat(d, 1);
+        const pregainDb = leToFloat(d, 5);
         
         store.updateIsfPreset(which, presetIdx, { thresholdDb: threshDb, pregainDb});
         store.emit("isf:preset-data-update", which, presetIdx);
@@ -731,10 +736,10 @@ function buildModuleBody(body, mod) {
     switch (mod.id) {
         case MODULE.COMPANDER:
             body.appendChild(buildGrMeter({ id: 'compander', label: 'Gain Reduction' }));
-            addSlider(body, 'Threshold', -6000, 0, 100, 'dB',
+            addSlider(body, 'Threshold', -60, 0, 0.1, 'dB',
                 () => store.compander.threshold,
                 (v) => { store.compander.threshold = v; sendFrame(buildSetParam(MODULE.COMPANDER, 0, v)); },
-                null, 0.01);
+                null, 1);
             addSlider(body, 'Ratio Below', 10, 1000, 10, '',
                 () => store.compander.ratioBelow,
                 (v) => { store.compander.ratioBelow = v; sendFrame(buildSetParam(MODULE.COMPANDER, 1, v)); },
@@ -749,13 +754,13 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Release', 10, 2000, 1, 'ms',
                 () => store.compander.releaseMs,
                 (v) => { store.compander.releaseMs = v; sendFrame(buildSetParam(MODULE.COMPANDER, 4, v)); });
-            addSlider(body, 'Lookahead', 0, 100, 1, 'ms',
+            addSlider(body, 'Lookahead', 0, 10, 0.1, 'ms',
                 () => store.compander.lookaheadMs,
                 (v) => {
                     store.compander.lookaheadMs = v;
                     // paramId 6, encoding: ms × 10 → int32
-                    sendFrame(buildSetLookahead(MODULE.COMPANDER, 6, v));
-                }, null, 0.1);
+                    sendFrame(buildSetLookahead(MODULE.COMPANDER, 6, v * 10));
+                }, null, 1);
             break;
 
         case MODULE.EXCITER:
@@ -783,34 +788,34 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Cutoff Freq', 30, 300, 5, 'Hz',
                 () => store.dynamicBass.cutoffFreq,
                 (v) => { store.dynamicBass.cutoffFreq = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 0, v)); });
-            addSlider(body, 'Gain Boost', 0, 2000, 10, 'dB',
+            addSlider(body, 'Gain Boost', 0, 20, 0.1, 'dB',
                 () => store.dynamicBass.gainBoost,
                 (v) => { store.dynamicBass.gainBoost = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 1, v)); },
-                null, 0.01);
+                null, 1);
             addSwitch(body, 'Boost Enhanced',
                 () => store.dynamicBass.enhanced > 0,
                 (v) => { store.dynamicBass.enhanced = v ? 1 : 0; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 2, v ? 1 : 0)); });
-            addSlider(body, 'Boost Full Thres', -6000, 0, 10, 'dB',
+            addSlider(body, 'Boost Full Thres', -60, 0, 0.1, 'dB',
                 () => store.dynamicBass.boostthreshold,
                 (v) => { store.dynamicBass.boostthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 3, v)); },
-                null, 0.01);
-            addSlider(body, 'Neutral Thres', -6000, 0, 10, 'dB',
+                null, 1);
+            addSlider(body, 'Neutral Thres', -60, 0, 0.1, 'dB',
                 () => store.dynamicBass.neutralthreshold,
                 (v) => { store.dynamicBass.neutralthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 4, v)); },
-                null, 0.01);
-            addSlider(body, 'Clip Full Thres', -6000, 0, 10, 'dB',
+                null, 1);
+            addSlider(body, 'Clip Full Thres', -60, 0, 0.1, 'dB',
                 () => store.dynamicBass.clipthreshold,
                 (v) => { store.dynamicBass.clipthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 5, v)); },
-                null, 0.01);
+                null, 1);
             addSlider(body, 'Clip Attack', 0, 2000, 1, 'ms',
                 () => store.dynamicBass.clipattack,
                 (v) => { store.dynamicBass.clipattack = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 6, v)); });
             addSlider(body, 'Clip Release', 0, 2000, 1, 'ms',
                 () => store.dynamicBass.cliprelease,
                 (v) => { store.dynamicBass.cliprelease = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 7, v)); });
-            addSlider(body, 'Lookahead', 0, 50, 1, 'ms',
+            addSlider(body, 'Lookahead', 0, 10, 0.1, 'ms',
                 () => store.dynamicBass.lookaheadMs,
-                (v) => { store.dynamicBass.lookaheadMs = v; sendFrame(buildSetLookahead(MODULE.DYNAMIC_BASS, 8, v)); }, null, 0.1);
+                (v) => { store.dynamicBass.lookaheadMs = v; sendFrame(buildSetLookahead(MODULE.DYNAMIC_BASS, 8, v)); }, null, 1);
             break;
         case MODULE.ISF_1:
             buildIsfPanel(body, 'isf1');
@@ -927,7 +932,7 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Release', 10, 2000, 1, 'ms',
                 () => store.dynamicEq.releaseMs,
                 (v) => { store.dynamicEq.releaseMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, v, store.dynamicEq.lookaheadMs)); });
-            addSlider(body, 'Lookahead', 0, 50, 1, 'ms',
+            addSlider(body, 'Lookahead', 0, 10, 0.1, 'ms',
                 () => store.dynamicEq.lookaheadMs,
                 (v) => { store.dynamicEq.lookaheadMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, v)); }, null, 0.1);
 
@@ -959,10 +964,10 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.PRE_GAIN:
-            addSlider(body, 'Gain', -9600, 2400, 25, 'dB',
+            addSlider(body, 'Gain', -96, 24, 0.1, 'dB',
                 () => store.preGain.gainDb,
                 (v) => { store.preGain.gainDb = v; sendFrame(buildSetParam(MODULE.PRE_GAIN, 0, v)); },
-                null, 0.01);
+                null, 1);
             addSwitch(body, 'Mute',
                 () => store.postGain.mute,
                 (v) => { store.postGain.mute = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 1, v ? 1 : 0)); });
@@ -972,10 +977,10 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.POST_GAIN:
-            addSlider(body, 'Gain', -9600, 2400, 25, 'dB',
+            addSlider(body, 'Gain', -96, 24, 0.1, 'dB',
                 () => store.postGain.gainDb,
                 (v) => { store.postGain.gainDb = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 0, v)); },
-                null, 0.01);
+                null, 1);
             addSwitch(body, 'Mute',
                 () => store.postGain.mute,
                 (v) => { store.postGain.mute = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 1, v ? 1 : 0)); });
@@ -1177,7 +1182,7 @@ function buildDrcPanel(container) {
         addSlider(bandControls, 'Release', 10, 2000, 1, 'ms',
             () => band.releaseMs,
             (v) => { band.releaseMs = v; sendFrame(buildSetParam(MODULE.DRC, pBase + 3, v)); });
-        addSlider(bandControls, 'Lookahead', 0, 100, 1, 'ms',
+        addSlider(bandControls, 'Lookahead', 0, 10, 0.1, 'ms',
             () => band.lookaheadMs,
             (v) => {
                 band.lookaheadMs = v;
@@ -1571,9 +1576,10 @@ function addSlider(container, label, min, max, step, unit, getter, setter, forma
     valInput.type = 'text';
     valInput.className = 'param-input';
     
+    const decimals = (step * displayScale) < 1 ? 2 : 0;
     const updateInputFromSlider = () => {
         const v = parseFloat(slider.value);
-        valInput.value = (v * displayScale).toFixed(displayScale < 1 ? 2 : 0);
+        valInput.value = (v * displayScale).toFixed(decimals);
     };
 
     updateInputFromSlider();
@@ -2006,7 +2012,7 @@ function buildIsfPanel(container, which) {
 
     const { el: rmsEl } = makeConfigItem('RMS Window', isf.rmsMs, 10, 2000, 10, 'ms', v => { isf.rmsMs = v; sendConfig(); });
     const { el: slewEl } = makeConfigItem('Slew Time', isf.slewMs, 10, 5000, 50, 'ms/step', v => { isf.slewMs = v; sendConfig(); });
-    const { el: laEl } = makeConfigItem('Lookahead', isf.lookaheadMs ?? 0, 0, 10, 1, 'ms', v => { isf.lookaheadMs = v; sendConfig(); });
+    const { el: laEl } = makeConfigItem('Lookahead', isf.lookaheadMs ?? 0, 0, 10, 0.1, 'ms', v => { isf.lookaheadMs = v; sendConfig(); });
 
     const ovItem = document.createElement('div'); ovItem.className = 'isf-config-item';
     const ovChk = document.createElement('input'); ovChk.type = 'checkbox'; ovChk.checked = isf.overrideDb !== null;

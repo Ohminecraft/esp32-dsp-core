@@ -22,6 +22,8 @@ public:
               UartProtocol* uart, PresetManager* presetMgr,
               WiFiManager* wifiMgr = nullptr);
 
+    void setWifiManager(WiFiManager* wifiMgr);
+
     void handleCommand(const UartCommand& cmd);
 
 private:
@@ -97,6 +99,12 @@ private:
     static int32_t extractInt32(const uint8_t* data);
     static int16_t extractInt16(const uint8_t* data);
     static uint16_t extractUint16(const uint8_t* data);
+    
+    /** Extract IEEE-754 float32 from 4 bytes, little-endian. */
+    static float extractFloat(const uint8_t* data);
+    
+    /** Pack IEEE-754 float32 into 4 bytes, little-endian. */
+    static void packFloat(uint8_t* dest, float value);
 
     /** Resolve ISF instance from module ID. Returns nullptr if not ISF. */
     IndexSelectableFilter* resolveIsf(uint8_t moduleId);

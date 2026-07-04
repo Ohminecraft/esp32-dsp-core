@@ -81,37 +81,43 @@ static volatile uint32_t g_maxFrameUs  = 0;
 
 // Setting
 
-volatile bool g_softLatchShutdown  = false;
-volatile bool g_usingWifi          = false;
-volatile bool g_usingTrigger       = false;
-volatile bool g_usingBuiltinSerial = false;
+volatile bool g_usingWifi = true;
 
 // Shutdown Mechanism
 #include "esp_timer.h"
 
-
-static esp_timer_handle_t g_autoShutdownTimerHandle = NULL;
-static bool               g_shutdownButtonIsHolding = false;
-static volatile uint32_t  g_shutdownCountdown = 0;
+static esp_timer_handle_t   g_autoShutdownTimerHandle = NULL;
+volatile bool               g_shutdownButtonIsHolding = false;
+volatile uint32_t           g_shutdownCountdown = 0;
+volatile bool               g_softLatchPinIsAvailable = (POWER_PIN_OUT != -1 && POWER_PIN_OFF != -1);
 
 volatile bool     g_userShutdownRequest = false;
+volatile bool     g_timerShutdownTriggered = false;
 
 static void autoShutdownTimerCallback(void* arg) {
     LOG_INFO("SYS", "Auto shutdown timer expired (no clock). Initiating shutdown...");
+    #ifndef USING_DISPLAY
     g_userShutdownRequest = true;
+    #else
+    g_timerShutdownTriggered = true;
+    #endif
 }
 
 static void startAutoShutdownTimer() {
-    if (g_autoShutdownTimerHandle && !esp_timer_is_active(g_autoShutdownTimerHandle)) {
+    if (g_autoShutdownTimerHandle && !esp_timer_is_active(g_autoShutdownTimerHandle) && g_softLatchPinIsAvailable) {
         esp_timer_start_once(g_autoShutdownTimerHandle, (uint64_t)AUTO_SHUTDONW_TIMER_MS * 1000ULL);
         LOG_INFO("SYS", "Auto shutdown timer started (%lu ms)", (unsigned long)AUTO_SHUTDONW_TIMER_MS);
+    } else if (!g_softLatchPinIsAvailable) {
+        LOG_WARN("SYS", "Auto shutdown timer not started: soft latch pins not available");
     }
 }
 
 static void stopAutoShutdownTimer() {
-    if (g_autoShutdownTimerHandle && esp_timer_is_active(g_autoShutdownTimerHandle)) {
+    if (g_autoShutdownTimerHandle && esp_timer_is_active(g_autoShutdownTimerHandle) && g_softLatchPinIsAvailable) {
         esp_timer_stop(g_autoShutdownTimerHandle);
         LOG_INFO("SYS", "Auto shutdown timer stopped (clock restored)");
+    } else if (!g_softLatchPinIsAvailable) {
+        LOG_WARN("SYS", "Auto shutdown timer not stopped: soft latch pins not available");
     }
 }
 
@@ -140,21 +146,16 @@ static void reinitPipeline(uint32_t newRateHz) {
     if (newRateHz > 0) {
         g_pipelineReady = true;
         g_isclockabsent = false;
-        if (g_softLatchShutdown)
         stopAutoShutdownTimer();
-        #ifdef MUTE_PIN
-        digitalWrite(MUTE_PIN, !MUTE_PIN_LOGIC);
-        #endif
+        if (MUTE_PIN != 1) digitalWrite(MUTE_PIN, !MUTE_PIN_LOGIC);
         if (g_audioTaskHandle) {
             vTaskResume(g_audioTaskHandle);
         }
         LOG_INFO("SYNC", "Pipeline reinit done: %lu Hz", (unsigned long)newRateHz);
     } else {
         g_isclockabsent = true;
-        if (g_softLatchShutdown) startAutoShutdownTimer();
-        #ifdef MUTE_PIN
-        digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
-        #endif
+        startAutoShutdownTimer();
+        if (MUTE_PIN != 1) digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
         // audioTask stays suspended
         LOG_INFO("SYNC", "Pipeline stopped: clock absent");
     }
@@ -222,46 +223,6 @@ void IRAM_ATTR audioTask(void* param) {
 }
 
 // ============================================================================
-// WiFi Toggle State and Control
-// ============================================================================
-
-volatile bool g_wifiShutdownActive = false;
-
-#ifndef ONLY_SERIAL
-
-static void toggleWifiShutdown() {
-    g_wifiShutdownActive = !g_wifiShutdownActive;
-
-    // Save to NVS
-    Preferences prefs;
-    prefs.begin("sys_state", false);
-    prefs.putBool("wifi_off", g_wifiShutdownActive);
-    prefs.end();
-
-    if (g_wifiShutdownActive) {
-        LOG_INFO("SYS", "Double-press: Initiating WiFi Shutdown...");
-        
-        // 1. Save Preset 0 first
-        LOG_INFO("SYS", "Saving current DSP settings to Preset 0...");
-        g_presetMgr.savePreset(0, g_pipeline);
-        
-        // 2. Shut down WiFi completely
-        g_webServer.deinit();
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
-        LOG_INFO("SYS", "WiFi Transceiver is now fully OFF.");
-    } else {
-        LOG_INFO("SYS", "Double-press: Restarting to Initialize WiFi...");
-        #ifdef MUTE_PIN
-        digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC); // Mute during reboot
-        #endif
-        ESP.restart();
-    }
-}
-
-#endif // ONLY_SERIAL
-
-// ============================================================================
 // Control Task (Core 0, Priority 12)
 // ============================================================================
 
@@ -283,8 +244,9 @@ void IRAM_ATTR controlTask(void* param) {
     #endif
 
     while (true) {
+        #ifndef USING_DISPLAY
         // 1. Long press detection for hard shutdown (5s)
-        if (g_softLatchShutdown) {
+        if (g_softLatchPinIsAvailable) {
             bool btnIsPressed = (digitalRead(POWER_PIN_OFF) == LOW); // LOW = pressed
 
             if (btnIsPressed) {
@@ -298,7 +260,10 @@ void IRAM_ATTR controlTask(void* param) {
                 g_shutdownButtonIsHolding = false;
                 g_shutdownCountdown = 0;
             }
+        }
+        #endif
 
+            /*  Unused for now
             // 2. Click & Multi-press detection
             static bool lastBtnState = false; // false = released, true = pressed
             static uint32_t btnPressTime = 0;
@@ -357,6 +322,22 @@ void IRAM_ATTR controlTask(void* param) {
                 triggerActive = false;
                 LOG_INFO("SYS", "GPIO %d trigger finished", TRIGGER_GPIO_PIN);
             }
+            */
+
+        if (g_display.wifiOnOffTriggered) {
+            g_display.wifiOnOffTriggered = false;
+            if (g_usingWifi) {
+                LOG_INFO("SYS", "User requested WiFi OFF");
+                g_usingWifi = false;
+                g_webServer.deinit();
+                WiFi.disconnect(true);
+                WiFi.mode(WIFI_OFF);
+            } else {
+                LOG_INFO("SYS", "User requested WiFi ON");
+                g_usingWifi = true;
+                g_wifiMgr.init();
+                g_webServer.init(&g_wifiMgr, &g_uart, &g_paramCtrl);
+            }
         }
 
         // Poll UART for incoming commands
@@ -364,10 +345,11 @@ void IRAM_ATTR controlTask(void* param) {
             g_paramCtrl.handleCommand(g_uart.getCommand());
         }
 
-        #ifndef ONLY_SERIAL
-        // Web server housekeeping
-        g_webServer.loop();
-        g_wifiMgr.loop();
+        if (g_usingWifi && g_webServer.isWsConnected()) {
+            // Web server housekeeping
+            g_webServer.loop();
+            g_wifiMgr.loop();
+        }
 
         // Push WiFi status if connection state changes (e.g., STA connected or fell back to AP)
         static bool lastWifiReady = false;
@@ -399,14 +381,12 @@ void IRAM_ATTR controlTask(void* param) {
             delay(100);
             ESP.restart();
         }
-        #endif // ONLY_SERIAL
 
-        #ifdef SOFT_LATCH_SHUTDOWN
-        if (g_userShutdownRequest) {
-            #ifdef MUTE_PIN
-            digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
-            LOG_INFO("SYS", "Mute pin set.");
-            #endif
+        if (g_userShutdownRequest && g_softLatchPinIsAvailable) {
+            if (MUTE_PIN != -1) {
+                digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
+                LOG_INFO("SYS", "Mute pin set.");
+            }
             LOG_INFO("SYS", "Initiating shutdown sequence...");
             g_audioIO.deinit();
             LOG_INFO("SYS", "Audio interfaces deinitialized.");
@@ -415,15 +395,13 @@ void IRAM_ATTR controlTask(void* param) {
             vTaskDelete(g_syncTaskHandle);
             g_audioSync.clearHandle();
             LOG_INFO("SYS", "Audio synchronization stopped.");
-            #ifndef ONLY_SERIAL
-            if (!g_wifiShutdownActive) {
+            if (!g_usingWifi) {
                 WiFi.status() == WL_CONNECTED ? WiFi.disconnect(true) : WiFi.softAPdisconnect(true);
                 WiFi.mode(WIFI_OFF);
                 LOG_INFO("SYS", "WiFi Transceiver turned OFF.");
             } else {
                 LOG_INFO("SYS", "WiFi Transceiver already OFF.");
             }
-            #endif
             g_statusLED.fadeOff();
             LOG_INFO("SYS", "Status LED turned off.");
             delay(300);
@@ -432,7 +410,6 @@ void IRAM_ATTR controlTask(void* param) {
             digitalWrite(POWER_PIN_OUT, LOW); // Shutdown system
             vTaskDelete(NULL); // Ensure task is deleted preventing auto restart
         }
-        #endif
 
         uint32_t nowMs = millis();
 
@@ -467,7 +444,7 @@ void IRAM_ATTR controlTask(void* param) {
                     s_cpu_usage,          // uint16_t tenths (cpu_usage * 10)
                     s_heapPct,            // uint8_t
                     s_fs,                 // uint32_t current sample rate
-                    (WiFi.status() == WL_CONNECTED),
+                    g_uart.isSerialConnected() ? ConnectStatus::SERIAL_CONNECTED : (g_webServer.isWsConnected() ? ConnectStatus::WIFI_WS_CONNECTED : (g_usingWifi ? ConnectStatus::WIFI_ENABLE : ConnectStatus::WIFI_DISABLE)),
                     g_isclockabsent
                 );
             #endif
@@ -509,27 +486,18 @@ void IRAM_ATTR displayTask(void* param) {
 // ============================================================================
 
 void setup() {
-    if (g_softLatchShutdown) {
+    if (g_softLatchPinIsAvailable) {
         pinMode(POWER_PIN_OUT, OUTPUT);
         pinMode(POWER_PIN_OFF, INPUT_PULLUP);
         g_statusLED.off();
     }
 
-    if (g_usingTrigger) {
-        pinMode(TRIGGER_GPIO_PIN, OUTPUT);
-        digitalWrite(TRIGGER_GPIO_PIN, !TRIGGER_GPIO_ACTIVE_LEVEL);
-    }
-    
-
-    //pinMode(MUTE_PIN, OUTPUT);
-    //digitalWrite(MUTE_PIN, LOW);
-
-    if (g_softLatchShutdown) {
-        esp_timer_create_args_t shutdown_timer_args = {
-            .callback = &autoShutdownTimerCallback,
-            .arg = NULL,
-            .name = "auto_shutdown"
-        };
+    esp_timer_create_args_t shutdown_timer_args = {
+        .callback = &autoShutdownTimerCallback,
+        .arg = NULL,
+        .name = "auto_shutdown"
+    };
+    if (g_softLatchPinIsAvailable) {
         esp_timer_create(&shutdown_timer_args, &g_autoShutdownTimerHandle);
     }
 
@@ -561,33 +529,30 @@ void setup() {
     g_uart.init();
     g_settingsMgr.init();
     g_presetMgr.init();
-
-    #ifndef ONLY_SERIAL
-    LOG_INFO("INIT", "Initializing WiFi & Web Server...");
-    g_wifiMgr.init();
-    #endif
     
-    g_paramCtrl.init(&g_pipeline, &g_uart, &g_presetMgr, &g_wifiMgr);
+    g_paramCtrl.init(&g_pipeline, &g_uart, &g_presetMgr, NULL);
 
-    #ifndef ONLY_SERIAL
-    g_webServer.init(&g_wifiMgr, &g_uart, &g_paramCtrl);
-
-    // Load WiFi shutdown state from NVS
-    Preferences prefs;
-    prefs.begin("sys_state", true); // read-only
-    g_wifiShutdownActive = prefs.getBool("wifi_off", false);
-    prefs.end();
-
-    if (g_wifiShutdownActive) {
-        LOG_INFO("INIT", "WiFi state in NVS is OFF. Disconnecting & turning WiFi Transceiver OFF.");
-        g_webServer.deinit();
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
-    }
+    #ifdef ONLY_SERIAL
+    g_usingWifi = false;
+    #else
+    g_usingWifi = g_settingsMgr.getWifiEnabled();
     #endif
+
+    if (g_usingWifi) {
+        LOG_INFO("INIT", "Initializing WiFi & Web Server...");
+        g_wifiMgr.init();
+        g_paramCtrl.setWifiManager(&g_wifiMgr);
+        g_webServer.init(&g_wifiMgr, &g_uart, &g_paramCtrl);
+    } else {
+        #ifdef ONLY_SERIAL
+        LOG_INFO("INIT", "WiFi force disabled (ONLY_SERIAL mode)");
+        #else
+        LOG_INFO("INIT", "WiFi disabled (user setting)");   
+        #endif
+    }
 
     // 4. Load preset from default slot (configured in settings)
-    uint8_t defaultSlot = g_settingsMgr.getDefaultPresetSlot();
+    uint8_t defaultSlot = g_presetMgr.getCurrentSlotIndex();
     if (g_presetMgr.hasPreset(defaultSlot)) {
         LOG_INFO("INIT", "Auto-loading Preset Slot %d from NVS", defaultSlot);
         g_presetMgr.loadPreset(defaultSlot, g_pipeline);
@@ -661,7 +626,7 @@ void setup() {
     );
 
     // 9. Set POWER_PIN_OUT to high 
-    if (g_softLatchShutdown) digitalWrite(POWER_PIN_OUT, HIGH);
+    if (g_softLatchPinIsAvailable) digitalWrite(POWER_PIN_OUT, HIGH);
 }
 
 // ============================================================================

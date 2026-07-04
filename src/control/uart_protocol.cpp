@@ -13,7 +13,13 @@ void UartProtocol::init(uint32_t baud) {
     resetParser();
 }
 
+static uint32_t timeCheckSerialConnected = millis();
+
 bool UartProtocol::poll() {
+    if (millis() - timeCheckSerialConnected > 3000) { // Is possible because app always send packet every 1-2 second, if not, it means UART is not connected to a host
+        timeCheckSerialConnected = millis();
+        appConnected = false;
+    }
     while (UART.available()) {
         uint8_t byte = UART.read();
         switch (_state) {
@@ -75,6 +81,8 @@ bool UartProtocol::poll() {
                 if (byte == _calcCrc) {
                     _cmd.valid = true;
                     resetParser();
+                    appConnected = true;  // Mark UART as connected to a host
+                    timeCheckSerialConnected = millis();
                     return true;  // Valid command received
                 } else {
                     _cmd.valid = false;

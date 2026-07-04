@@ -24,14 +24,14 @@
 //
 // DSP_SAMPLE_RATE_DEFAULT: used only for initial I2S/pipeline init before
 // AudioSync fires its first callback. AudioSync will reinit within ~100ms.
-#define DSP_SAMPLE_RATE_DEFAULT 48000   // Hz — max QCC5125 LDAC rate
+#define DSP_SAMPLE_RATE_DEFAULT 96000   // Hz — max QCC5125 LDAC rate
 
 #define DSP_NUM_CHANNELS        2       // Stereo
 #define DSP_DMA_BUFFER_COUNT    8       // Number of DMA buffers in the I2S driver
 #if defined(CONFIG_IDF_TARGET_ESP32) // ESP32 can handle max 256 frame size because out of heap
 #define DSP_FRAME_SIZE          256     // Samples per frame per channel
 #else 
-#define DSP_FRAME_SIZE          512
+#define DSP_FRAME_SIZE          384 
 #endif
 #define DSP_FRAME_SAMPLES       (DSP_FRAME_SIZE * DSP_NUM_CHANNELS)
 
@@ -172,8 +172,6 @@
 // ============================================================================
 
 #define MAX_PRESET_SLOTS        3
-#define MAIN_MENU_AUTOSAVE_MS   2500
-#define MAIN_MENU_IDLE_SAVE_MS  2500
 
 // ============================================================================
 // AudioSync Configuration
@@ -187,22 +185,21 @@
 // ============================================================================
 
 #define USING_DISPLAY
-//#define DISABLE_PERF_LOG
-#define ONLY_SERIAL
-//#define USE_BUILTIN_SERIAL
-//#define USING_TRIGGERS
-//#define SOFT_LATCH_SHUTDOWN      // Enable soft-latch shutdown via GPIO (see POWER_PIN_OUT/OFF)
+#define DISABLE_PERF_LOG
+//#define ONLY_SERIAL
+#define USE_BUILTIN_SERIAL
 
 #define AUTO_SHUTDONW_TIMER_MS 1800000 // 30min
 #define SHUTDOWN_COUNTDOWN_MS 5000 // 5s
 
-// Trigger GPIO settings (for external control via single/triple click) - requires external button wiring to POWER_PIN_OFF (SOFT_LATCH_SHUTDOWN must be defined)
-// More features can be added here in future (e.g., double-click, long-press) if needed.
-// Can customize gpio and timing parameters in web app or electron app (future).
-#define TRIGGER_GPIO_ACTIVE_LEVEL   HIGH    // Active state level (HIGH/LOW)
-#define TRIGGER_SINGLE_DURATION_MS  1100    // Duration for single click (ms)
-#define TRIGGER_TRIPLE_DURATION_MS  4000    // Duration for triple click (ms)
+// Trigger GPIO settings now make for HYT QCC5125 remote control. Can customize gpio and timing parameters in web app or electron app (future).
+#define TRIGGER_GPIO_ACTIVE_LEVEL         HIGH    // Active state level (HIGH/LOW)
+#define TRIGGER_BT_KICK_DURATION_MS       100     // Duration for BT Kick trigger pulse
+#define TRIGGER_VOL_UP_DURATION_MS        100     // Duration for Volume Up trigger pulse
+#define TRIGGER_VOL_DOWN_DURATION_MS      100     // Duration for Volume Down trigger pulse
+#define TRIGGER_PAUSE_DURATION_MS         100     // Duration for Pause trigger pulse
 
+// Mute pin logic level (if used) — set to HIGH or LOW depending on your circuit
 #define MUTE_PIN_LOGIC LOW
 
 #endif // CONFIG_H

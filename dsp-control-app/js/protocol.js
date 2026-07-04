@@ -4,6 +4,23 @@
  *
  * Frame: | 0xAA | 0x55 | CMD(1B) | MODULE(1B) | LEN_LO | LEN_HI | DATA(NB) | CRC8(1B) |
  * CRC8:  XOR of CMD + MODULE + LEN bytes + DATA bytes
+ *
+ * ── Unified value encoding (protocol v2) ────────────────────────────────
+ * Every *measured* parameter (dB, ms, Hz, ratio, Q, %, ...) is transmitted
+ * as a 4-byte IEEE-754 float32, little-endian — always the real-world
+ * value (e.g. -20.0 for -20 dB, 4.0 for a 4:1 ratio, 5.0 for 5 ms).
+ *
+ * There is no more Q8.8 / Q4.12 / Q6.10 / ×100 / ×1000 / ×10 scaling table
+ * to keep in sync between app.js and the firmware — both sides read/write
+ * the exact same real number. The firmware converts to whatever internal
+ * fixed-point representation a given DSP module needs *at the boundary*
+ * (param_controller.cpp), so this file and the JS UI never have to know
+ * about those internal formats.
+ *
+ * Only structural/selector bytes — module id, param id, band index,
+ * enabled flag, filter type, preset index — stay plain uint8, since they
+ * are indices/flags, not measurements, and don't benefit from a shared
+ * numeric format.
  */
 
 // ─── Constants (match firmware config.h / uart_protocol.h) ─────────────
@@ -38,10 +55,10 @@ export const CMD = {
     REPORT_ENABLE_MASK: 0x44,
     CURRENT_PRESET_INDEX: 0x45,
     // Live meter reports — sent by firmware when UI polls GET_MODULE_METER
-    REPORT_DYNBASS:   0x46, // energyDb(int16 Q8.8) + alpha(int16 Q8.8)
-    REPORT_DYNEQ:     0x47, // energyDb(int16 Q8.8) + alphaLow(int16 Q8.8) + alphaHigh(int16 Q8.8)
-    REPORT_COMPANDER: 0x48, // envLinear(int16 Q1.14) + gainDb(int16 Q8.8)
-    REPORT_DRC:       0x49, // band0GainDb(int16 Q8.8) × 4 bands
+    REPORT_DYNBASS:   0x46, // energyDb(f32) + alpha(f32)
+    REPORT_DYNEQ:     0x47, // energyDb(f32) + alphaLow(f32) + alphaHigh(f32)
+    REPORT_COMPANDER: 0x48, // envLinear(f32, 0..1) + gainDb(f32)
+    REPORT_DRC:       0x49, // gainDb(f32) × 4 bands
     GET_MODULE_METER: 0x4A, // Request one meter report; data[0]=moduleId
     ACK_RESPONSE: 0xFE,
     ERROR: 0xFF
@@ -94,6 +111,12 @@ export const EQ_FILTER_TYPES = [
     'High Pass', 'Band Pass', 'Notch'
 ];
 
+// Sentinel for "ISF override disabled — use RMS detector".
+// Must match IndexSelectableFilter::ISF_OVERRIDE_AUTO in isf.h exactly,
+// since it's now sent through as a plain float value (no more int16
+// 0x8000 special-case on the wire).
+export const ISF_OVERRIDE_AUTO = -9999.0;
+
 // ─── CRC8 (XOR) ───────────────────────────────────────────────────────
 
 function calcCRC8(bytes) {
@@ -116,58 +139,79 @@ export function buildFrame(cmd, moduleId, data = []) {
     return frame;
 }
 
+// ─── Float32 <-> bytes (the ONE numeric wire format) ───────────────────
+
+const _f32buf  = new ArrayBuffer(4);
+const _f32view = new DataView(_f32buf);
+
+/** Real-world number → 4 bytes, IEEE-754 float32, little-endian. */
+export function floatToLE(value) {
+    _f32view.setFloat32(0, value, true);
+    return [
+        _f32view.getUint8(0), _f32view.getUint8(1),
+        _f32view.getUint8(2), _f32view.getUint8(3)
+    ];
+}
+
+/** 4 bytes, IEEE-754 float32 little-endian → real-world number. */
+export function leToFloat(b, offset = 0) {
+    _f32view.setUint8(0, b[offset]);
+    _f32view.setUint8(1, b[offset + 1]);
+    _f32view.setUint8(2, b[offset + 2]);
+    _f32view.setUint8(3, b[offset + 3]);
+    return _f32view.getFloat32(0, true);
+}
+
 // ─── Convenience Builders ──────────────────────────────────────────────
 
 export function buildEnableModule(moduleId) { return buildFrame(CMD.ENABLE_MODULE, moduleId); }
 export function buildDisableModule(moduleId) { return buildFrame(CMD.DISABLE_MODULE, moduleId); }
 export function buildGetModuleStatus(moduleId) { return buildFrame(CMD.GET_MODULE_STATUS, moduleId); }
 
+/**
+ * Set one parameter. `value` is always the real-world number: a boolean
+ * flag is 0/1, an enum (DRC mode, crossover type) is its plain index,
+ * everything else (dB, ms, Hz, ratio, Q...) is the actual measurement.
+ * No pre-scaling — ever — is required from the caller.
+ */
 export function buildSetParam(moduleId, paramId, value) {
-    // Data: paramId(1B) + value(4B LE)
-    const data = [
-        paramId,
-        value & 0xFF,
-        (value >> 8) & 0xFF,
-        (value >> 16) & 0xFF,
-        (value >> 24) & 0xFF
-    ];
+    // Data: paramId(1B) + value(f32 LE, 4B) = 5 bytes
+    const data = [paramId, ...floatToLE(value)];
     return buildFrame(CMD.SET_PARAM, moduleId, data);
 }
 
-export function buildSetEqBand(moduleId, band, pregainDb, enabled, type, freq, gainQ88, qQ610) {
-    // Data: pregain(2B LE) + band(1B) + enabled(1B) + type(1B) + freq(2B LE) + gain(2B LE) + Q(2B LE) = 11 bytes
-    const pg = dbToQ88(pregainDb);
+export function buildSetEqBand(moduleId, band, pregainDb, enabled, type, freq, gainDb, q) {
+    // Data: pregain(f32) + band(1B) + enabled(1B) + type(1B)
+    //       + freq(f32) + gain(f32) + Q(f32) = 19 bytes
     const data = [
-        pg & 0xFF, (pg >> 8) & 0xFF,
+        ...floatToLE(pregainDb),
         band,
         enabled ? 1 : 0,
         type,
-        freq & 0xFF, (freq >> 8) & 0xFF,
-        gainQ88 & 0xFF, (gainQ88 >> 8) & 0xFF,
-        qQ610 & 0xFF, (qQ610 >> 8) & 0xFF
+        ...floatToLE(freq),
+        ...floatToLE(gainDb),
+        ...floatToLE(q)
     ];
     return buildFrame(CMD.SET_EQ_BAND, moduleId, data);
 }
 
-export function buildSetDynEqBand(isHigh, band, pregainDb, enabled, type, freq, gainQ88, qQ610) {
+export function buildSetDynEqBand(isHigh, band, pregainDb, enabled, type, freq, gainDb, q) {
     const cmd = isHigh ? CMD.SET_DYNEQ_HIGH_BAND : CMD.SET_DYNEQ_LOW_BAND;
-    const pg = dbToQ88(pregainDb);
     const data = [
-        pg & 0xFF, (pg >> 8) & 0xFF,
+        ...floatToLE(pregainDb),
         band, enabled ? 1 : 0, type,
-        freq & 0xFF, (freq >> 8) & 0xFF,
-        gainQ88 & 0xFF, (gainQ88 >> 8) & 0xFF,
-        qQ610 & 0xFF, (qQ610 >> 8) & 0xFF
+        ...floatToLE(freq),
+        ...floatToLE(gainDb),
+        ...floatToLE(q)
     ];
     return buildFrame(cmd, MODULE.DYNAMIC_EQ, data);
 }
 
-export function buildSetDynEqThresholds(low, normal, high, attackMs, releaseMs, lookaheadMs) {
-    const clamped = Math.max(0, Math.min(100, lookaheadMs)); // 100 = 10.0ms
-    const value   = Math.round(clamped * 10);       // ×10 → int32
+export function buildSetDynEqThresholds(lowDb, normalDb, highDb, attackMs, releaseMs, lookaheadMs = 0) {
+    // Data: low, normal, high, attack, release, lookahead — 6 × f32 = 24 bytes
     const data = [
-        ...int32ToLE(low), ...int32ToLE(normal), ...int32ToLE(high),
-        ...int32ToLE(attackMs), ...int32ToLE(releaseMs), ...int32ToLE(value)
+        ...floatToLE(lowDb), ...floatToLE(normalDb), ...floatToLE(highDb),
+        ...floatToLE(attackMs), ...floatToLE(releaseMs), ...floatToLE(lookaheadMs)
     ];
     return buildFrame(CMD.SET_DYNEQ_THRESH, MODULE.DYNAMIC_EQ, data);
 }
@@ -177,7 +221,6 @@ export function buildLoadPreset(slot) { return buildFrame(CMD.LOAD_PRESET, MODUL
 export function buildSetInputSource(src) { return buildFrame(CMD.SET_INPUT_SOURCE, MODULE.SYSTEM, [src]); }
 export function buildSetOutputSource(src) { return buildFrame(CMD.SET_OUTPUT_SOURCE, MODULE.SYSTEM, [src]); }
 
-/** Request GET_MODULE_ALIVE, deprecated, see above */
 export function buildGetAllState() {
     return buildFrame(CMD.GET_ALL_STATE, MODULE.SYSTEM);
 }
@@ -188,24 +231,13 @@ export function buildGetModuleMeter(moduleId) {
 }
 
 /**
- * Set lookahead time for Compander or DRC.
- *
- * Encoding: ms × 10 → int32  (0.1ms resolution)
- *   e.g. 5.0ms → value 50,  0.5ms → value 5,  0 → disabled
- *
- * Compander:    paramId = 6
- * DRC band:     paramId = pBase + 5  (pBase = 0x20 + bandIdx*8)
- * DynamicBass:  paramId = 8
- *
- * @param {number} moduleId  MODULE.COMPANDER or MODULE.DRC
- * @param {number} paramId   6 for Compander; (0x20+band*8+5) for DRC band
- * @param {number} ms        lookahead in ms (float, e.g. 5.0)
+ * Set lookahead time for Compander / DRC band / Dynamic Bass / Dynamic EQ.
+ * `ms` is the real lookahead time in milliseconds (e.g. 5.0 = 5 ms).
+ * Just a plain SET_PARAM now — kept as a named helper for call-site clarity.
  */
 export function buildSetLookahead(moduleId, paramId, ms) {
-    // Clamp: 0 = off, max 10ms (matches COMP_LOOKAHEAD_MAX / DRC_LOOKAHEAD_MAX at 96kHz)
-    const clamped = Math.max(0, Math.min(100, ms)); // 100 = 10.0ms
-    const value   = Math.round(clamped * 10);       // ×10 → int32
-    return buildSetParam(moduleId, paramId, value);
+    const clamped = Math.max(0, Math.min(10, ms)); // matches firmware's ~10ms max buffers
+    return buildSetParam(moduleId, paramId, clamped);
 }
 
 // ─── ISF Builders ──────────────────────────────────────────────────────
@@ -214,36 +246,37 @@ export function buildSetLookahead(moduleId, paramId, ms) {
  * Set one ISF preset slot.
  * @param {number} moduleId  MODULE.ISF_1 or MODULE.ISF_2
  * @param {number} presetIdx 0..9
- * @param {object} preset    { thresholdDb, pregainDb }
+ * @param {object} preset    { thresholdDb, pregainDb }  — real dB values
  */
 export function buildSetIsfPreset(moduleId, presetIdx, preset) {
-    // preset_idx(1) + threshold(2) + pregain(2)
+    // Data: preset_idx(1B) + threshold(f32) + pregain(f32) = 9 bytes
     const data = [
         presetIdx & 0xFF,
-        ...int16ToLE(dbToQ88(preset.thresholdDb || 0)),
-        ...int16ToLE(dbToQ88(preset.pregainDb   || 0)),
+        ...floatToLE(preset.thresholdDb || 0),
+        ...floatToLE(preset.pregainDb || 0),
     ];
     return buildFrame(CMD.SET_ISF_PRESET, moduleId, data);
 }
 
 export function buildSetIsfBandParams(moduleId, presetIdx, bandIdx, presetObj) {
     if (!presetObj || !presetObj.bands || !presetObj.bands[bandIdx]) {
-        return null; 
+        return null;
     }
 
-    const currentband = presetObj.bands[bandIdx]; 
-    
+    const band = presetObj.bands[bandIdx];
+
+    // Data: presetIdx(1B) + bandIdx(1B) + enabled(1B) + type(1B)
+    //       + freq(f32) + gain(f32) + Q(f32) = 16 bytes
     const data = [
         presetIdx,
         bandIdx,
-        currentband.enabled ? 1 : 0,
-        (currentband.type || 0) & 0xFF,
-        (currentband.freq || 1000) & 0xFF,
-        ((currentband.freq || 1000) >> 8) & 0xFF,
-        ...int16ToLE(dbToQ88(currentband.gain || 0)),
-        ...int16ToLE(qToQ610(currentband.q || 0.707))
+        band.enabled ? 1 : 0,
+        (band.type || 0) & 0xFF,
+        ...floatToLE(band.freq || 1000),
+        ...floatToLE(band.gain || 0),
+        ...floatToLE(band.q || 0.707)
     ];
-    
+
     return buildFrame(CMD.SET_ISF_BAND_PARAMS, moduleId, data);
 }
 
@@ -253,18 +286,18 @@ export function buildSetIsfBandParams(moduleId, presetIdx, bandIdx, presetObj) {
  * @param {number} numPresets 1..10
  * @param {number} rmsMs      RMS window ms
  * @param {number} slewMs     Slew time per index step ms
- * @param {number|null} overrideDb  null = auto (use RMS), number = override level
+ * @param {number|null} overrideDb  null = auto (use RMS), number = override level (dB)
+ * @param {number} lookaheadMs
  */
-export function buildSetIsfConfig(moduleId, numPresets, rmsMs, slewMs, overrideDb = null, lookahead) {
-    const overrideQ88 = (overrideDb === null) ? 0x8000 : dbToQ88(overrideDb);
-    const clamped = Math.max(0, Math.min(100, lookahead)); // 100 = 10.0ms
-    const lookaheadvalue   = Math.round(clamped * 10);       // ×10 → int32
+export function buildSetIsfConfig(moduleId, numPresets, rmsMs, slewMs, overrideDb = null, lookaheadMs = 0) {
+    const overrideVal = (overrideDb === null) ? ISF_OVERRIDE_AUTO : overrideDb;
+    // Data: numPresets(1B) + rmsMs(f32) + slewMs(f32) + override(f32) + lookahead(f32) = 17 bytes
     const data = [
         numPresets & 0xFF,
-        ...int16ToLE(rmsMs),
-        ...int16ToLE(slewMs),
-        ...int16ToLE(overrideQ88),
-        ...int32ToLE(lookaheadvalue)
+        ...floatToLE(rmsMs),
+        ...floatToLE(slewMs),
+        ...floatToLE(overrideVal),
+        ...floatToLE(lookaheadMs)
     ];
     return buildFrame(CMD.SET_ISF_CONFIG, moduleId, data);
 }
@@ -274,14 +307,9 @@ export function buildGetIsfState() {
     return buildFrame(CMD.GET_ISF_STATE, MODULE.ISF_1);
 }
 
-function int16ToLE(v) {
-    const vi = v | 0;
-    return [vi & 0xFF, (vi >> 8) & 0xFF];
-}
-
-
-
 // ─── WiFi Builders ──────────────────────────────────────────────────────
+// (Unaffected by the numeric-value unification — SSIDs/passwords are text,
+//  IP/RSSI/enc flags are already plain single-purpose bytes.)
 
 export function buildWifiScan() { return buildFrame(CMD.WIFI_SCAN, MODULE.SYSTEM); }
 
@@ -309,12 +337,10 @@ export function buildWifiSetSTA(ssid, pass, staticIpStr = "") {
 export function buildWifiSetAP() { return buildFrame(CMD.WIFI_SET_AP, MODULE.SYSTEM); }
 export function buildWifiGetStatus() { return buildFrame(CMD.WIFI_GET_STATUS, MODULE.SYSTEM); }
 
-// ─── Data conversion helpers ───────────────────────────────────────────
-
-function int32ToLE(value) {
-    const v = value | 0; // Ensure integer
-    return [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF];
-}
+// ─── Legacy integer helpers ─────────────────────────────────────────────
+// Still used for genuinely integer wire fields that aren't "measured
+// values" (enable-mask bitfield, WiFi IP octets, RSSI, preset index...).
+// NOT used anymore to encode DSP parameter values — see floatToLE/leToFloat.
 
 export function leToInt32(b, offset = 0) {
     let val = b[offset] | (b[offset + 1] << 8) | (b[offset + 2] << 16) | (b[offset + 3] << 24);
@@ -327,20 +353,20 @@ export function leToInt16(b, offset = 0) {
     return val;
 }
 
-// ─── EQ format converters ──────────────────────────────────────────────
+// ─── Deprecated Q-format converters ─────────────────────────────────────
+// Kept only for any legacy display/graph code that might still import
+// them (e.g. curve-drawing helpers). They are NOT used anywhere in the
+// wire protocol anymore — do not reintroduce them into builders/parsers.
 
-/** dB float to Q8.8 int16 (e.g., -3.0 → -768) */
+/** @deprecated wire format is float32 now; kept for legacy callers only. */
 export function dbToQ88(db) { return Math.round(db * 256); }
-
-/** dB float to Q31 int32 */
-export function dbToQ31(db) {
-    return Math.round(Math.pow(10, db / 20) * 2147483647);
-}
-/** Q8.8 int16 to dB float */
+/** @deprecated */
+export function dbToQ31(db) { return Math.round(Math.pow(10, db / 20) * 2147483647); }
+/** @deprecated */
 export function q88ToDb(q88) { return q88 / 256; }
-/** Q factor float to Q6.10 int16 (e.g., 0.707 → 724) */
+/** @deprecated */
 export function qToQ610(q) { return Math.round(q * 1024); }
-/** Q6.10 to Q factor float */
+/** @deprecated */
 export function q610ToQ(q610) { return q610 / 1024; }
 
 // ─── Response Parser ──────────────────────────────────────────────────

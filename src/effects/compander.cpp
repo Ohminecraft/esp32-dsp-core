@@ -24,7 +24,7 @@ void Compander::init(int32_t sampleRate, int32_t numChannels) {
     const float savedLookaheadMs = _lookaheadMs;
 
     DspModule::init(sampleRate, numChannels);
-    _thresholdDbInt = -2000;
+    _thresholdDb = -20.0f;  // dB
     _ratioBelowQ88 = 100;  // 1.00:1, SDK/UI 0.01 steps
     _ratioAboveQ88 = 400;  // 4.00:1
     _attackMs = 10;
@@ -167,7 +167,6 @@ void Compander::reset() {
 }
 
 void Compander::recalcCoeffs() {
-    _thresholdDb = (float)_thresholdDbInt / 100.0f;
 
     // Ratio format matches the control UI and SDK-style storage:
     // 100 = 1.00:1, 400 = 4.00:1.
@@ -187,7 +186,7 @@ void Compander::recalcCoeffs() {
     }
 }
 
-void Compander::setThreshold(int32_t db_001)     { _thresholdDbInt = db_001; recalcCoeffs(); }
+void Compander::setThreshold(float db)     { _thresholdDb = db; recalcCoeffs(); }
 void Compander::setRatioBelow(int32_t ratio_q88) { _ratioBelowQ88 = (ratio_q88 < 10) ? 100 : ratio_q88; recalcCoeffs(); }
 void Compander::setRatioAbove(int32_t ratio_q88) { _ratioAboveQ88 = (ratio_q88 < 100) ? 100 : ratio_q88; recalcCoeffs(); }
 void Compander::setAttackTime(int32_t ms)        { _attackMs = (ms < 1) ? 1 : ms; recalcCoeffs(); }

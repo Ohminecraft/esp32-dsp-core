@@ -30,6 +30,10 @@
 #include "config.h" // For MAX_PRESET_SLOTS and DSP_MODULE_COUNT
 
 extern volatile bool g_userShutdownRequest;
+extern volatile bool g_timerShutdownTriggered;
+extern volatile bool g_softLatchPinIsAvailable;
+extern volatile uint32_t g_shutdownCountdown;
+extern volatile bool g_shutdownButtonIsHolding;
 
 // ─── Forward declarations ──────────────────────────────────────────────────────
 class DspPipeline;
@@ -57,6 +61,14 @@ namespace Color {
     static constexpr uint16_t SLIDER_BG   = 0x2945;
     static constexpr uint16_t SLIDER_FILL = 0x07FF;
 }
+
+// ─── Connection status enum ───────────────────────────────────────
+enum class ConnectStatus : uint8_t {
+    WIFI_DISABLE,
+    WIFI_ENABLE,
+    WIFI_WS_CONNECTED,
+    SERIAL_CONNECTED,
+};
 
 // ─── Screen IDs ───────────────────────────────────────────────────────────────
 enum class ScreenID : uint8_t {
@@ -299,7 +311,7 @@ public:
      * Inject live stats (called from controlTask ~500ms interval).
      */
     void setStats(uint16_t cpuUsageTenths, uint8_t heapPct,
-                  uint32_t sampleRate,     bool wifiConnected,
+                  uint32_t sampleRate,     ConnectStatus connectStatus,
                   bool clockAbsent);
 
     /**
@@ -354,7 +366,7 @@ private:
     uint16_t _cpuTenths   = 0;
     uint8_t  _heapPct     = 0;
     uint32_t _sampleRate  = 0;
-    bool     _wifiConn    = false;
+    ConnectStatus _connectStatus = ConnectStatus::WIFI_DISABLE;
     bool     _clockAbsent = true;
 
     // ── Live meter data (for DSP list screen) ─────────────────────────────────
@@ -367,7 +379,7 @@ private:
     float    _dynEqAlphaHigh  = 0.0f;  // 0..1 high EQ contribution
     float    _dynEqEnergyDb   = -96.0f; // energy in dBFS
     uint32_t _lastMeterUpdate = 0;
-    static constexpr uint32_t METER_UPDATE_INTERVAL_MS = 100; // 10 Hz refresh
+    static constexpr uint32_t METER_UPDATE_INTERVAL_MS = 40; // 25 Hz refresh
 
     // ── Pipeline (injected) ───────────────────────────────────────────────────
     DspPipeline*     _pipeline    = nullptr;
@@ -434,7 +446,7 @@ private:
                            bool focused, bool editing);
 
     void drawSideBars(int16_t x, int16_t y, int16_t h);
-    void drawWifiBadge(int16_t x, int16_t y);
+    void drawConnectionBadge(int16_t x, int16_t y);
 
     void drawNavButton(int16_t x, int16_t y, int16_t w, int16_t h,
                        const char* label, bool focused, bool holdProgress,
@@ -476,6 +488,7 @@ private:
     uint8_t  _kbParamIdx = 0;
 
 public:
+    bool wifiOnOffTriggered = false; // set to true when user toggles WiFi in settings
     struct UiParam {
         const char* name;
         const char* unit;
@@ -505,6 +518,7 @@ private:
     bool     _mmTabReturnViaHold   = false;
     bool     _powerOffUserRequest  = false;
     bool     _powerOffScreenActive = false;
+    uint8_t  _screenFadeOutValue   = 255; // 0 = fully black, 255 = fully visible
     uint32_t _powerOffStartMs      = 0;
     uint32_t _lastBatteryDrawMs    = 0;
     bool     _settingsWifi         = false;
@@ -548,6 +562,6 @@ private:
 
     // ── Utility ───────────────────────────────────────────────────────────────
     static void formatFloat(char* buf, uint8_t bufLen,
-                            float val, uint8_t decimals);
+                            float val, uint8_t decimals, const char* unit = nullptr);
     static uint16_t blendColor(uint16_t a, uint16_t b, uint8_t t);
 };

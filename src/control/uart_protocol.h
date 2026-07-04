@@ -94,6 +94,11 @@ public:
    */
   void endBatch();
 
+  /**
+   * Check if the UART is connected to a host (i.e., if any commands have been received).
+   */
+  bool isSerialConnected() const { return appConnected; }
+
 private:
   UartCommand _cmd;
 
@@ -111,6 +116,8 @@ private:
   ParseState _state = WAIT_SYNC1;
   uint16_t _dataIndex = 0;
   uint8_t _calcCrc = 0;
+
+  bool appConnected = false;  // true if UART connected to a host
 
   // Optional WebSocket for dual output (nullptr = Serial2 only)
   AsyncWebSocket* _ws = nullptr;

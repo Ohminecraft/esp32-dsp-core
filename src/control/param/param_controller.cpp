@@ -20,6 +20,8 @@
 // init
 // ─────────────────────────────────────────────────────────────────────────────
 
+extern volatile bool g_usingWifi;
+
 void ParamController::init(
     DspPipeline* pipeline, UartProtocol* uart, PresetManager* presetMgr, WiFiManager* wifiMgr)
 {
@@ -75,53 +77,38 @@ void ParamController::handleCommand(const UartCommand& cmd) {
             const uint8_t modId = cmd.data[0];
 
             if (modId == MODULE_ID_DYNAMIC_BASS && _pipeline->getDynamicBass().isEnabled()) {
-                // REPORT_DYNBASS: energyDb(int16 Q8.8) + alpha(int16 Q8.8)
-                const int16_t eDb = (int16_t)(_pipeline->getDynamicBass().getEnergyDb() * 256.0f);
-                const int16_t alp = (int16_t)(_pipeline->getDynamicBass().getAlpha()    * 256.0f);
-                uint8_t d[4] = {
-                    (uint8_t)(eDb     & 0xFF), (uint8_t)((eDb >> 8) & 0xFF),
-                    (uint8_t)(alp     & 0xFF), (uint8_t)((alp >> 8) & 0xFF)
-                };
+                // REPORT_DYNBASS: energyDb(f32) + alpha(f32) = 8 bytes
+                uint8_t d[8];
+                packFloat(&d[0], _pipeline->getDynamicBass().getEnergyDb());
+                packFloat(&d[4], _pipeline->getDynamicBass().getAlpha());
                 _uart->sendFrame(CMD_REPORT_DYNBASS, MODULE_ID_DYNAMIC_BASS, d, sizeof(d));
             }
 
             else if (modId == MODULE_ID_DYNAMIC_EQ && _pipeline->getDynamicEq().isEnabled()) {
-                // REPORT_DYNEQ: energyDb(int16 Q8.8) + alphaLow(int16 Q8.8) + alphaHigh(int16 Q8.8)
+                // REPORT_DYNEQ: energyDb(f32) + alphaLow(f32) + alphaHigh(f32) = 12 bytes
                 const DynamicEQ& deq = _pipeline->getDynamicEq();
-                const int16_t eDb  = (int16_t)(deq.getEnergyDb()  * 256.0f);
-                const int16_t aLow = (int16_t)(deq.getAlphaLow()  * 256.0f);
-                const int16_t aHi  = (int16_t)(deq.getAlphaHigh() * 256.0f);
-                uint8_t d[6] = {
-                    (uint8_t)(eDb  & 0xFF), (uint8_t)((eDb  >> 8) & 0xFF),
-                    (uint8_t)(aLow & 0xFF), (uint8_t)((aLow >> 8) & 0xFF),
-                    (uint8_t)(aHi  & 0xFF), (uint8_t)((aHi  >> 8) & 0xFF)
-                };
+                uint8_t d[12];
+                packFloat(&d[0], deq.getEnergyDb());
+                packFloat(&d[4], deq.getAlphaLow());
+                packFloat(&d[8], deq.getAlphaHigh());
                 _uart->sendFrame(CMD_REPORT_DYNEQ, MODULE_ID_DYNAMIC_EQ, d, sizeof(d));
             }
 
             else if (modId == MODULE_ID_COMPANDER && _pipeline->getCompander().isEnabled()) {
-                // REPORT_COMPANDER: envLinear(uint16 Q1.14) + gainDb(int16 Q8.8)
-                // Q1.14: 0..1.0 → 0..16384, clamp tại 16383
-                const Compander& comp   = _pipeline->getCompander();
-                const float      envLin = comp.getEnvLinear();
-                const float      gainDb = comp.getGainDb();
-                const uint16_t   envQ   = (uint16_t)(envLin >= 1.0f ? 16383 : (uint16_t)(envLin * 16384.0f));
-                const int16_t    gQ88   = (int16_t)(gainDb * 256.0f);
-                uint8_t d[4] = {
-                    (uint8_t)(envQ & 0xFF), (uint8_t)((envQ >> 8) & 0xFF),
-                    (uint8_t)(gQ88 & 0xFF), (uint8_t)((gQ88 >> 8) & 0xFF)
-                };
+                // REPORT_COMPANDER: envLinear(f32) + gainDb(f32) = 8 bytes
+                const Compander& comp = _pipeline->getCompander();
+                uint8_t d[8];
+                packFloat(&d[0], comp.getEnvLinear());
+                packFloat(&d[4], comp.getGainDb());
                 _uart->sendFrame(CMD_REPORT_COMPANDER, MODULE_ID_COMPANDER, d, sizeof(d));
             }
 
             else if (modId == MODULE_ID_DRC && _pipeline->getDrc().isEnabled()) {
-                // REPORT_DRC: 4 × gainDb(int16 Q8.8) — bands 0(Low), 1(Mid), 2(High), 3(Full)
+                // REPORT_DRC: 4 × gainDb(f32) — bands 0(Low), 1(Mid), 2(High), 3(Full) = 16 bytes
                 const DRC& drc = _pipeline->getDrc();
-                uint8_t d[8];
+                uint8_t d[16];
                 for (int b = 0; b < 4; b++) {
-                    const int16_t gQ88 = (int16_t)(drc.getBandGainDb((uint8_t)b) * 256.0f);
-                    d[b * 2]     = (uint8_t)(gQ88 & 0xFF);
-                    d[b * 2 + 1] = (uint8_t)((gQ88 >> 8) & 0xFF);
+                    packFloat(&d[b * 4], drc.getBandGainDb((uint8_t)b));
                 }
                 _uart->sendFrame(CMD_REPORT_DRC, MODULE_ID_DRC, d, sizeof(d));
             }
@@ -164,13 +151,12 @@ void ParamController::handleCommand(const UartCommand& cmd) {
             break;
         }
 
-        #ifndef ONLY_SERIAL
-        case CMD_WIFI_SCAN:   handleWifiScan(cmd);      break;
-        case CMD_WIFI_SET_STA: handleWifiSetSTA(cmd);   break;
-        case CMD_WIFI_SET_AP:  handleWifiSetAP(cmd);    break;
-        case CMD_WIFI_GET_STATUS: handleWifiGetStatus(cmd); break;
-        #endif
-
+        if (g_usingWifi) {
+            case CMD_WIFI_SCAN:   handleWifiScan(cmd);      break;
+            case CMD_WIFI_SET_STA: handleWifiSetSTA(cmd);   break;
+            case CMD_WIFI_SET_AP:  handleWifiSetAP(cmd);    break;
+            case CMD_WIFI_GET_STATUS: handleWifiGetStatus(cmd); break;
+        }
         default:
             LOG_WARN(TAG, "Unknown command: 0x%02X", cmd.cmd);
             break;
@@ -191,6 +177,7 @@ IndexSelectableFilter* ParamController::resolveIsf(uint8_t moduleId) {
 // handleSetIsfCommonPresetParams
 //
 // Parses one ISF preset from UART and writes it to the ISF instance.
+// Data layout: preset_idx(1) + thresholdDb(f32) + pregainDb(f32) = 9 bytes
 // ─────────────────────────────────────────────────────────────────────────────
 
 void ParamController::handleSetIsfCommonPresetParams(const UartCommand& cmd) {
@@ -200,8 +187,8 @@ void ParamController::handleSetIsfCommonPresetParams(const UartCommand& cmd) {
         return;
     }
 
-    // Minimum: preset_idx(1) + threshold(2) + pregain(2) = 5 bytes
-    if (cmd.dataLen < 5) {
+    // preset_idx(1) + thresholdDb(f32) + pregainDb(f32) = 9 bytes
+    if (cmd.dataLen < 9) {
         LOG_WARN(TAG, "SET_ISF_PRESET: frame too short (%d)", cmd.dataLen);
         _uart->sendAck(cmd.moduleId, 1);
         return;
@@ -214,26 +201,27 @@ void ParamController::handleSetIsfCommonPresetParams(const UartCommand& cmd) {
         return;
     }
 
+    float thresholdDb = extractFloat(&cmd.data[1]);
+    float pregainDb   = extractFloat(&cmd.data[5]);
+
     ISFPreset preset;
-    preset.thresholdDb = extractInt16(&cmd.data[1]);
-    preset.filters.setPregain(extractInt16(&cmd.data[3]));
+    preset.thresholdDb = (int16_t)(thresholdDb * 256.0f);  // Internal Q8.8
+    preset.filters.setPregain((int16_t)(pregainDb * 256.0f));
 
     isf->setPreset(presetIdx, preset, ISF_SET_COMMON);
 
     LOG_INFO(TAG, "ISF%d preset[%d] threshold=%.1f dB pregain=%.1f dB",
         (cmd.moduleId == MODULE_ID_ISF_1) ? 1 : 2,
-        presetIdx,
-        (float)preset.thresholdDb / 256.0f,
-        (float)preset.filters.getPregain() / 256.0f);
+        presetIdx, thresholdDb, pregainDb);
 
     _uart->sendAck(cmd.moduleId, 0);
 }
 
 void ParamController::handleSetIsfBandParams(const UartCommand& cmd) {
     IndexSelectableFilter* isf = resolveIsf(cmd.moduleId);
-    // Layout presetIdx(1) + bandIdx(1) + enabled(1) + type(1) + freq(2) + gain(2) + Q(2) = 10 bytes
-    if (cmd.dataLen < 10) {
-        LOG_WARN(TAG, "SET_ISF_BAND: data frame to short (%d)", cmd.dataLen);
+    // Layout: presetIdx(1) + bandIdx(1) + enabled(1) + type(1) + freq(f32) + gain(f32) + Q(f32) = 16 bytes
+    if (cmd.dataLen < 16) {
+        LOG_WARN(TAG, "SET_ISF_BAND: data frame too short (%d)", cmd.dataLen);
         _uart->sendAck(cmd.moduleId, 1);
         return;
     }
@@ -252,24 +240,24 @@ void ParamController::handleSetIsfBandParams(const UartCommand& cmd) {
         return;
     }
 
+    float freq = extractFloat(&cmd.data[4]);
+    float gain = extractFloat(&cmd.data[8]);
+    float q    = extractFloat(&cmd.data[12]);
+
     ISFPreset preset;
     EQFilterParams params;
     params.enabled = cmd.data[2] != 0;
     params.type = cmd.data[3];
-    params.f0 = extractUint16(&cmd.data[4]);
-    params.gain = extractInt16(&cmd.data[6]);
-    params.Q = extractUint16(&cmd.data[8]);
+    params.f0 = (uint16_t)freq;
+    params.gain = (int16_t)(gain * 256.0f);  // Internal Q8.8
+    params.Q = (uint16_t)(q * 1024.0f);      // Internal Q6.10
     preset.filters.setBand(bandIdx, params);
 
     isf->setPreset(presetIdx, preset, ISF_SET_BAND, bandIdx);
 
-    LOG_INFO(TAG, "SET_ISF_BANDS: ISF%d, presetIdx:%d, bandIdx:%d, f0:%d, gain:%.1f, Q:%.1f", 
+    LOG_INFO(TAG, "SET_ISF_BANDS: ISF%d, presetIdx:%d, bandIdx:%d, f0:%.0f, gain:%.1f, Q:%.3f", 
         (cmd.moduleId == MODULE_ID_ISF_1) ? 1 : 2,
-        presetIdx,
-        bandIdx,
-        params.f0,
-        (float)params.gain / 256,
-        (float)params.Q / 256);
+        presetIdx, bandIdx, freq, gain, q);
 
     _uart->sendAck(cmd.moduleId, 0);
 }
@@ -277,8 +265,8 @@ void ParamController::handleSetIsfBandParams(const UartCommand& cmd) {
 // ─────────────────────────────────────────────────────────────────────────────
 // handleSetIsfConfig
 //
-// Data: num_presets(1) + rms_ms(2) + slew_ms(2) + override_q88(2) = 7 bytes
-// override_q88 == INT16_MIN → auto (use RMS detector)
+// Data layout: numPresets(1) + rmsMs(f32) + slewMs(f32) + overrideDb(f32) + lookaheadMs(f32) = 17 bytes
+// overrideDb == ISF_OVERRIDE_AUTO (-9999.0) → use RMS detector
 // ─────────────────────────────────────────────────────────────────────────────
 
 void ParamController::handleSetIsfConfig(const UartCommand& cmd) {
@@ -288,32 +276,27 @@ void ParamController::handleSetIsfConfig(const UartCommand& cmd) {
         return;
     }
 
-    if (cmd.dataLen < 7) {
+    if (cmd.dataLen < 17) {
         LOG_WARN(TAG, "SET_ISF_CONFIG: frame too short (%d)", cmd.dataLen);
         _uart->sendAck(cmd.moduleId, 1);
         return;
     }
 
-    uint8_t numPresets    = cmd.data[0];
-    int16_t rmsMs         = extractInt16(&cmd.data[1]);
-    int16_t slewMs        = extractInt16(&cmd.data[3]);
-    int16_t overrideQ88   = extractInt16(&cmd.data[5]);
-    int32_t lookahead     = extractInt32(&cmd.data[7]);
+    uint8_t numPresets   = cmd.data[0];
+    float   rmsMs        = extractFloat(&cmd.data[1]);
+    float   slewMs       = extractFloat(&cmd.data[5]);
+    float   overrideDb   = extractFloat(&cmd.data[9]);
+    float   lookaheadMs  = extractFloat(&cmd.data[13]);
 
-    if (numPresets > 0) isf->setNumPresets(numPresets);
-    if (rmsMs  > 0)    isf->setRmsWindowMs(rmsMs);
-    if (slewMs > 0)    isf->setSlewMs(slewMs);
-    if (lookahead > 0) isf->setLookahead((float)lookahead / 10.0f);
-
-    // INT16_MIN (-32768) = auto; anything else = override level in Q8.8
-    float overrideDb = (overrideQ88 == (int16_t)0x8000)
-        ? IndexSelectableFilter::ISF_OVERRIDE_AUTO
-        : (float)overrideQ88 / 256.0f;
+    if (numPresets > 0)  isf->setNumPresets(numPresets);
+    if (rmsMs > 0)       isf->setRmsWindowMs((int16_t)rmsMs);
+    if (slewMs > 0)      isf->setSlewMs((int16_t)slewMs);
+    if (lookaheadMs > 0) isf->setLookahead(lookaheadMs);
     isf->setOverrideDb(overrideDb);
 
-    LOG_INFO(TAG, "ISF%d config: presets=%d rms=%dms slew=%dms override=%.1f, lookahead=%f",
+    LOG_INFO(TAG, "ISF%d config: presets=%d rms=%.1fms slew=%.1fms override=%.1fdB lookahead=%.1fms",
         (cmd.moduleId == MODULE_ID_ISF_1) ? 1 : 2,
-        numPresets, rmsMs, slewMs, overrideDb, (float)lookahead / 10.0f);
+        numPresets, rmsMs, slewMs, overrideDb, lookaheadMs);
 
     _uart->sendAck(cmd.moduleId, 0);
 }
@@ -330,13 +313,14 @@ void ParamController::handleGetIsfState(const UartCommand& cmd) {
 // ─────────────────────────────────────────────────────────────────────────────
 // sendIsfState — push REPORT_ISF for one instance
 //
-// Data layout (8 bytes):
+// Data layout (18 bytes, all numeric values are float32):
 //   [0]     instance     uint8   0=ISF1, 1=ISF2
-//   [1..2]  level_q88    int16   current RMS level dB (Q8.8)
-//   [3..4]  slew_q88     int16   fractional index * 256
-//   [5]     active_a     uint8   floor(slewIndex)
-//   [6]     active_b     uint8   ceil(slewIndex)
-//   [7]     num_presets  uint8
+//   [1..4]  levelDb      float32 current RMS level dB
+//   [5..8]  slewIndex    float32 fractional preset index
+//   [9..12] lookaheadMs  float32 lookahead time in ms
+//   [13]    active_a     uint8   floor(slewIndex)
+//   [14]    active_b     uint8   ceil(slewIndex)
+//   [15]    num_presets  uint8
 // ─────────────────────────────────────────────────────────────────────────────
 
 void ParamController::sendIsfState(uint8_t instanceIdx) {
@@ -344,30 +328,18 @@ void ParamController::sendIsfState(uint8_t instanceIdx) {
         ? _pipeline->getIsf1()
         : _pipeline->getIsf2();
 
-    float levelDb   = isf.getCurrentLevelDb();
-    float slewIdx   = isf.getSlewIndex();
+    float levelDb     = isf.getCurrentLevelDb();
+    float slewIdx     = isf.getSlewIndex();
+    float lookaheadMs = isf.getLookaheadMs();
 
-    // Clamp level to Q8.8 representable range [-128, 127]
-    if (levelDb < -128.0f) levelDb = -128.0f;
-    if (levelDb >  127.0f) levelDb =  127.0f;
-
-    int16_t levelQ88    = (int16_t)(levelDb * 256.0f);
-    int16_t slewQ88     = (int16_t)(slewIdx * 256.0f);
-    int32_t lookahead = (int32_t)(isf.getLookaheadMs() * 10.0f + 0.5f);
-
-    uint8_t pkt[12];
-    pkt[0]  = instanceIdx;
-    pkt[1]  = (uint8_t)(levelQ88 & 0xFF);
-    pkt[2]  = (uint8_t)((levelQ88 >> 8) & 0xFF);
-    pkt[3]  = (uint8_t)(slewQ88 & 0xFF);
-    pkt[4]  = (uint8_t)((slewQ88 >> 8) & 0xFF);
-    pkt[5]  = (uint8_t)(lookahead & 0xFF);
-    pkt[6]  = (uint8_t)((lookahead >> 8) & 0xFF);
-    pkt[7]  = (uint8_t)((lookahead >> 16) & 0xFF);
-    pkt[8]  = (uint8_t)((lookahead >> 24) & 0xFF);
-    pkt[9]  = (uint8_t)isf.getActiveA();
-    pkt[10] = (uint8_t)isf.getActiveB();
-    pkt[11] = isf.getNumPresets();
+    uint8_t pkt[16];
+    pkt[0] = instanceIdx;
+    packFloat(&pkt[1], levelDb);
+    packFloat(&pkt[5], slewIdx);
+    packFloat(&pkt[9], lookaheadMs);
+    pkt[13] = (uint8_t)isf.getActiveA();
+    pkt[14] = (uint8_t)isf.getActiveB();
+    pkt[15] = isf.getNumPresets();
 
     _uart->sendFrame(CMD_REPORT_ISF, MODULE_ID_ISF_1, pkt, sizeof(pkt));
 }
@@ -378,7 +350,8 @@ void ParamController::sendIsfState(uint8_t instanceIdx) {
 
 void ParamController::handleGetAllState(const UartCommand& cmd) {
     _uart->startBatch();
-    uint8_t pkt[16];
+    uint8_t pkt[20];
+
     // --- Module enable mask ---
     uint16_t mask = 0;
     DspModule** chain = _pipeline->getChain();
@@ -388,44 +361,33 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     uint8_t maskPkt[2] = { (uint8_t)(mask & 0xFF), (uint8_t)(mask >> 8) };
     _uart->sendFrame(CMD_REPORT_ENABLE_MASK, MODULE_ID_SYSTEM, maskPkt, 2);
 
-    // --- Send ISF presets for both instances ---
-    // (UI needs to know preset configs on connect)
+    // --- Send ISF presets for both instances (float32 format) ---
     for (uint8_t inst = 0; inst < 2; inst++) {
-        IndexSelectableFilter& isf = (inst == 0)
-            ? _pipeline->getIsf1()
-            : _pipeline->getIsf2();
+        IndexSelectableFilter& isf = (inst == 0) ? _pipeline->getIsf1() : _pipeline->getIsf2();
         uint8_t modId = (inst == 0) ? MODULE_ID_ISF_1 : MODULE_ID_ISF_2;
 
         for (uint8_t p = 0; p < isf.getNumPresets(); p++) {
             const ISFPreset& preset = isf.getPreset(p);
             if (!preset.valid) continue;
 
-            // Build preset report packet
-            // Layout preset(1) + threshold(2) + pregain(2) = 5 bytes
-            uint8_t report_pkt[5];
+            // Preset report: preset(1) + thresholdDb(f32) + pregainDb(f32) = 9 bytes
+            uint8_t report_pkt[9];
             report_pkt[0] = p;
-            report_pkt[1] = (uint8_t)(preset.thresholdDb & 0xFF);
-            report_pkt[2] = (uint8_t)((preset.thresholdDb >> 8) & 0xFF);
-            report_pkt[3] = (uint8_t)(preset.filters.getPregain() & 0xFF);
-            report_pkt[4] = (uint8_t)((preset.filters.getPregain() >> 8) & 0xFF);
+            packFloat(&report_pkt[1], (float)preset.thresholdDb / 256.0f);
+            packFloat(&report_pkt[5], (float)preset.filters.getPregain() / 256.0f);
             _uart->sendFrame(CMD_REPORT_ISF_PRESET, modId, report_pkt, sizeof(report_pkt));
 
-
-            // Build band report packet
-            // Layout presetIdx(1) + bandIdx(1) + enable(1) + type(1) + freq(2) + gain(2) + Q(2) = 10 bytes
+            // Band report: presetIdx(1) + bandIdx(1) + enable(1) + type(1) + freq(f32) + gain(f32) + Q(f32) = 16 bytes
             for (int b = 0; b < MAX_EQ_BANDS; b++) {
-                uint8_t band_buf[10];
+                uint8_t band_buf[16];
                 EQFilterParams band = preset.filters.getBandParams(b);
                 band_buf[0] = p;
                 band_buf[1] = b;
                 band_buf[2] = band.enabled ? 1 : 0;
                 band_buf[3] = band.type;
-                band_buf[4] = (uint8_t)(band.f0 & 0xFF);
-                band_buf[5] = (uint8_t)((band.f0 >> 8) & 0xFF);
-                band_buf[6] = (uint8_t)(band.gain & 0xFF);
-                band_buf[7] = (uint8_t)((band.gain >> 8) & 0xFF);
-                band_buf[8] = (uint8_t)(band.Q & 0xFF);
-                band_buf[9] = (uint8_t)((band.Q >> 8) & 0xFF);
+                packFloat(&band_buf[4], (float)band.f0);
+                packFloat(&band_buf[8], (float)band.gain / 256.0f);
+                packFloat(&band_buf[12], (float)band.Q / 1024.0f);
                 _uart->sendFrame(CMD_REPORT_ISF_BAND_PER_PRESET, modId, band_buf, sizeof(band_buf));
             }
         }
@@ -435,7 +397,15 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     sendIsfState(0);
     sendIsfState(1);
 
-    auto sendPkt = [&](uint8_t mid, uint8_t pIndex, int32_t val) {
+    // Helper: send param with float32 value
+    auto sendParamF32 = [&](uint8_t mid, uint8_t pIndex, float val) {
+        pkt[0] = pIndex;
+        packFloat(&pkt[1], val);
+        _uart->sendFrame(CMD_SET_PARAM, mid, pkt, 5);
+    };
+
+    // Helper: send param with int32 value (for enums/flags)
+    auto sendParamI32 = [&](uint8_t mid, uint8_t pIndex, int32_t val) {
         pkt[0] = pIndex;
         pkt[1] = val & 0xFF;
         pkt[2] = (val >> 8) & 0xFF;
@@ -444,73 +414,66 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
         _uart->sendFrame(CMD_SET_PARAM, mid, pkt, 5);
     };
 
-    // Volume
-    sendPkt(MODULE_ID_POST_GAIN, 0, _pipeline->getPostGain().getGainDb());
-    sendPkt(MODULE_ID_POST_GAIN, 1,  _pipeline->getPostGain().isMuted() ? 1 : 0);
-    sendPkt(MODULE_ID_POST_GAIN, 2, _pipeline->getPostGain().isMono()   ? 1 : 0);
-    sendPkt(MODULE_ID_PRE_GAIN, 0, _pipeline->getPreGain().getGainDb());
-    sendPkt(MODULE_ID_PRE_GAIN, 1, _pipeline->getPreGain().isMuted() ? 1 : 0);
-    sendPkt(MODULE_ID_PRE_GAIN, 2, _pipeline->getPreGain().isMono()  ? 1 : 0);
+    // --- Volume (dB as float32) ---
+    sendParamF32(MODULE_ID_POST_GAIN, 0, (float)_pipeline->getPostGain().getGainDb() / 256.0f);
+    sendParamI32(MODULE_ID_POST_GAIN, 1, _pipeline->getPostGain().isMuted() ? 1 : 0);
+    sendParamI32(MODULE_ID_POST_GAIN, 2, _pipeline->getPostGain().isMono() ? 1 : 0);
+    sendParamF32(MODULE_ID_PRE_GAIN, 0, (float)_pipeline->getPreGain().getGainDb() / 256.0f);
+    sendParamI32(MODULE_ID_PRE_GAIN, 1, _pipeline->getPreGain().isMuted() ? 1 : 0);
+    sendParamI32(MODULE_ID_PRE_GAIN, 2, _pipeline->getPreGain().isMono() ? 1 : 0);
 
-    // CP
-    sendPkt(MODULE_ID_COMPANDER, 0, _pipeline->getCompander()._thresholdDbInt);
-    sendPkt(MODULE_ID_COMPANDER, 1, _pipeline->getCompander()._ratioBelowQ88);
-    sendPkt(MODULE_ID_COMPANDER, 2, _pipeline->getCompander()._ratioAboveQ88);
-    sendPkt(MODULE_ID_COMPANDER, 3, _pipeline->getCompander()._attackMs);
-    sendPkt(MODULE_ID_COMPANDER, 4, _pipeline->getCompander()._releaseMs);
-    sendPkt(MODULE_ID_COMPANDER, 5, _pipeline->getCompander()._pregainQ412);
-    // Lookahead: float ms → ms×10 as int32
-    sendPkt(MODULE_ID_COMPANDER, 6, (int32_t)(_pipeline->getCompander()._lookaheadMs * 10.0f + 0.5f));
+    // --- Compander (float32) ---
+    sendParamF32(MODULE_ID_COMPANDER, 0, (float)_pipeline->getCompander()._thresholdDb);
+    sendParamF32(MODULE_ID_COMPANDER, 1, (float)_pipeline->getCompander()._ratioBelowQ88 / 256.0f);
+    sendParamF32(MODULE_ID_COMPANDER, 2, (float)_pipeline->getCompander()._ratioAboveQ88 / 256.0f);
+    sendParamF32(MODULE_ID_COMPANDER, 3, (float)_pipeline->getCompander()._attackMs);
+    sendParamF32(MODULE_ID_COMPANDER, 4, (float)_pipeline->getCompander()._releaseMs);
+    sendParamF32(MODULE_ID_COMPANDER, 5, (float)_pipeline->getCompander()._pregainQ412 / 4096.0f);
+    sendParamF32(MODULE_ID_COMPANDER, 6, _pipeline->getCompander()._lookaheadMs);
 
-    // EX
-    sendPkt(MODULE_ID_EXCITER, 0, _pipeline->getExciter()._fCut);
-    sendPkt(MODULE_ID_EXCITER, 1, _pipeline->getExciter()._dry);
-    sendPkt(MODULE_ID_EXCITER, 2, _pipeline->getExciter()._wet);
+    // --- Exciter (int values, still sent as float32) ---
+    sendParamF32(MODULE_ID_EXCITER, 0, (float)_pipeline->getExciter()._fCut);
+    sendParamF32(MODULE_ID_EXCITER, 1, (float)_pipeline->getExciter()._dry);
+    sendParamF32(MODULE_ID_EXCITER, 2, (float)_pipeline->getExciter()._wet);
 
-    // DB
-    sendPkt(MODULE_ID_DYNAMIC_BASS, 0, _pipeline->getDynamicBass().getCutoffFreq());
-    sendPkt(MODULE_ID_DYNAMIC_BASS, 1, _pipeline->getDynamicBass().getGainBoost());
-    sendPkt(MODULE_ID_DYNAMIC_BASS, 2, _pipeline->getDynamicBass().getEnhanced());
-    sendPkt(MODULE_ID_DYNAMIC_BASS, 3, _pipeline->getDynamicBass().getBoostFullThresh());
-    sendPkt(MODULE_ID_DYNAMIC_BASS, 4, _pipeline->getDynamicBass().getNeutralThresh());
-    sendPkt(MODULE_ID_DYNAMIC_BASS, 5, _pipeline->getDynamicBass().getClipFullThresh());
-    sendPkt(MODULE_ID_DYNAMIC_BASS, 6, _pipeline->getDynamicBass().getClipAttack());
-    sendPkt(MODULE_ID_DYNAMIC_BASS, 7, _pipeline->getDynamicBass().getClipRelease());
-    sendPkt(MODULE_ID_DYNAMIC_BASS, 8, (int32_t)(_pipeline->getDynamicBass()._lookaheadMs * 10.0f + 0.5f));
+    // --- Dynamic Bass (float32) ---
+    sendParamF32(MODULE_ID_DYNAMIC_BASS, 0, (float)_pipeline->getDynamicBass().getCutoffFreq());
+    sendParamF32(MODULE_ID_DYNAMIC_BASS, 1, (float)_pipeline->getDynamicBass().getGainBoost() / 100.0f);
+    sendParamI32(MODULE_ID_DYNAMIC_BASS, 2, _pipeline->getDynamicBass().getEnhanced());
+    sendParamF32(MODULE_ID_DYNAMIC_BASS, 3, (float)_pipeline->getDynamicBass().getBoostFullThresh() / 100.0f);
+    sendParamF32(MODULE_ID_DYNAMIC_BASS, 4, (float)_pipeline->getDynamicBass().getNeutralThresh() / 100.0f);
+    sendParamF32(MODULE_ID_DYNAMIC_BASS, 5, (float)_pipeline->getDynamicBass().getClipFullThresh() / 100.0f);
+    sendParamF32(MODULE_ID_DYNAMIC_BASS, 6, (float)_pipeline->getDynamicBass().getClipAttack());
+    sendParamF32(MODULE_ID_DYNAMIC_BASS, 7, (float)_pipeline->getDynamicBass().getClipRelease());
+    sendParamF32(MODULE_ID_DYNAMIC_BASS, 8, _pipeline->getDynamicBass()._lookaheadMs);
 
-    // DRC — send mode + fullband (band[3]) params using new encoding
-    {
-        DRC &drc = _pipeline->getDrc();
-        sendPkt(MODULE_ID_DRC, 0x10, (int32_t)drc._mode);
-        // Fullband band[3]: paramId = 0x20 + 3*8 + param = 0x38 + param
-        sendPkt(MODULE_ID_DRC, 0x38 + 0, drc._bands[3].thresholdDbInt);
-        sendPkt(MODULE_ID_DRC, 0x38 + 1, drc._bands[3].ratioX100);
-        sendPkt(MODULE_ID_DRC, 0x38 + 2, drc._bands[3].attackMs);
-        sendPkt(MODULE_ID_DRC, 0x38 + 3, drc._bands[3].releaseMs);
-        sendPkt(MODULE_ID_DRC, 0x38 + 4, drc._bands[3].pregainQ412);
-        // Lookahead per band: pBase+5, ms×10 as int32
-        for (int b = 0; b < 4; b++) {
-            int32_t laVal = (int32_t)(drc._bands[b].lookaheadMs * 10.0f + 0.5f);
-            sendPkt(MODULE_ID_DRC, (uint8_t)(0x20 + b * 8 + 5), laVal);
-        }
+    // --- DRC (float32) ---
+    DRC& drc = _pipeline->getDrc();
+    sendParamI32(MODULE_ID_DRC, 0x10, (int32_t)drc._mode);
+    // Fullband params
+    sendParamF32(MODULE_ID_DRC, 0x38 + 0, (float)drc._bands[3].thresholdDbInt / 100.0f);
+    sendParamF32(MODULE_ID_DRC, 0x38 + 1, (float)drc._bands[3].ratioX100 / 100.0f);
+    sendParamF32(MODULE_ID_DRC, 0x38 + 2, (float)drc._bands[3].attackMs);
+    sendParamF32(MODULE_ID_DRC, 0x38 + 3, (float)drc._bands[3].releaseMs);
+    sendParamF32(MODULE_ID_DRC, 0x38 + 4, (float)drc._bands[3].pregainQ412 / 4096.0f);
+    for (int b = 0; b < 4; b++) {
+        sendParamF32(MODULE_ID_DRC, (uint8_t)(0x20 + b * 8 + 5), drc._bands[b].lookaheadMs);
     }
 
-    // EQ bands
-    auto sendEq = [&](uint8_t cmdEq, uint8_t mid, ParametricEQ &eq, bool isRight = false) {
-        int16_t pregain_db = eq.getPregain();
+    // --- EQ bands (float32 format) ---
+    auto sendEq = [&](uint8_t cmdEq, uint8_t mid, ParametricEQ& eq, bool isRight = false) {
+        float pregainDb = (float)eq.getPregain() / 256.0f;
         for (uint8_t i = 0; i < MAX_EQ_BANDS; i++) {
-        pkt[0] = pregain_db & 0xFF;
-        pkt[1] = (pregain_db >> 8) & 0xFF;
-        pkt[2] = isRight ? (i | 0x80) : i;
-        pkt[3] = eq._params[i].enabled ? 1 : 0;
-        pkt[4] = eq._params[i].type;
-        pkt[5] = eq._params[i].f0 & 0xFF;
-        pkt[6] = (eq._params[i].f0 >> 8) & 0xFF;
-        pkt[7] = eq._params[i].gain & 0xFF;
-        pkt[8] = (eq._params[i].gain >> 8) & 0xFF;
-        pkt[9] = eq._params[i].Q & 0xFF;
-        pkt[10] = (eq._params[i].Q >> 8) & 0xFF;
-        _uart->sendFrame(cmdEq, mid, pkt, 11);
+            // Layout: pregainDb(f32) + band(1) + enabled(1) + type(1) + freq(f32) + gainDb(f32) + Q(f32) = 19 bytes
+            uint8_t eqPkt[19];
+            packFloat(&eqPkt[0], pregainDb);
+            eqPkt[4] = isRight ? (i | 0x80) : i;
+            eqPkt[5] = eq._params[i].enabled ? 1 : 0;
+            eqPkt[6] = eq._params[i].type;
+            packFloat(&eqPkt[7], (float)eq._params[i].f0);
+            packFloat(&eqPkt[11], (float)eq._params[i].gain / 256.0f);
+            packFloat(&eqPkt[15], (float)eq._params[i].Q / 1024.0f);
+            _uart->sendFrame(cmdEq, mid, eqPkt, sizeof(eqPkt));
         }
     };
     sendEq(CMD_SET_EQ_BAND, MODULE_ID_PRE_EQ, _pipeline->getPreEq());
@@ -519,30 +482,24 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     sendEq(CMD_SET_EQ_BAND, MODULE_ID_LEFTRIGHT_EQ, _pipeline->getLeftRightEq().getEqLeft(), false);
     sendEq(CMD_SET_EQ_BAND, MODULE_ID_LEFTRIGHT_EQ, _pipeline->getLeftRightEq().getEqRight(), true);
 
-    // DynEQ
+    // --- DynEQ thresholds (float32 format) ---
+    DynamicEQ& deq = _pipeline->getDynamicEq();
     uint8_t deqPkt[24];
-    auto write32 = [&](int offset, int32_t val) {
-        deqPkt[offset] = val & 0xFF;
-        deqPkt[offset + 1] = (val >> 8) & 0xFF;
-        deqPkt[offset + 2] = (val >> 16) & 0xFF;
-        deqPkt[offset + 3] = (val >> 24) & 0xFF;
-    };
-    DynamicEQ &deq = _pipeline->getDynamicEq();
-    write32(0, deq._lowThreshDb);
-    write32(4, deq._normalThreshDb);
-    write32(8, deq._highThreshDb);
-    write32(12, deq._attackMs);
-    write32(16, deq._releaseMs);
-    write32(20, (int32_t)(deq._lookaheadMs * 10.0f + 0.5f));
+    packFloat(&deqPkt[0], (float)deq._lowThreshDb);
+    packFloat(&deqPkt[4], (float)deq._normalThreshDb);
+    packFloat(&deqPkt[8], (float)deq._highThreshDb);
+    packFloat(&deqPkt[12], (float)deq._attackMs);
+    packFloat(&deqPkt[16], (float)deq._releaseMs);
+    packFloat(&deqPkt[20], deq._lookaheadMs);
     _uart->sendFrame(CMD_SET_DYNEQ_THRESH, MODULE_ID_DYNAMIC_EQ, deqPkt, 24);
 
     sendEq(CMD_SET_DYNEQ_LOW_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqLow);
     sendEq(CMD_SET_DYNEQ_HIGH_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqHigh);
 
+    // --- Current preset index ---
     pkt[0] = _presetMgr->getCurrentPresetIndex();
     _uart->sendFrame(CMD_GET_CURRENT_PRESET_INDEX, MODULE_ID_SYSTEM, pkt, 1);
 
-    // Tell host we're done
     _uart->sendAck(MODULE_ID_SYSTEM, 0);
     _uart->endBatch();
 }
@@ -565,6 +522,23 @@ uint16_t ParamController::extractUint16(const uint8_t* data) {
     return v;
 }
 
+/** Extract IEEE-754 float32 from 4 bytes, little-endian. */
+float ParamController::extractFloat(const uint8_t* data) {
+    union { uint32_t u; float f; } cvt;
+    cvt.u = data[0] | ((uint32_t)data[1] << 8) | ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+    return cvt.f;
+}
+
+/** Pack IEEE-754 float32 into 4 bytes, little-endian. */
+void ParamController::packFloat(uint8_t* dest, float value) {
+    union { uint32_t u; float f; } cvt;
+    cvt.f = value;
+    dest[0] = (uint8_t)(cvt.u & 0xFF);
+    dest[1] = (uint8_t)((cvt.u >> 8) & 0xFF);
+    dest[2] = (uint8_t)((cvt.u >> 16) & 0xFF);
+    dest[3] = (uint8_t)((cvt.u >> 24) & 0xFF);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Existing handlers — kept unchanged
 // (handleEnableDisable, handleSetParam, handleSetEqBand, etc.)
@@ -583,26 +557,32 @@ void ParamController::handleEnableDisable(const UartCommand& cmd, bool enable) {
 }
 
 void ParamController::handleSetEqBand(const UartCommand& cmd) {
-    // pregain(2) + band(1) + enabled(1) + type(1) + freq(2) + gain(2) + Q(2) = 11 bytes
-    if (cmd.dataLen < 11) { _uart->sendAck(cmd.moduleId, 1); return; }
+    // Layout: pregainDb(f32) + band(1) + enabled(1) + type(1) + freq(f32) + gainDb(f32) + Q(f32) = 19 bytes
+    if (cmd.dataLen < 19) { _uart->sendAck(cmd.moduleId, 1); return; }
 
-    int16_t pregainQ88 = extractInt16(&cmd.data[0]);
-    uint8_t bandIdx    = cmd.data[2];
+    float pregainDb   = extractFloat(&cmd.data[0]);
+    uint8_t bandIdx   = cmd.data[4];
+    uint8_t enabled   = cmd.data[5];
+    uint8_t type      = cmd.data[6];
+    float freq        = extractFloat(&cmd.data[7]);
+    float gainDb      = extractFloat(&cmd.data[11]);
+    float q           = extractFloat(&cmd.data[15]);
+
     EQFilterParams params;
-    params.enabled = cmd.data[3] != 0;
-    params.type    = cmd.data[4];
-    params.f0      = extractUint16(&cmd.data[5]);
-    params.gain    = extractInt16(&cmd.data[7]);
-    params.Q       = extractUint16(&cmd.data[9]);
+    params.enabled = (enabled != 0);
+    params.type    = type;
+    params.f0      = (uint16_t)freq;
+    params.gain    = (int16_t)(gainDb * 256.0f);  // Internal Q8.8
+    params.Q       = (uint16_t)(q * 1024.0f);     // Internal Q6.10
 
     ParametricEQ *eq = nullptr;
     uint8_t realBand = bandIdx;
     if (cmd.moduleId == MODULE_ID_EQ_DSP_1) {
         eq = &_pipeline->getEqDsp_1();
-        eq->setPregain(pregainQ88);
+        eq->setPregain((int16_t)(pregainDb * 256.0f));
     } else if (cmd.moduleId == MODULE_ID_EQ_DSP_2) {
         eq = &_pipeline->getEqDsp_2();
-        eq->setPregain(pregainQ88); // q8.8 format;
+        eq->setPregain((int16_t)(pregainDb * 256.0f));
     } else if (cmd.moduleId == MODULE_ID_LEFTRIGHT_EQ) {
         if (bandIdx & 0x80) {
             eq = &_pipeline->getLeftRightEq().getEqRight();
@@ -610,126 +590,139 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
         } else {
             eq = &_pipeline->getLeftRightEq().getEqLeft();
         }
-        eq->setPregain(pregainQ88);
+        eq->setPregain((int16_t)(pregainDb * 256.0f));
     } else if (cmd.moduleId == MODULE_ID_DYNAMIC_EQ) {
         if (cmd.cmd == CMD_SET_DYNEQ_LOW_BAND) {
             eq = &_pipeline->getDynamicEq().getEqLow();
         } else if (cmd.cmd == CMD_SET_DYNEQ_HIGH_BAND) {
             eq = &_pipeline->getDynamicEq().getEqHigh();
         }
-        eq->setPregain(pregainQ88);
+        eq->setPregain((int16_t)(pregainDb * 256.0f));
     } else if (cmd.moduleId == MODULE_ID_PRE_EQ) {
         eq = &_pipeline->getPreEq();
+        eq->setPregain((int16_t)(pregainDb * 256.0f));
     } else {
         _uart->sendAck(cmd.moduleId, 1); return;
     }
     if (eq && realBand < MAX_EQ_BANDS) {
-        eq->setBand(realBand, params); // q8.8 format
+        eq->setBand(realBand, params);
     } else {
         _uart->sendAck(cmd.moduleId, 1); return;
     }
-    LOG_INFO(TAG, "PARAMETRIC_EQ: eq:%s pregain:%f dB, bandIdx:%d, type:%d, freq:%d Hz, gain:%f dB, Q:%f",
+    LOG_INFO(TAG, "PARAMETRIC_EQ: eq:%s pregain:%.1f dB, bandIdx:%d, type:%d, freq:%.0f Hz, gain:%.1f dB, Q:%.3f",
         (cmd.moduleId == MODULE_ID_LEFTRIGHT_EQ) ? "Left/Right" :
         (cmd.moduleId == MODULE_ID_DYNAMIC_EQ && cmd.cmd == CMD_SET_DYNEQ_LOW_BAND) ? "DynamicEQ LOW" :
         (cmd.moduleId == MODULE_ID_DYNAMIC_EQ && cmd.cmd == CMD_SET_DYNEQ_HIGH_BAND) ? "DynamicEQ HIGH" :
         (cmd.moduleId == MODULE_ID_PRE_EQ) ? "Pre" :
         (cmd.moduleId == MODULE_ID_EQ_DSP_1) ? "1" : "2",
-        (float)pregainQ88 / 256.0f, bandIdx, params.type, params.f0, (float)params.gain / 256.0f, (float)params.Q / 256.0f);
+        pregainDb, bandIdx, params.type, freq, gainDb, q);
     _uart->sendAck(cmd.moduleId, 0);
 }
 
 void ParamController::handleSetDynEqThresholds(const UartCommand& cmd) {
-    // low(4)+normal(4)+high(4)+attack(4)+release(4) = 20 bytes
+    // Layout: lowDb(f32) + normalDb(f32) + highDb(f32) + attackMs(f32) + releaseMs(f32) + lookaheadMs(f32) = 24 bytes
     if (cmd.dataLen < 24) { _uart->sendAck(cmd.moduleId, 1); return; }
+    
+    float lowDb        = extractFloat(&cmd.data[0]);
+    float normalDb     = extractFloat(&cmd.data[4]);
+    float highDb       = extractFloat(&cmd.data[8]);
+    float attackMs     = extractFloat(&cmd.data[12]);
+    float releaseMs    = extractFloat(&cmd.data[16]);
+    float lookaheadMs  = extractFloat(&cmd.data[20]);
+    
     DynamicEQ& deq = _pipeline->getDynamicEq();
-    deq.setLowEnergyThreshold(extractInt32(&cmd.data[0]));
-    deq.setNormalEnergyThreshold(extractInt32(&cmd.data[4]));
-    deq.setHighEnergyThreshold(extractInt32(&cmd.data[8]));
-    deq.setAttackTime(extractInt32(&cmd.data[12]));
-    deq.setReleaseTime(extractInt32(&cmd.data[16]));
-    deq.setLookahead((float)extractInt32(&cmd.data[20]) / 10.0f);
+    deq.setLowEnergyThreshold((int32_t)lowDb);
+    deq.setNormalEnergyThreshold((int32_t)normalDb);
+    deq.setHighEnergyThreshold((int32_t)highDb);
+    deq.setAttackTime((int32_t)attackMs);
+    deq.setReleaseTime((int32_t)releaseMs);
+    deq.setLookahead(lookaheadMs);
+    
+    LOG_INFO(TAG, "DynEQ thresh: low=%.1f normal=%.1f high=%.1f attack=%.1f release=%.1f lookahead=%.1f",
+        lowDb, normalDb, highDb, attackMs, releaseMs, lookaheadMs);
     _uart->sendAck(cmd.moduleId, 0);
 }
 
 void ParamController::handleSetParam(const UartCommand& cmd) {
-    // paramId(1) + value(4) = 5 bytes
+    // Layout: paramId(1) + value(f32) = 5 bytes
     if (cmd.dataLen < 5) { _uart->sendAck(cmd.moduleId, 1); return; }
-    uint8_t paramId  = cmd.data[0];
-    int32_t value    = extractInt32(&cmd.data[1]);
+    
+    uint8_t paramId = cmd.data[0];
+    float   fValue  = extractFloat(&cmd.data[1]);
+    
+    // For flags/enums, convert to int; for numeric values, use as-is or convert to internal format
+    int32_t iValue = (int32_t)fValue;
 
     switch (cmd.moduleId) {
         case MODULE_ID_PRE_GAIN:
-            if (paramId == 0) _pipeline->getPreGain().setGainDb((int16_t)value);
-            else if (paramId == 1) _pipeline->getPreGain().setMute(value != 0);
-            else if (paramId == 2) _pipeline->getPreGain().setMono(value != 0);
+            if (paramId == 0) _pipeline->getPreGain().setGainDb((int16_t)(fValue * 256.0f)); // dB → Q8.8
+            else if (paramId == 1) _pipeline->getPreGain().setMute(iValue != 0);
+            else if (paramId == 2) _pipeline->getPreGain().setMono(iValue != 0);
             break;
         case MODULE_ID_POST_GAIN:
-            if (paramId == 0) _pipeline->getPostGain().setGainDb((int16_t)value);
-            else if (paramId == 1) _pipeline->getPostGain().setMute(value != 0);
-            else if (paramId == 2) _pipeline->getPostGain().setMono(value != 0);
+            if (paramId == 0) _pipeline->getPostGain().setGainDb((int16_t)(fValue * 256.0f)); // dB → Q8.8
+            else if (paramId == 1) _pipeline->getPostGain().setMute(iValue != 0);
+            else if (paramId == 2) _pipeline->getPostGain().setMono(iValue != 0);
             break;
         case MODULE_ID_COMPANDER:
             switch (paramId) {
-                case 0: _pipeline->getCompander().setThreshold(value);   break;
-                case 1: _pipeline->getCompander().setRatioBelow(value);  break;
-                case 2: _pipeline->getCompander().setRatioAbove(value);  break;
-                case 3: _pipeline->getCompander().setAttackTime(value);  break;
-                case 4: _pipeline->getCompander().setReleaseTime(value); break;
-                case 5: _pipeline->getCompander().setPregain(value);     break;
-                case 6: _pipeline->getCompander().setLookahead((float)value / 10.0f); break; // ms×10 → ms
+                case 0: _pipeline->getCompander().setThreshold(fValue); break; // dB
+                case 1: _pipeline->getCompander().setRatioBelow((int16_t)(fValue * 256.0f)); break; // ratio → Q8.8
+                case 2: _pipeline->getCompander().setRatioAbove((int16_t)(fValue * 256.0f)); break; // ratio → Q8.8
+                case 3: _pipeline->getCompander().setAttackTime(iValue);  break;
+                case 4: _pipeline->getCompander().setReleaseTime(iValue); break;
+                case 5: _pipeline->getCompander().setPregain((int16_t)(fValue * 4096.0f)); break; // dB → Q4.12
+                case 6: _pipeline->getCompander().setLookahead(fValue); break; // ms direct
             }
             break;
         case MODULE_ID_EXCITER:
             switch (paramId) {
-                case 0: _pipeline->getExciter().setCutoffFreq(value); break;
-                case 1: _pipeline->getExciter().setDry(value);        break;
-                case 2: _pipeline->getExciter().setWet(value);        break;
+                case 0: _pipeline->getExciter().setCutoffFreq(iValue); break;
+                case 1: _pipeline->getExciter().setDry(iValue);        break;
+                case 2: _pipeline->getExciter().setWet(iValue);        break;
             }
             break;
         case MODULE_ID_DYNAMIC_BASS:
             switch (paramId) {
-                case 0: _pipeline->getDynamicBass().setCutoffFreq(value);         break;
-                case 1: _pipeline->getDynamicBass().setGainBoost(value);          break;
-                case 2: _pipeline->getDynamicBass().setEnhanced(value);           break;
-                case 3: _pipeline->getDynamicBass().setBoostFullThreshold(value); break;
-                case 4: _pipeline->getDynamicBass().setNeutralThreshold(value);   break;
-                case 5: _pipeline->getDynamicBass().setClipFullThreshold(value);  break;
-                case 6: _pipeline->getDynamicBass().setClipAttack(value);          break;
-                case 7: _pipeline->getDynamicBass().setClipRelease(value);         break;
-                case 8: _pipeline->getDynamicBass().setLookahead((float)value / 10.0f); break; // ms×10 → ms
+                case 0: _pipeline->getDynamicBass().setCutoffFreq(iValue);         break;
+                case 1: _pipeline->getDynamicBass().setGainBoost((int32_t)(fValue * 100.0f)); break; // dB → ×100
+                case 2: _pipeline->getDynamicBass().setEnhanced(iValue);           break;
+                case 3: _pipeline->getDynamicBass().setBoostFullThreshold((int32_t)(fValue * 100.0f)); break; // dB → ×100
+                case 4: _pipeline->getDynamicBass().setNeutralThreshold((int32_t)(fValue * 100.0f));   break; // dB → ×100
+                case 5: _pipeline->getDynamicBass().setClipFullThreshold((int32_t)(fValue * 100.0f));  break; // dB → ×100
+                case 6: _pipeline->getDynamicBass().setClipAttack(iValue);          break;
+                case 7: _pipeline->getDynamicBass().setClipRelease(iValue);         break;
+                case 8: _pipeline->getDynamicBass().setLookahead(fValue); break; // ms direct
             }
             break;
         case MODULE_ID_DRC: {
             DRC &drc = _pipeline->getDrc();
 
             // ── Global params (paramId 0x10 - 0x1F) ────────────────────────
-            if (paramId == 0x10) { drc.setMode((DRCMode)value);                   break; }
-            if (paramId == 0x11) { drc.setCrossoverType((DRCCrossoverType)value); break; }
-            if (paramId == 0x12) { drc.setCrossoverFreq(0, value);                break; }
-            if (paramId == 0x13) { drc.setCrossoverFreq(1, value);                break; }
-            if (paramId == 0x14) { drc.setCrossoverQ(0, value);                   break; }
-            if (paramId == 0x15) { drc.setCrossoverQ(1, value);                   break; }
+            if (paramId == 0x10) { drc.setMode((DRCMode)iValue);                   break; }
+            if (paramId == 0x11) { drc.setCrossoverType((DRCCrossoverType)iValue); break; }
+            if (paramId == 0x12) { drc.setCrossoverFreq(0, iValue);                break; }
+            if (paramId == 0x13) { drc.setCrossoverFreq(1, iValue);                break; }
+            if (paramId == 0x14) { drc.setCrossoverQ(0, (int16_t)(fValue * 1024.0f)); break; } // Q → Q6.10
+            if (paramId == 0x15) { drc.setCrossoverQ(1, (int16_t)(fValue * 1024.0f)); break; } // Q → Q6.10
 
             // ── Per-band params (paramId 0x20 - 0x3F) ──────────────────────
-            // Encoding: paramId = 0x20 + band*8 + param
-            //   band 0 → 0x20-0x27, band 1 → 0x28-0x2F
-            //   band 2 → 0x30-0x37, band 3 (fullband) → 0x38-0x3F
-            // param: 0=threshold, 1=ratio, 2=attack, 3=release, 4=pregain
             if (paramId >= 0x20 && paramId <= 0x3F) {
                 uint8_t band  = (paramId - 0x20) >> 3;  // 0-3
-                uint8_t param = (paramId - 0x20) & 0x07; // 0-4
+                uint8_t param = (paramId - 0x20) & 0x07;
                 switch (param) {
-                    case 0: drc.setThreshold(band, value);    break;
-                    case 1: drc.setRatio(band, value);        break;
-                    case 2: drc.setAttackTime(band, value);   break;
-                    case 3: drc.setReleaseTime(band, value);  break;
-                    case 4: drc.setPregain(band, value);      break;
-                    case 5: drc.setLookahead(band, (float)value / 10.0f); break; // ms×10 → ms
+                    case 0: drc.setThreshold(band, (int32_t)(fValue * 100.0f));    break; // dB → ×100
+                    case 1: drc.setRatio(band, (int32_t)(fValue * 100.0f));        break; // ratio → ×100
+                    case 2: drc.setAttackTime(band, iValue);   break;
+                    case 3: drc.setReleaseTime(band, iValue);  break;
+                    case 4: drc.setPregain(band, (int16_t)(fValue * 4096.0f));     break; // dB → Q4.12
+                    case 5: drc.setLookahead(band, fValue); break; // ms direct
                     default: _uart->sendError(0x04); return;
                 }
             }
             break;
         }
+        default:
             LOG_WARN(TAG, "SET_PARAM: unhandled moduleId 0x%02X", cmd.moduleId);
             _uart->sendAck(cmd.moduleId, 1);
             return;
@@ -739,6 +732,10 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
 
 // WiFi handlers — unchanged, just dispatch
 #include <WiFi.h>
+
+void ParamController::setWifiManager(WiFiManager* wifiMgr) {
+  _wifiMgr = wifiMgr;
+}
 
 void ParamController::handleWifiScan(const UartCommand &cmd) {
   if (!_wifiMgr) { _uart->sendError(0x10); return; }

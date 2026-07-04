@@ -58,7 +58,8 @@ struct PresetData {
     EQFilterParams preeq_bands[3];
 
     // ── Compander ─────────────────────────────────────────────────────────────
-    int32_t cp_thresholdDb, cp_ratioBelow, cp_ratioAbove;
+    float cp_thresholdDb;
+    int32_t cp_ratioBelow, cp_ratioAbove;
     int32_t cp_attackMs, cp_releaseMs, cp_pregainQ412;
     int32_t cp_lookaheadMs10; // ms × 10 (e.g. 50 = 5.0ms); 0 = disabled
 
@@ -254,7 +255,7 @@ void PresetManager::saveCurrentSlotIndex(uint8_t slot) {
     if (slot >= MAX_PRESET_SLOTS) return;
     nvs_handle_t nvs;
     nvs_open("settings", NVS_READWRITE, &nvs);
-    nvs_set_u8(nvs, "current_slot_activate", slot);
+    nvs_set_u8(nvs, "cur_slot_act", slot);
     nvs_commit(nvs);
     nvs_close(nvs);
 }
@@ -264,7 +265,7 @@ uint8_t PresetManager::getCurrentSlotIndex() {
     uint8_t slot = 0;
     esp_err_t openErr = nvs_open("settings", NVS_READWRITE, &nvs);
     if (openErr == ESP_OK) {
-        nvs_get_u8(nvs, "current_slot_activate", &slot);
+        nvs_get_u8(nvs, "cur_slot_act", &slot);
         nvs_close(nvs);
     }
     if (slot >= MAX_PRESET_SLOTS) return 0;
@@ -398,7 +399,7 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     }
 
     // Compander
-    pd.cp_thresholdDb = pipeline.getCompander()._thresholdDbInt;
+    pd.cp_thresholdDb = pipeline.getCompander()._thresholdDb;
     pd.cp_ratioBelow  = pipeline.getCompander()._ratioBelowQ88;
     pd.cp_ratioAbove  = pipeline.getCompander()._ratioAboveQ88;
     pd.cp_attackMs    = pipeline.getCompander()._attackMs;

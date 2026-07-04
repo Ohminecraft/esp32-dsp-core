@@ -13,21 +13,24 @@
 #include "../../control/param/preset_manager.h"
 #include "../../utils/debug_log.h"
 #include "battery_monitor.h"
-#include "customfonts/Century751BT_12pt_GFX.h"
+#include "assets/Century751BT_12pt_GFX.h"
+#include "assets/icon.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
 
 #define TAG "Display"
 
-static constexpr int16_t SIDEBAR_W    = 28;
-static constexpr int16_t SIDEBAR_X    = 2;
-static constexpr int16_t CONTENT_X    = SIDEBAR_W + 4;
-static constexpr int16_t CONTENT_W    = DISP_W - CONTENT_X - 2;
-static constexpr int16_t ROW_H        = 28;
-static constexpr int16_t NAV_BTN_H    = 26;
-static constexpr int16_t HEADER_H     = 20;
-static constexpr int16_t FOOTER_Y     = DISP_H - NAV_BTN_H - 2;
+static constexpr int16_t SIDEBAR_W              = 28;
+static constexpr int16_t SIDEBAR_X              = 2;
+static constexpr int16_t MAIN_MENU_CONTENT_X    = SIDEBAR_W + 4;
+static constexpr int16_t CONTENT_X              = 0;
+static constexpr int16_t MAIN_MENU_CONTENT_W    = DISP_W - MAIN_MENU_CONTENT_X - 2;
+static constexpr int16_t CONTENT_W              = DISP_W - CONTENT_X - 2;
+static constexpr int16_t ROW_H                  = 28;
+static constexpr int16_t NAV_BTN_H              = 26;
+static constexpr int16_t HEADER_H               = 20;
+static constexpr int16_t FOOTER_Y               = DISP_H - NAV_BTN_H - 2;
 
 struct ModuleEntry {
     DisplayModuleID id;
@@ -131,12 +134,12 @@ uint8_t Display::getScreenParams(NavEntry nav, UiParam* outParams) {
 
     case DisplayModuleID::COMPANDER: {
         static const UiParam p[] = {
-            { "Threshold",   "dB",  -60.0f,  0.0f,   1.0f, 1 },
-            { "Ratio Below", ":1",   0.10f, 10.0f,   0.10f, 2 },
-            { "Ratio Above", ":1",   0.10f, 10.0f,   0.10f, 2 },
-            { "Attack",      "ms",   1.0f, 2000.0f,  1.0f, 0 },
-            { "Release",     "ms",  10.0f, 2000.0f,  1.0f, 0 },
-            { "Lookahead",   "ms",   0.0f,  10.0f,   1.0f, 0 },
+            { "Threshold",   "dB",  -60.0f,  0.0f,    1.0f,  1   },
+            { "Ratio Below", ":1",   10.00f, 1000.0f, 10.0f, 1   },
+            { "Ratio Above", ":1",   10.00f, 1000.0f, 10.0f, 1   },
+            { "Attack",      "ms",   1.0f, 2000.0f,   1.0f,  0   },
+            { "Release",     "ms",  10.0f, 2000.0f,   1.0f,  0   },
+            { "Lookahead",   "ms",   0.0f,  10.0f,    1.0f,  0   },
         };
         if (outParams) memcpy(outParams, p, sizeof(p));
         return 6;
@@ -161,7 +164,7 @@ uint8_t Display::getScreenParams(NavEntry nav, UiParam* outParams) {
             { "Neutral Thr",    "dB", -60.0f,  0.0f,  0.1f,  2 },
             { "Clip Full Thr",  "dB", -60.0f,  0.0f,  0.1f,  2 },
             { "Attack",         "ms",  1.0f, 2000.0f,  1.0f, 0 },
-            { "Release",        "ms",  1.0f, 2000.0f,  1.0f, 0 },
+            { "Release",        "ms",  10.0f, 2000.0f,  1.0f, 0 },
             { "Lookahead",      "ms",  0.0f,  10.0f,   1.0f, 0 },
         };
         if (outParams) memcpy(outParams, p, sizeof(p));
@@ -174,7 +177,7 @@ uint8_t Display::getScreenParams(NavEntry nav, UiParam* outParams) {
             { "Normal Thresh", "dB", -96.0f, 0.0f, 1.0f, 1 },
             { "High Thresh",   "dB", -96.0f, 0.0f, 1.0f, 1 },
             { "Attack",        "ms",  1.0f, 2000.0f, 1.0f, 0 },
-            { "Release",       "ms",  1.0f, 2000.0f, 1.0f, 0 },
+            { "Release",       "ms",  10.0f, 2000.0f, 1.0f, 0 },
             { "Lookahead",     "ms",  0.0f,  10.0f,  1.0f, 0 },
         };
         if (outParams) memcpy(outParams, p, sizeof(p));
@@ -185,7 +188,7 @@ uint8_t Display::getScreenParams(NavEntry nav, UiParam* outParams) {
     case DisplayModuleID::ISF2: {
         static const UiParam p[] = {
             { "RMS Window",  "ms",      10.0f, 2000.0f, 10.0f, 0 },
-            { "Slew Time",   "ms/step", 10.0f, 2000.0f, 10.0f, 0 },
+            { "Slew Time",   "ms/stp", 10.0f, 2000.0f, 10.0f, 0 },
             { "Lookahead",   "ms",       0.0f,   10.0f,  1.0f, 0 },
         };
         if (outParams) memcpy(outParams, p, sizeof(p));
@@ -212,9 +215,9 @@ float Display::getParamValue(NavEntry nav, uint8_t idx) {
     case DisplayModuleID::COMPANDER: {
         Compander& c = _pipeline->getCompander();
         switch (idx) {
-        case 0: return (float)c._thresholdDbInt / 100.0f;
-        case 1: return (float)c._ratioBelowQ88 / 256.0f;
-        case 2: return (float)c._ratioAboveQ88 / 256.0f;
+        case 0: return c._thresholdDb;
+        case 1: return (float)c._ratioBelowQ88;
+        case 2: return (float)c._ratioAboveQ88;
         case 3: return (float)c._attackMs;
         case 4: return (float)c._releaseMs;
         case 5: return c._lookaheadMs;
@@ -282,9 +285,9 @@ void Display::setParamValue(NavEntry nav, uint8_t idx, float val, UiParam* param
     case DisplayModuleID::COMPANDER: {
         Compander& c = _pipeline->getCompander();
         switch (idx) {
-        case 0: c.setThreshold((int32_t)(val * 100.0f));    break;
-        case 1: c.setRatioBelow((int32_t)(val * 256.0f));   break;
-        case 2: c.setRatioAbove((int32_t)(val * 256.0f));   break;
+        case 0: c.setThreshold(val);                        break;
+        case 1: c.setRatioBelow((val));                     break;
+        case 2: c.setRatioAbove((val));                     break;
         case 3: c.setAttackTime((int32_t)val);              break;
         case 4: c.setReleaseTime((int32_t)val);             break;
         case 5: {
@@ -349,9 +352,12 @@ void Display::setParamValue(NavEntry nav, uint8_t idx, float val, UiParam* param
     }
 }
 
-void Display::formatFloat(char* buf, uint8_t bufLen, float val, uint8_t decimals) {
+void Display::formatFloat(char* buf, uint8_t bufLen, float val, uint8_t decimals, const char* unit) {
     static const char* const fmts[] = { "%.0f", "%.1f", "%.2f", "%.3f" };
     snprintf(buf, bufLen, decimals < 4 ? fmts[decimals] : "%.2f", val);
+    if (unit) {
+        snprintf(buf + strlen(buf), bufLen - strlen(buf), "%s", unit);
+    }
 }
 
 uint16_t Display::blendColor(uint16_t a, uint16_t b, uint8_t t) {
@@ -463,8 +469,6 @@ void Display::setSettings(SettingsManager* settingsMgr) {
             // Brightness is stored as 0-255, use directly
             ledcWrite(TFT_BACKLIGHT_PIN, brightness);
         #endif
-        
-        // Other settings (auto-save interval, default preset) will be used by settings UI
     }
 }
 
@@ -481,11 +485,11 @@ void Display::pushKeyboard(float* target, float minVal, float maxVal, bool allow
 }
 
 void Display::setStats(uint16_t cpuTenths, uint8_t heapPct,
-                       uint32_t sampleRate, bool wifiConnected, bool clockAbsent) {
+                       uint32_t sampleRate, ConnectStatus connectStatus, bool clockAbsent) {
     bool changed = (cpuTenths != _cpuTenths) || (heapPct != _heapPct) ||
-                   (sampleRate != _sampleRate) || (wifiConnected != _wifiConn) || (clockAbsent != _clockAbsent);
+                   (sampleRate != _sampleRate) || (connectStatus != _connectStatus) || (clockAbsent != _clockAbsent);
     _cpuTenths = cpuTenths; _heapPct = 100 - heapPct; _sampleRate = sampleRate;
-    _wifiConn = wifiConnected; _clockAbsent = clockAbsent;
+    _connectStatus = connectStatus; _clockAbsent = clockAbsent;
     if (changed) _dirty = true;
 }
 
@@ -517,6 +521,22 @@ NavEntry& Display::currentNav() { return _navStack[_navTop]; }
 ScreenID  Display::currentScreen() const { return _navStack[_navTop].screen; }
 
 void Display::update(EncoderEvent enc) {
+    if (g_timerShutdownTriggered) {
+        _powerOffUserRequest = true;
+        _powerOffScreenActive = true;
+        _powerOffStartMs = millis();
+        _dirty = true;
+        return; 
+    }
+
+    // Hold power-off screen for 5 s then set shutdown flag
+    if (_powerOffScreenActive) {
+        if (millis() - _powerOffStartMs >= 5000) {
+            g_userShutdownRequest = true;
+        }
+        _dirty = true;  // keep re-drawing (countdown animation possible later)
+    }
+    
     // ── Splash auto-advance ──
     if (currentScreen() == ScreenID::SPLASH) {
         if (millis() - _splashStartMs >= SPLASH_DURATION_MS) {
@@ -562,14 +582,6 @@ void Display::update(EncoderEvent enc) {
             _dirty = true;
         }
 
-        // Hold power-off screen for 3 s then set shutdown flag
-        if (_powerOffScreenActive) {
-            if (millis() - _powerOffStartMs >= 3000) {
-                g_userShutdownRequest = true;
-            }
-            _dirty = true;  // keep re-drawing (countdown animation possible later)
-        }
-
         // Battery badge makes header dirty ~1 Hz
         if (millis() - _lastBatteryDrawMs >= 1000) {
             _lastBatteryDrawMs = millis();
@@ -606,6 +618,18 @@ void Display::update(EncoderEvent enc) {
         }
     }
 
+    // ── Power-off screen overrides everything ─────────────────────────────────
+    if (_powerOffScreenActive) {
+        if (millis() - _powerOffStartMs >= 2000) {
+            #if defined(TFT_BACKLIGHT_PIN) && TFT_BACKLIGHT_PIN >= 0
+                ledcWrite(TFT_BACKLIGHT_PIN, _screenFadeOutValue);  // fade out backlight
+            #endif
+            if (_screenFadeOutValue > 0) {
+                _screenFadeOutValue = _screenFadeOutValue - 5;
+            }
+        }
+    }
+
     if (_dirty) { draw(); _dirty = false; }
 }
 
@@ -620,7 +644,7 @@ void Display::handleEncoder(EncoderEvent enc) {
         _powerOffScreenActive = true;
         _powerOffStartMs = millis();
         _dirty = true;
-         return; 
+        return; 
     }
 
     // ── SW_PRESS — arm tab-return hold in main menu ───────────────────────────
@@ -633,6 +657,27 @@ void Display::handleEncoder(EncoderEvent enc) {
         if (s == ScreenID::MAIN_MENU && _focusIdx > 0) {
             _mmTabReturnArmed   = true;
             _mmTabReturnStartMs = millis();
+        }
+        return; // SW_PRESS is an arm signal only — no further action here
+    } else if (g_softLatchPinIsAvailable) {
+        bool btnIsPressed = (digitalRead(POWER_PIN_OFF) == LOW); // LOW = pressed
+        if (btnIsPressed) {
+            _globalHoldArmed    = true;
+            _globalHoldStartMs  = millis();
+            if (!g_shutdownButtonIsHolding) {
+                g_shutdownButtonIsHolding = true;
+                g_shutdownCountdown = millis();
+            } else if (millis() - g_shutdownCountdown >= 5000) {
+                _powerOffUserRequest = true;
+                _powerOffScreenActive = true;
+                _powerOffStartMs = millis();
+                _dirty = true;
+            }
+        }
+        else {
+            _globalHoldArmed = false;
+            g_shutdownButtonIsHolding = false;
+            g_shutdownCountdown = 0;
         }
         return; // SW_PRESS is an arm signal only — no further action here
     }
@@ -653,7 +698,14 @@ void Display::handleEncoder(EncoderEvent enc) {
     }
 
     if (enc == EncoderEvent::SW_HOLD3) {
-        if (s == ScreenID::MAIN_MENU) { pushScreen(ScreenID::SETTINGS); _dirty = true; return; }
+        if (s == ScreenID::MAIN_MENU) {
+            pushScreen(ScreenID::SETTINGS);
+            #ifdef ONLY_SERIAL
+            _focusIdx = 1;   // skip WiFi toggle in serial-only builds
+            #endif
+            _dirty = true;
+            return; 
+        }
         if (s != ScreenID::SPLASH) { while (_navTop > 0) _navTop--;
             _navStack[_navTop] = { ScreenID::MAIN_MENU, DisplayModuleID::NONE, 0 };
             _focusIdx = 0; _editMode = false; _paramScroll = 0; _holdTracking = false; _dirty = true; }
@@ -663,6 +715,7 @@ void Display::handleEncoder(EncoderEvent enc) {
     if (dir != 0 && _editMode) { editDelta(dir); _dirty = true; return; }
 
     if (dir != 0) {
+        int16_t next = (int16_t)_focusIdx + dir;
         if (s == ScreenID::KEYBOARD) { editDelta(dir); _dirty = true; return; }
         if (s == ScreenID::MAIN_MENU) {
             if (_focusIdx == 0) {
@@ -686,12 +739,25 @@ void Display::handleEncoder(EncoderEvent enc) {
             }
             _dirty = true; return;
         }
-
-        uint8_t oldFocus = _focusIdx;
-        int16_t next = (int16_t)_focusIdx + dir;
-        _itemCount = getItemCount();
-        if (next < 0) next = (int16_t)(_itemCount - 1);
-        if (next >= _itemCount) next = 0;
+        else if (s == ScreenID::SETTINGS) {
+            _itemCount = getItemCount();
+            if (next < 0) next = (int16_t)(_itemCount - 1);
+            if (next >= _itemCount) next = 0;
+            #ifdef ONLY_SERIAL
+            // Skip WiFi toggle (index 0) in serial-only builds, in either direction,
+            // including when wrap-around would land back on it.
+            while (next == 0) {
+                next += dir;
+                if (next < 0) next = (int16_t)(_itemCount - 1);
+                if (next >= _itemCount) next = 0;
+            }
+            #endif
+        }
+        else {
+            _itemCount = getItemCount();
+            if (next < 0) next = (int16_t)(_itemCount - 1);
+            if (next >= _itemCount) next = 0;
+        }
 
         if (s == ScreenID::EFFECT_EQ_GRAPH && (uint8_t)next < MAX_EQ_BANDS) {
             ParametricEQ* eq = getEqPtr(currentNav().module);
@@ -705,7 +771,7 @@ void Display::handleEncoder(EncoderEvent enc) {
             }
         }
 
-        _anim.prevFocusIdx = oldFocus;
+        _anim.prevFocusIdx = _focusIdx;
         _focusIdx = (uint8_t)next;
         _holdTracking = false;
         _anim.focusTransition = 0.0f;
@@ -794,21 +860,17 @@ void Display::handleEncoder(EncoderEvent enc) {
         if (s == ScreenID::SETTINGS) {
             const uint8_t backIdx = getItemCount() - 1;
             if (_focusIdx == backIdx) {
-                // BACK
                 popScreen(); _dirty = true; return;
             }
-            if (_focusIdx < 2) {
-                // WiFi / Trigger toggles
-                _editMode = !_editMode;
-            } else if (_battery && _battery->isPresent()) {
-                if (_focusIdx == 5) {
-                    // Reset coulomb counter — only on hold (handled in hold handler),
-                    // but plain SW starts _editMode to give visual feedback
-                    _editMode = !_editMode;
-                } else {
-                    _editMode = !_editMode;
-                }
+            // WiFi toggle - direct toggle, no edit mode
+            if (_focusIdx == 0) {
+                _settingsWifi = !_settingsWifi;
+                if (_settingsMgr) _settingsMgr->setWifiEnabled(_settingsWifi);
+                wifiOnOffTriggered = true;
+                _dirty = true; return;
             }
+            // Brightness and battery items - toggle edit mode with sweep animation
+            toggleEditMode();
             _dirty = true; return;
         }
         if (s == ScreenID::DSP_LIST) {
@@ -921,15 +983,11 @@ void Display::onConfirm() {
         const uint8_t backIdx = getItemCount() - 1;
         if (_focusIdx == backIdx) {
             popScreen();
-        } else if (_focusIdx == 0) {
-            // WiFi Toggle - directly toggle and save
-            _settingsWifi = !_settingsWifi;
-            if (_settingsMgr) _settingsMgr->setWifiEnabled(_settingsWifi);
-        } else if (_battery && _battery->isPresent() && _focusIdx == 5) {
+        } else if (_battery && _battery->isPresent() && _focusIdx == 6) {
             // Reset coulomb counter (triggered by hold via SW_HOLD handler)
             _battery->resetCoulombCounter();
         } else {
-            _editMode = !_editMode;
+            toggleEditMode();
         }
         break;
     }
@@ -1190,32 +1248,42 @@ void Display::editDelta(int8_t dir) {
         }
         return;
     }
-    if (s == ScreenID::SETTINGS && _editMode && _battery && _battery->isPresent()) {
-        BatteryConfig& cfg = _battery->editConfig();
-        if (_focusIdx == 2) {
-            // Cell count 1S–6S
-            int8_t cs = (int8_t)cfg.cellS + dir;
-            if (cs < 1) cs = 6;
-            if (cs > 6) cs = 1;
-            cfg.cellS = (uint8_t)cs;
-            _battery->applyConfig();
-            if (_settingsMgr) _settingsMgr->setBatteryCellCount(cfg.cellS);
-        } else if (_focusIdx == 3) {
-            // Cell mAh: step 50 mAh, range 100–20000
-            int32_t mah = (int32_t)cfg.cellMah + dir * 50;
-            if (mah < 100)   mah = 100;
-            if (mah > 20000) mah = 20000;
-            cfg.cellMah = (uint32_t)mah;
-            _battery->applyConfig();
-            if (_settingsMgr) _settingsMgr->setBatteryCellMah(cfg.cellMah);
-        } else if (_focusIdx == 4) {
-            // Shunt mΩ: step 1 mΩ, range 1–1000
-            int32_t shunt = (int32_t)cfg.shuntMOhm + dir;
-            if (shunt < 1)    shunt = 1;
-            if (shunt > 1000) shunt = 1000;
-            cfg.shuntMOhm = (uint32_t)shunt;
-            _battery->applyConfig();
-            if (_settingsMgr) _settingsMgr->setBatteryShuntMohm(cfg.shuntMOhm);
+    if (s == ScreenID::SETTINGS) {
+        // Item 1: Brightness (0-255)
+        if (_focusIdx == 1 && _settingsMgr) {
+            uint8_t brightness = _settingsMgr->getBrightness();
+            int16_t newBrightness = (int16_t)brightness + dir * 5;
+            newBrightness = constrain(newBrightness, 20, 255);
+
+            _settingsMgr->setBrightness((uint8_t)newBrightness);
+            #if defined(TFT_BACKLIGHT_PIN) && TFT_BACKLIGHT_PIN >= 0
+                ledcWrite(TFT_BACKLIGHT_PIN, (uint8_t)newBrightness);
+            #endif
+            _dirty = true; return;
+        }
+        // Battery items start at index 2 (if present)
+        else if (_battery && _battery->isPresent()) {
+            BatteryConfig& cfg = _battery->editConfig();
+            if (_focusIdx == 2) {
+                // Cell count 1S–6S
+                int8_t cs = (int8_t)cfg.cellS + dir;
+                if (cs < 1) cs = 6;
+                if (cs > 6) cs = 1;
+                cfg.cellS = (uint8_t)cs;
+                _battery->applyConfig();
+            } else if (_focusIdx == 4) {
+                // Cell mAh: step 50 mAh, range 100–20000
+                int32_t mah = (int32_t)cfg.cellMah + dir * 50;
+                mah = constrain(mah, 100, 20000);
+                cfg.cellMah = (uint32_t)mah;
+                _battery->applyConfig();
+            } else if (_focusIdx == 5) {
+                // Shunt mΩ: step 1 mΩ, range 1–1000
+                int32_t shunt = (int32_t)cfg.shuntMOhm + dir;
+                shunt = constrain(shunt, 1, 1000);
+                cfg.shuntMOhm = (uint32_t)shunt;
+                _battery->applyConfig();
+            }
         }
         _dirty = true; return;
     }
@@ -1228,9 +1296,10 @@ uint8_t Display::getItemCount() const {
     case ScreenID::SPLASH:    return 0;
     case ScreenID::MAIN_MENU: return 5;   // 0=tab bar, 1-4=items in active tab
     case ScreenID::SETTINGS: {
-        // 0=WiFi, 1=Trigger, then battery items (if present): 2=cellS, 3=cellMah,
-        // 4=shuntMOhm, 5=resetCoulomb. Last = BACK.
-        uint8_t n = 2; // WiFi + Trigger
+        // 0=WiFi, 1=Brightness,
+        // then battery items (if present): 2=cellS, 3=cellMah, 4=shuntMOhm, 5=resetCoulomb
+        // Last = BACK.
+        uint8_t n = 2; // WiFi + Brightness
         if (_battery && _battery->isPresent()) n += 4; // cellS + mAh + shunt + reset
         return n + 1; // +1 for BACK
     }
@@ -1378,7 +1447,7 @@ void Display::drawPowerOffScreen() {
     d.setTextDatum(MC_DATUM);
     d.setTextSize(2);
     d.setTextColor(_powerOffUserRequest ? Color::ACCENT : Color::RED, Color::BG);
-    d.drawString(_powerOffUserRequest ? "See You Next Time" : "LOW BATTERY", DISP_W / 2, DISP_H / 2 - 28);
+    d.drawString(_powerOffUserRequest ? "User Interrupt" : "LOW BATTERY", DISP_W / 2, DISP_H / 2 - 28);
 
     d.setTextSize(1);
     d.setTextColor(Color::TEXT, Color::BG);
@@ -1439,20 +1508,13 @@ void Display::drawPowerOffScreen() {
 // ─────────────────────────────────────────────────────────────────────────────
 void Display::drawMainMenu() {
     TFT_eSprite& d = _spr;
-
-    // ── Power-off screen overrides everything ─────────────────────────────────
     if (_powerOffScreenActive) {
         drawPowerOffScreen();
         return;
     }
 
     // ── Sidebar (CPU / Heap bars + status) ────────────────────────────────────
-    drawSideBars(SIDEBAR_X, HEADER_H + 4, DISP_H - HEADER_H - 32);
- 
-    // ── Sidebar (CPU / Heap bars + status text) ──────────────────────────────
-    constexpr int16_t SIDE_BAR_TOP = HEADER_H + 4;
-    constexpr int16_t SIDE_BAR_H   = DISP_H - SIDE_BAR_TOP - 32;
-    drawSideBars(SIDEBAR_X, SIDE_BAR_TOP, SIDE_BAR_H);
+    drawSideBars(SIDEBAR_X, HEADER_H + 2, DISP_H - HEADER_H - 48);
  
     // Sample-rate below bars
     d.setTextDatum(ML_DATUM);
@@ -1461,16 +1523,16 @@ void Display::drawMainMenu() {
     char srBuf[12];
     snprintf(srBuf, sizeof(srBuf), _sampleRate > 0 ? "%lukHz" : "--",
              (unsigned long)(_sampleRate / 1000));
-    d.drawString(srBuf, SIDEBAR_X, DISP_H - 20);
+    d.drawString(srBuf, SIDEBAR_X, DISP_H - 32);
  
-    // WiFi badge
-    drawWifiBadge(SIDEBAR_X, DISP_H - 10);
+    // Connection badge
+    drawConnectionBadge(SIDEBAR_X, DISP_H - 26);
  
     // ── Header ───────────────────────────────────────────────────────────
     d.setTextDatum(ML_DATUM);
     d.setTextColor(Color::ACCENT, Color::BG);
     d.setTextSize(1);
-    d.drawString("ESP32 DSP CORE", CONTENT_X, 10);
+    d.drawString("ESP32 DSP CORE", MAIN_MENU_CONTENT_X, 10);
 
     // Voltage + current draw — top-middle of header
     if (_battery && _battery->isPresent()) {
@@ -1483,23 +1545,23 @@ void Display::drawMainMenu() {
         d.setTextDatum(MC_DATUM);
         d.setTextColor(vaCol, Color::BG);
         d.setTextSize(1);
-        d.drawString(vaBuf, CONTENT_X + CONTENT_W / 2, 10);
+        d.drawString(vaBuf, MAIN_MENU_CONTENT_X + MAIN_MENU_CONTENT_W / 2, 10);
     }
 
     // Battery widget — top right corner (icon + SoC %)
     drawBatteryWidget(DISP_W - 2, 4);
 
-    d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
+    d.drawFastHLine(MAIN_MENU_CONTENT_X, HEADER_H, MAIN_MENU_CONTENT_W, Color::BORDER);
  
     // ── Tab bar ───────────────────────────────────────────────────────────────
     constexpr int16_t TAB_Y   = HEADER_H + 3;
     constexpr int16_t TAB_H   = 18;
-    constexpr int16_t TAB_W   = (CONTENT_W - 4) / 2;
+    constexpr int16_t TAB_W   = (MAIN_MENU_CONTENT_W - 4) / 2;
     constexpr int16_t TAB_GAP = 4;
     const char* tabLabels[]   = { "PARAMS", "CTRL" };
 
     for (uint8_t t = 0; t < 2; t++) {
-        int16_t tx      = CONTENT_X + t * (TAB_W + TAB_GAP);
+        int16_t tx      = MAIN_MENU_CONTENT_X + t * (TAB_W + TAB_GAP);
         bool    isActive = (_mainMenuTab == t);
         bool    focused  = (_focusIdx == 0); // focus on tab bar
 
@@ -1536,8 +1598,8 @@ void Display::drawMainMenu() {
         uint16_t color = (elapsed < 3000) ? Color::GREEN : Color::RED;
         
         int16_t barY = TAB_Y + TAB_H - 3;
-        int16_t barW = (int16_t)(frac * CONTENT_W);
-        if (barW > 0) d.fillRect(CONTENT_X, barY, barW, 2, color);
+        int16_t barW = (int16_t)(frac * MAIN_MENU_CONTENT_W);
+        if (barW > 0) d.fillRect(MAIN_MENU_CONTENT_X, barY, barW, 2, color);
     }
 
     // ── Content area (below tab bar) ──────────────────────────────────────────
@@ -1567,10 +1629,10 @@ void Display::drawMainMenu() {
         // Param selector pills (4 items, horizontal)
         constexpr int16_t PILL_H   = 16;
         constexpr int16_t PILL_GAP = 3;
-        int16_t pillW = (CONTENT_W - 3 * PILL_GAP) / 4;
+        int16_t pillW = (MAIN_MENU_CONTENT_W - 3 * PILL_GAP) / 4;
 
         for (uint8_t i = 0; i < 4; i++) {
-            int16_t px      = CONTENT_X + i * (pillW + PILL_GAP);
+            int16_t px      = MAIN_MENU_CONTENT_X + i * (pillW + PILL_GAP);
             bool    isAct   = (i == activeParam);
             bool    focused = (_focusIdx == (uint8_t)(i + 1));
 
@@ -1609,31 +1671,31 @@ void Display::drawMainMenu() {
         d.setTextDatum(MC_DATUM);
         d.setTextColor(_mainMenuAutosaveArmed ? Color::TEXT_FOCUS : Color::TEXT, Color::BG);
         d.setTextSize(4);
-        d.drawString(bigBuf, CONTENT_X + CONTENT_W / 2, BIG_Y + BIG_AREA / 2);
+        d.drawString(bigBuf, MAIN_MENU_CONTENT_X + MAIN_MENU_CONTENT_W / 2, BIG_Y + BIG_AREA / 2);
 
         // Unit + param name below value
         d.setTextSize(1);
         d.setTextColor(Color::TEXT_DIM, Color::BG);
         d.drawString(paramUnits[activeParam],
-                     CONTENT_X + CONTENT_W / 2, BIG_Y + BIG_AREA + 2);
+                     MAIN_MENU_CONTENT_X + MAIN_MENU_CONTENT_W / 2, BIG_Y + BIG_AREA + 2);
 
         // ── Live meter panel ──────────────────────────────────────────────────
         constexpr int16_t METER_Y = CONTENT_Y + PILL_H + BIG_AREA + 28;
         int16_t meterH = DISP_H - METER_Y - 4;
 
         if (meterH > 35 && _pipeline) {
-            d.fillRoundRect(CONTENT_X, METER_Y, CONTENT_W, meterH, 4, Color::PANEL);
-            d.drawRoundRect(CONTENT_X, METER_Y, CONTENT_W, meterH, 4, Color::BORDER);
+            d.fillRoundRect(MAIN_MENU_CONTENT_X, METER_Y, MAIN_MENU_CONTENT_W, meterH, 4, Color::PANEL);
+            d.drawRoundRect(MAIN_MENU_CONTENT_X, METER_Y, MAIN_MENU_CONTENT_W, meterH, 4, Color::BORDER);
             d.setTextColor(Color::TEXT_DIM, Color::PANEL);
             d.setTextDatum(TC_DATUM);
             d.setTextSize(1);
-            d.drawString("LIVE", CONTENT_X + CONTENT_W / 2, METER_Y + 2);
+            d.drawString("LIVE", MAIN_MENU_CONTENT_X + MAIN_MENU_CONTENT_W / 2, METER_Y + 2);
 
             constexpr int16_t LBL_W  = 44;
             constexpr int16_t ROW_HM = 12;
-            int16_t mW      = CONTENT_W - LBL_W - 12;
-            int16_t lblX    = CONTENT_X + 4;
-            int16_t mX      = CONTENT_X + LBL_W + 4;
+            int16_t mW      = MAIN_MENU_CONTENT_W - LBL_W - 12;
+            int16_t lblX    = MAIN_MENU_CONTENT_X + 4;
+            int16_t mX      = MAIN_MENU_CONTENT_X + LBL_W + 4;
             int16_t rowY    = METER_Y + 12;
 
             auto hBar = [&](const char* lbl, float frac, uint16_t col) {
@@ -1678,9 +1740,9 @@ void Display::drawMainMenu() {
         };
         const CtrlBtn btns[] = {
             { "BT",   "Kick"    },
-            { "+",    "Param"   },
-            { "||",   "Mute"    },
-            { "-",    "Param"   },
+            { "+",    "Vol +"   },
+            { "||",   "Play/Pause"    },
+            { "-",    "Vol -"   },
         };
 
         constexpr int16_t BTN_W   = 56;
@@ -1688,7 +1750,7 @@ void Display::drawMainMenu() {
         constexpr int16_t BTN_GAP = 8;
         // 4 buttons in a row, centred
         int16_t totalW = 4 * BTN_W + 3 * BTN_GAP;
-        int16_t startX = CONTENT_X + (CONTENT_W - totalW) / 2;
+        int16_t startX = MAIN_MENU_CONTENT_X + (MAIN_MENU_CONTENT_W - totalW) / 2;
         int16_t btnY   = CONTENT_Y + (CONTENT_H - BTN_H - 14) / 2;
 
         for (uint8_t i = 0; i < 4; i++) {
@@ -1727,8 +1789,8 @@ void Display::drawMainMenu() {
         d.setTextDatum(MC_DATUM);
         d.setTextColor(Color::TEXT_DIM, Color::BG);
         d.setTextSize(1);
-        d.drawString("CW/CCW = chon nut  |  SW = activate",
-                     CONTENT_X + CONTENT_W / 2, DISP_H - 8);
+        d.drawString("CW/CCW = navigate  |  SW = activate",
+                     MAIN_MENU_CONTENT_X + MAIN_MENU_CONTENT_W / 2, DISP_H - 8);
     }
 }
 
@@ -1754,20 +1816,32 @@ void Display::drawSettings() {
     int16_t y = HEADER_H + 4;
 
     // WiFi switch
+    #ifndef ONLY_SERIAL
     drawSwitchRow(CONTENT_X, y, CONTENT_W, "WiFi", _settingsWifi, _focusIdx == 0);
     y += ROW_H;
-
-    // Trigger switch
-    drawSwitchRow(CONTENT_X, y, CONTENT_W, "Trigger", _settingsTrigger, _focusIdx == 1);
+    #else
+    d.setTextColor(Color::TEXT_DIM, Color::BG);
+    d.setTextDatum(ML_DATUM);
+    d.setTextSize(1);
+    d.drawString("WiFi Not Available (Force By ONLY_SERIAL)", CONTENT_X , y + 12);
     y += ROW_H;
+    #endif
+
+    // Brightness slider
+    {
+        bool focused = (_focusIdx == 1);
+        uint8_t brightness = _settingsMgr ? _settingsMgr->getBrightness() : 255;
+        drawSliderRow(CONTENT_X, y, CONTENT_W, "Brightness", (float)brightness, 20, 255, "", focused, focused && _editMode, 0);
+    }
+    y += ROW_H + 4;
 
     // ── Battery section header ────────────────────────────────────────────────
     d.drawFastHLine(CONTENT_X, y, CONTENT_W, Color::BORDER);
     d.setTextDatum(ML_DATUM);
     d.setTextColor(Color::TEXT_DIM, Color::BG);
     d.setTextSize(1);
-    d.drawString("BATTERY", CONTENT_X + 2, y + 5);
-    y += 12;
+    d.drawString("BATTERY", CONTENT_X + 2, y + 8);
+    y += 15;
 
     if (_battery && _battery->isPresent()) {
         const BatteryConfig& cfg = _battery->getConfig();
@@ -1785,7 +1859,7 @@ void Display::drawSettings() {
             d.drawString("Cells (S)", CONTENT_X + 6, y + (ROW_H - 2) / 2);
 
             // Value box with arrows
-            char cellBuf[8];
+            char cellBuf[10];
             snprintf(cellBuf, sizeof(cellBuf), "< %dS >", cfg.cellS);
             d.setTextDatum(MR_DATUM);
             d.drawString(cellBuf, CONTENT_X + CONTENT_W - 6, y + (ROW_H - 2) / 2);
@@ -1955,7 +2029,7 @@ void Display::drawDspList() {
     yPos += presetBoxH + 6;
 
     // Save button
-    constexpr int16_t saveW = 180, saveH = 28;
+    constexpr int16_t saveW = 200, saveH = 28;
     int16_t saveX = CONTENT_X + (CONTENT_W - saveW) / 2;
     bool saveFocused = (_focusIdx == DSP_LIST_PRESET_SAVE_IDX);
 
@@ -1989,7 +2063,8 @@ void Display::drawDspList() {
 
     d.setTextColor(saveFocused ? Color::TEXT_FOCUS : Color::TEXT);
     d.setTextDatum(MC_DATUM);
-    d.drawString(saveLabel, saveX + saveW / 2, yPos + saveH / 2);
+    d.drawXBitmap(saveX + 45, yPos - 12 + (saveH) / 2, icon_save, 24, 24, saveFocused ? Color::TEXT_FOCUS : Color::TEXT);
+    d.drawString(saveLabel, saveX + 18 + saveW / 2, yPos + 2 + saveH / 2);
 
     yPos += saveH + 8;
 
@@ -2076,14 +2151,11 @@ void Display::drawDspList() {
     int16_t backY = DISP_H - NAV_BTN_H - 4;
     bool backFocused = (_focusIdx == backIdx);
 
-    uint16_t backBg = backFocused ? Color::PANEL : Color::BG;
-    d.fillRect(CONTENT_X, backY, CONTENT_W, NAV_BTN_H, backBg);
-    d.drawRect(CONTENT_X, backY, CONTENT_W, NAV_BTN_H,
-               backFocused ? Color::ACCENT : Color::BORDER);
-
-    d.setTextColor(backFocused ? Color::TEXT_FOCUS : Color::TEXT);
-    d.setTextDatum(MC_DATUM);
-    d.drawString("BACK", CONTENT_X + CONTENT_W / 2, backY + NAV_BTN_H / 2);
+    float holdFrac = (_holdTracking && _focusIdx == backIdx)
+                         ? (float)(millis() - _focusHoldStartMs) / AUTO_CONFIRM_MS
+                         : 0;
+    drawNavButton(CONTENT_X, backY, CONTENT_W, NAV_BTN_H, "BACK", backFocused, _holdTracking && _focusIdx == backIdx,
+                  holdFrac);
 
     // Scrollbar
     if (MODULE_COUNT > visibleModuleRows) {
@@ -2135,9 +2207,13 @@ void Display::drawEffectCommon() {
             drawSwitchRow(CONTENT_X, y, CONTENT_W, params[pi].name,
                            val >= 0.5f, focused);
         } else {
-            drawSliderRow(CONTENT_X, y, CONTENT_W, params[pi].name, val,
-                          params[pi].minVal, params[pi].maxVal, params[pi].unit,
-                          focused, editing);
+            if (nav.module == DisplayModuleID::COMPANDER && (pi == 1 || pi == 2)) { // Ratio
+                drawSliderRow(CONTENT_X, y, CONTENT_W, params[pi].name, val / 100.0f, params[pi].minVal / 100.0f, params[pi].maxVal / 100.0f, params[pi].unit,
+                              focused, editing, params[pi].decimals);
+            } else {
+                drawSliderRow(CONTENT_X, y, CONTENT_W, params[pi].name, val, params[pi].minVal, params[pi].maxVal, params[pi].unit,
+                              focused, editing, params[pi].decimals);
+            }
         }
     }
 
@@ -2781,7 +2857,7 @@ void Display::drawSliderRow(int16_t x, int16_t y, int16_t w, const char* label,
     d.setTextSize(1);
     d.drawString(label, x + 4, y + h / 2);
 
-    constexpr int16_t LABEL_W = 70, VAL_W = 44, TRACK_PAD = 4;
+    constexpr int16_t LABEL_W = 80, VAL_W = 65, TRACK_PAD = 5;
     int16_t trackX = x + LABEL_W;
     int16_t trackW = w - LABEL_W - VAL_W - TRACK_PAD * 2;
     int16_t trackY = y + h / 2 - 3;
@@ -2804,7 +2880,7 @@ void Display::drawSliderRow(int16_t x, int16_t y, int16_t w, const char* label,
     }
 
     char valBuf[10];
-    formatFloat(valBuf, sizeof(valBuf), value, decimals);
+    formatFloat(valBuf, sizeof(valBuf), value, decimals, unit);
     int16_t valX = x + w - VAL_W + 2;
     d.fillRect(valX, y + 2, VAL_W - 4, h - 4, focused ? 0x18A3 : 0x1082);
     d.drawRect(valX, y + 2, VAL_W - 4, h - 4,
@@ -3000,7 +3076,7 @@ void Display::drawSideBars(int16_t x, int16_t y, int16_t h) {
     // Heap bar
     int16_t  hx     = x + BAR_W + 2;
     int16_t  heapH  = (int16_t)((uint32_t)_heapPct * h / 100);
-    uint16_t heapCol = _heapPct < 20 ? Color::RED : _heapPct < 40 ? Color::YELLOW : Color::GREEN;
+    uint16_t heapCol = _heapPct > 80 ? Color::RED : _heapPct > 60 ? Color::YELLOW : Color::GREEN;
     d.drawRect(hx, y, BAR_W, h, Color::BORDER);
     if (heapH > 0) d.fillRect(hx + 1, y + h - heapH, BAR_W - 2, heapH, heapCol);
     d.setTextDatum(TC_DATUM);
@@ -3008,13 +3084,18 @@ void Display::drawSideBars(int16_t x, int16_t y, int16_t h) {
     d.drawString("H", hx + BAR_W / 2, y - 10);
 }
 
-void Display::drawWifiBadge(int16_t x, int16_t y) {
+void Display::drawConnectionBadge(int16_t x, int16_t y) {
     TFT_eSprite& d = _spr;
-    uint16_t col = _wifiConn ? Color::ACCENT : Color::TEXT_DIM;
-    d.setTextDatum(ML_DATUM);
-    d.setTextColor(col, Color::BG);
-    d.setTextSize(1);
-    d.drawString(_wifiConn ? "W+" : "W-", x, y);
+    d.fillRect(x, y, 16, 16, Color::BG);
+    if (_connectStatus == ConnectStatus::WIFI_WS_CONNECTED) {
+        d.drawXBitmap(x, y, wifi_icon_bits, ASSETS_ICON_W, ASSETS_ICON_H, Color::GREEN);
+    } else if (_connectStatus == ConnectStatus::WIFI_ENABLE) {
+        d.drawXBitmap(x, y, wifi_icon_bits, ASSETS_ICON_W, ASSETS_ICON_H, Color::ACCENT);
+    } else if (_connectStatus == ConnectStatus::WIFI_DISABLE) {
+        d.drawXBitmap(x, y, wifi_icon_x_bits, ASSETS_ICON_W, ASSETS_ICON_H, Color::TEXT_DIM);
+    } else if (_connectStatus == ConnectStatus::SERIAL_CONNECTED) {
+        d.drawXBitmap(x, y, usb_icon_bits, ASSETS_ICON_W, ASSETS_ICON_H, Color::GREEN);
+    }
 }
 
 static float biquadMagnitudeDb(uint8_t type,float freq,float f0,float Q,float gainDb,float fs){

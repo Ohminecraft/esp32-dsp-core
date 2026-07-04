@@ -114,7 +114,7 @@
 #define POWER_PIN_OUT -1
 #define POWER_PIN_OFF -1
 
-//#define MUTE_PIN -1
+#define MUTE_PIN -1
 
 // ============================================================================
 // TFT Display & Encoder
@@ -122,7 +122,7 @@
 
 // TFT Backlight (PWM control for brightness)
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
-#define TFT_BACKLIGHT_PIN 7
+#define TFT_BACKLIGHT_PIN 3
 #elif defined(CONFIG_IDF_TARGET_ESP32)
 #define TFT_BACKLIGHT_PIN 5
 #endif
@@ -151,6 +151,9 @@
 // ============================================================================
 // Trigger GPIO Settings (Single / Triple Click)
 // ============================================================================
-#define TRIGGER_GPIO_PIN            -1      // Target GPIO to trigger
+#define TRIGGER_BT_KICK_GPIO_PIN            -1      // Target GPIO to trigger
+#define TRIGGER_VOL_UP_GPIO_PIN             -1      // Target GPIO to trigger
+#define TRIGGER_VOL_DOWN_GPIO_PIN           -1      // Target GPIO to trigger
+#define TRIGGER_PAUSE_GPIO_PIN              -1      // Target GPIO to trigger
 
 #endif // PIN_CONFIG_H
