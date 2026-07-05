@@ -118,6 +118,15 @@ ParametricEQ* Display::getEqPtr(DisplayModuleID id) {
     }
 }
 
+IndexSelectableFilter* Display::getIsfPtr(DisplayModuleID id) {
+    if (!_pipeline) return nullptr;
+    switch (id) {
+    case DisplayModuleID::ISF1: return &_pipeline->getIsf1();
+    case DisplayModuleID::ISF2: return &_pipeline->getIsf2();
+    default: return nullptr;
+    }
+}
+
 uint8_t Display::getScreenParams(NavEntry nav, UiParam* outParams) {
     switch (nav.module) {
 
@@ -139,7 +148,7 @@ uint8_t Display::getScreenParams(NavEntry nav, UiParam* outParams) {
             { "Ratio Above", ":1",   10.00f, 1000.0f, 10.0f, 1   },
             { "Attack",      "ms",   1.0f, 2000.0f,   1.0f,  0   },
             { "Release",     "ms",  10.0f, 2000.0f,   1.0f,  0   },
-            { "Lookahead",   "ms",   0.0f,  10.0f,    1.0f,  0   },
+            { "Lookahead",   "ms",   0.0f,  10.0f,    0.1f,  1   },
         };
         if (outParams) memcpy(outParams, p, sizeof(p));
         return 6;
@@ -165,7 +174,7 @@ uint8_t Display::getScreenParams(NavEntry nav, UiParam* outParams) {
             { "Clip Full Thr",  "dB", -60.0f,  0.0f,  0.1f,  2 },
             { "Attack",         "ms",  1.0f, 2000.0f,  1.0f, 0 },
             { "Release",        "ms",  10.0f, 2000.0f,  1.0f, 0 },
-            { "Lookahead",      "ms",  0.0f,  10.0f,   1.0f, 0 },
+            { "Lookahead",      "ms",  0.0f,  10.0f,   0.1f, 1 },
         };
         if (outParams) memcpy(outParams, p, sizeof(p));
         return 9;
@@ -178,7 +187,7 @@ uint8_t Display::getScreenParams(NavEntry nav, UiParam* outParams) {
             { "High Thresh",   "dB", -96.0f, 0.0f, 1.0f, 1 },
             { "Attack",        "ms",  1.0f, 2000.0f, 1.0f, 0 },
             { "Release",       "ms",  10.0f, 2000.0f, 1.0f, 0 },
-            { "Lookahead",     "ms",  0.0f,  10.0f,  1.0f, 0 },
+            { "Lookahead",     "ms",  0.0f,  10.0f,  0.1f, 1 },
         };
         if (outParams) memcpy(outParams, p, sizeof(p));
         return 6;
@@ -189,7 +198,7 @@ uint8_t Display::getScreenParams(NavEntry nav, UiParam* outParams) {
         static const UiParam p[] = {
             { "RMS Window",  "ms",      10.0f, 2000.0f, 10.0f, 0 },
             { "Slew Time",   "ms/stp", 10.0f, 2000.0f, 10.0f, 0 },
-            { "Lookahead",   "ms",       0.0f,   10.0f,  1.0f, 0 },
+            { "Lookahead",   "ms",       0.0f,   10.0f,  0.1f, 1 },
         };
         if (outParams) memcpy(outParams, p, sizeof(p));
         return 3;
@@ -760,9 +769,25 @@ void Display::handleEncoder(EncoderEvent enc) {
         }
 
         if (s == ScreenID::EFFECT_EQ_GRAPH && (uint8_t)next < MAX_EQ_BANDS) {
-            ParametricEQ* eq = getEqPtr(currentNav().module);
+            NavEntry& nav = currentNav();
+            bool isIsfContext = (nav.module == DisplayModuleID::ISF1 || nav.module == DisplayModuleID::ISF2);
+            ParametricEQ* eq = getEqPtr(nav.module);
+            IndexSelectableFilter* isf = getIsfPtr(nav.module);
             uint8_t tries = 0;
-            while (eq && tries < MAX_EQ_BANDS && !eq->getBandParams((uint8_t)next).enabled) {
+            
+            // Helper lambda to check if a band is enabled
+            auto isBandEnabled = [&](uint8_t idx) -> bool {
+                if (isIsfContext && isf) {
+                    const ISFPreset& preset = isf->getPreset(nav.subContext);
+                    return preset.filters.getBandParams(idx).enabled != 0;
+                } else if (eq) {
+                    return eq->getBandParams(idx).enabled != 0;
+                }
+                return false;
+            };
+            
+            // Skip disabled bands
+            while (tries < MAX_EQ_BANDS && !isBandEnabled((uint8_t)next)) {
                 next += dir;
                 if (next < 0) next = (int16_t)(_itemCount - 1);
                 if (next >= _itemCount) next = 0;
@@ -932,11 +957,38 @@ void Display::handleEncoder(EncoderEvent enc) {
         }
         if (s == ScreenID::EFFECT_EQ_COMMON) {
             uint8_t cnt = getItemCount();
-            if (_focusIdx == 0) _editMode = !_editMode;
-            else if (_focusIdx >= 1 && _focusIdx <= MAX_EQ_BANDS) {
-                ParametricEQ* eq = getEqPtr(currentNav().module);
-                toggleEqBandSlot(eq, (uint8_t)(_focusIdx - 1));
-                _eqBandCount = countEnabledEqBands(eq);
+            NavEntry& nav = currentNav();
+            bool isIsfContext = (nav.module == DisplayModuleID::ISF1 || nav.module == DisplayModuleID::ISF2);
+            IndexSelectableFilter* isf = getIsfPtr(nav.module);
+            ParametricEQ* eq = getEqPtr(nav.module);
+            
+            uint8_t itemOffset = isIsfContext ? 1 : 0;
+            
+            if (_focusIdx == 0 && isIsfContext) {
+                // Toggle edit mode for Threshold in ISF context
+                toggleEditMode();
+            } else if (_focusIdx == itemOffset) {
+                // Toggle edit mode for Pregain
+                toggleEditMode();
+            } else if (_focusIdx >= itemOffset + 1 && _focusIdx <= itemOffset + MAX_EQ_BANDS) {
+                // Toggle band enable/disable
+                uint8_t bandIdx = _focusIdx - itemOffset - 1;
+                if (isIsfContext && isf) {
+                    // Toggle band for ISF preset
+                    uint8_t presetIdx = nav.subContext;
+                    const ISFPreset& preset = isf->getPreset(presetIdx);
+                    EQFilterParams bp = preset.filters.getBandParams(bandIdx);
+                    bp.enabled = bp.enabled ? 0 : 1;
+                    ISFPreset newPreset;
+                    newPreset.thresholdDb = preset.thresholdDb;
+                    newPreset.valid = true;
+                    newPreset.filters.setPregain(preset.filters.getPregain());
+                    newPreset.filters.setBand(bandIdx, bp);
+                    isf->setPreset(presetIdx, newPreset, ISF_SET_BAND, bandIdx);
+                } else if (eq) {
+                    toggleEqBandSlot(eq, bandIdx);
+                    _eqBandCount = countEnabledEqBands(eq);
+                }
                 _editMode = false;
             } else onConfirm();
             _dirty = true; return;
@@ -1005,8 +1057,21 @@ void Display::onConfirm() {
     case ScreenID::EFFECT_EQ_GRAPH:
         if (_focusIdx == getItemCount() - 1) popScreen();
         else if (_focusIdx < MAX_EQ_BANDS) {
-            ParametricEQ* eq = getEqPtr(nav.module);
-            if (eq && eq->getBandParams(_focusIdx).enabled) pushScreen(ScreenID::EQ_BAND_EDIT, nav.module, _focusIdx);
+            bool isIsfContext = (nav.module == DisplayModuleID::ISF1 || nav.module == DisplayModuleID::ISF2);
+            bool bandEnabled = false;
+            
+            if (isIsfContext) {
+                IndexSelectableFilter* isf = getIsfPtr(nav.module);
+                if (isf) {
+                    const ISFPreset& preset = isf->getPreset(nav.subContext);
+                    bandEnabled = preset.filters.getBandParams(_focusIdx).enabled != 0;
+                }
+            } else {
+                ParametricEQ* eq = getEqPtr(nav.module);
+                if (eq) bandEnabled = eq->getBandParams(_focusIdx).enabled != 0;
+            }
+            
+            if (bandEnabled) pushScreen(ScreenID::EQ_BAND_EDIT, nav.module, _focusIdx);
         }
         break;
     case ScreenID::EQ_BAND_EDIT: {
@@ -1174,32 +1239,110 @@ void Display::editDelta(int8_t dir) {
         _kb.cursorCol = col; _kb.cursorRow = row; _dirty = true; return;
     }
     if (s == ScreenID::EQ_BAND_EDIT) {
-        ParametricEQ* eq = getEqPtr(nav.module); if (!eq) return;
-        uint8_t bandIdx = nav.subContext; EQFilterParams p = eq->getBandParams(bandIdx);
+        uint8_t bandIdx = nav.subContext;
+        bool isIsfContext = (nav.module == DisplayModuleID::ISF1 || nav.module == DisplayModuleID::ISF2);
+        ParametricEQ* eq = getEqPtr(nav.module);
+        IndexSelectableFilter* isf = getIsfPtr(nav.module);
+        
+        // Get current band params
+        EQFilterParams p;
+        uint8_t presetIdx = 0;
+        
+        if (isIsfContext && isf) {
+            // Find parent ISF preset context from nav stack
+            for (int8_t i = _navTop - 1; i >= 0; i--) {
+                if (_navStack[i].screen == ScreenID::EFFECT_EQ_COMMON && 
+                    (_navStack[i].module == DisplayModuleID::ISF1 || _navStack[i].module == DisplayModuleID::ISF2)) {
+                    presetIdx = _navStack[i].subContext;
+                    break;
+                }
+            }
+            const ISFPreset& preset = isf->getPreset(presetIdx);
+            p = preset.filters.getBandParams(bandIdx);
+        } else if (eq) {
+            p = eq->getBandParams(bandIdx);
+        } else {
+            return;
+        }
+        
         bool hasGain = EQ_FILTER_HAS_GAIN[(uint8_t)_bandEditType];
         uint8_t qItem = hasGain ? 3 : 2;
+        bool changed = false;
+        
         if (_focusIdx == 1) {
             uint16_t newF = constrain(p.f0 < 1000 ? (p.f0 + dir * 10) : p.f0 < 10000 ? (p.f0 + dir * 100) : (p.f0 + dir * 1000), 20, 20000);
             p.f0 = newF;
             p.type = (int16_t)_bandEditType;
-            eq->setBand(bandIdx, p); _dirty = true;
+            changed = true;
         } else if (hasGain && _focusIdx == 2) {
             float curGain = DB_Q8_TO_FLOAT(p.gain);
             float newGain = constrain(curGain + dir * 0.5f, -24.0f, 24.0f);
-            p.gain = FLOAT_TO_DB_Q8(newGain); p.type = (int16_t)_bandEditType; eq->setBand(bandIdx, p); _dirty = true;
+            p.gain = FLOAT_TO_DB_Q8(newGain);
+            p.type = (int16_t)_bandEditType;
+            changed = true;
         } else if (_focusIdx == qItem) {
             float curQ = Q_Q610_TO_FLOAT(p.Q);
             float newQ = constrain(curQ + dir * 0.1f, 0.1f, 10.0f);
-            p.Q = FLOAT_TO_Q_Q610(newQ); p.type = (int16_t)_bandEditType; eq->setBand(bandIdx, p); _dirty = true;
+            p.Q = FLOAT_TO_Q_Q610(newQ);
+            p.type = (int16_t)_bandEditType;
+            changed = true;
+        }
+        
+        if (changed) {
+            if (isIsfContext && isf) {
+                // Update ISF preset band
+                const ISFPreset& preset = isf->getPreset(presetIdx);
+                ISFPreset newPreset;
+                newPreset.thresholdDb = preset.thresholdDb;
+                newPreset.valid = true;
+                newPreset.filters.setPregain(preset.filters.getPregain());
+                newPreset.filters.setBand(bandIdx, p);
+                isf->setPreset(presetIdx, newPreset, ISF_SET_BAND, bandIdx);
+            } else if (eq) {
+                eq->setBand(bandIdx, p);
+            }
+            _dirty = true;
         }
         return;
     }
     if (s == ScreenID::EFFECT_EQ_COMMON) {
+        bool isIsfContext = (nav.module == DisplayModuleID::ISF1 || nav.module == DisplayModuleID::ISF2);
+        IndexSelectableFilter* isf = getIsfPtr(nav.module);
         ParametricEQ* eq = getEqPtr(nav.module);
-        if (_focusIdx == 0 && eq) {
-            float cur = DB_Q8_TO_FLOAT((int16_t)(eq->getPregain()));
-            float nxt = constrain(cur + dir * 1.0f, -24.0f, 24.0f);
-            eq->setPregain((int16_t)FLOAT_TO_DB_Q8(nxt)); _dirty = true;
+        
+        if (isIsfContext && isf) {
+            uint8_t presetIdx = nav.subContext;
+            uint8_t itemOffset = 1; // Threshold is at index 0, Pregain at index 1
+            
+            if (_focusIdx == 0) {
+                // Edit Threshold - use ISFPreset with only threshold set
+                const ISFPreset& preset = isf->getPreset(presetIdx);
+                float curThresh = (float)preset.thresholdDb / 256.0f;
+                float nxtThresh = constrain(curThresh + dir * 1.0f, -96.0f, 0.0f);
+                ISFPreset newPreset;
+                newPreset.thresholdDb = (int16_t)(nxtThresh * 256.0f);
+                newPreset.valid = true;
+                newPreset.filters.setPregain(preset.filters.getPregain());
+                isf->setPreset(presetIdx, newPreset, ISF_SET_COMMON);
+                _dirty = true;
+            } else if (_focusIdx == itemOffset) {
+                // Edit Pregain for ISF preset - use ISFPreset with only pregain set
+                const ISFPreset& preset = isf->getPreset(presetIdx);
+                float curGain = DB_Q8_TO_FLOAT((int16_t)preset.filters.getPregain());
+                float nxtGain = constrain(curGain + dir * 1.0f, -24.0f, 24.0f);
+                ISFPreset newPreset;
+                newPreset.thresholdDb = preset.thresholdDb;
+                newPreset.valid = true;
+                newPreset.filters.setPregain((int16_t)FLOAT_TO_DB_Q8(nxtGain));
+                isf->setPreset(presetIdx, newPreset, ISF_SET_COMMON);
+                _dirty = true;
+            }
+        } else if (eq) {
+            if (_focusIdx == 0) {
+                float cur = DB_Q8_TO_FLOAT((int16_t)(eq->getPregain()));
+                float nxt = constrain(cur + dir * 1.0f, -24.0f, 24.0f);
+                eq->setPregain((int16_t)FLOAT_TO_DB_Q8(nxt)); _dirty = true;
+            }
         }
         return;
     }
@@ -1308,7 +1451,13 @@ uint8_t Display::getItemCount() const {
         NavEntry nav = _navStack[_navTop];
         uint8_t n = const_cast<Display*>(this)->getScreenParams(nav, nullptr); 
         return (n > 0) ? n + 1 : 8; }
-    case ScreenID::EFFECT_EQ_COMMON: return 1 + MAX_EQ_BANDS + 2;
+    case ScreenID::EFFECT_EQ_COMMON: {
+        NavEntry nav = _navStack[_navTop];
+        bool isIsfContext = (nav.module == DisplayModuleID::ISF1 || nav.module == DisplayModuleID::ISF2);
+        // ISF: Threshold + Pregain + bands + GRAPH + BACK = 1 + 1 + MAX_EQ_BANDS + 2
+        // Normal EQ: Pregain + bands + GRAPH + BACK = 1 + MAX_EQ_BANDS + 2
+        return (isIsfContext ? 1 : 0) + 1 + MAX_EQ_BANDS + 2;
+    }
     case ScreenID::EFFECT_EQ_GRAPH: return MAX_EQ_BANDS + 1;
     case ScreenID::EQ_BAND_EDIT: return EQ_FILTER_HAS_GAIN[(uint8_t)_bandEditType] ? 5 : 4;
     case ScreenID::EFFECT_ISF_COMMON: { 
@@ -1326,9 +1475,7 @@ uint8_t Display::getItemCount() const {
         switch (drc._mode) { 
             case DRC_MODE_FULLBAND: bc=1; break; 
             case DRC_MODE_2BAND: bc=2; break; 
-            case DRC_MODE_2BAND_FULLBAND: bc=3; break; 
             case DRC_MODE_3BAND: bc=3; break; 
-            case DRC_MODE_3BAND_FULLBAND: bc=4; break; 
         } 
         return bc+1; 
     }
@@ -2244,12 +2391,37 @@ void Display::drawEffectEqCommon() {
     d.drawString(modName, CONTENT_X, 10);
     d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
 
+    // Check if this is an ISF preset context
+    bool isIsfContext = (nav.module == DisplayModuleID::ISF1 || nav.module == DisplayModuleID::ISF2);
+    uint8_t isfPresetIdx = nav.subContext;
+    
     float pregainDb = 0;
+    float thresholdDb = -96.0f;
     ParametricEQ* eq = getEqPtr(nav.module);
-    if (eq) pregainDb = DB_Q8_TO_FLOAT((int16_t)eq->getPregain());
+    IndexSelectableFilter* isf = getIsfPtr(nav.module);
+    
+    if (isIsfContext && isf) {
+        // ISF preset context - get data from ISF preset
+        const ISFPreset& preset = isf->getPreset(isfPresetIdx);
+        thresholdDb = (float)preset.thresholdDb / 256.0f;
+        pregainDb = DB_Q8_TO_FLOAT((int16_t)preset.filters.getPregain());
+    } else if (eq) {
+        pregainDb = DB_Q8_TO_FLOAT((int16_t)eq->getPregain());
+    }
 
-    bool pregFocused = (_focusIdx == 0);
-    drawSliderRow(CONTENT_X, HEADER_H + 4, CONTENT_W, "Pregain", pregainDb, -24,
+    uint8_t itemOffset = 0;
+    
+    // Draw Threshold row for ISF context
+    if (isIsfContext) {
+        bool threshFocused = (_focusIdx == 0);
+        drawSliderRow(CONTENT_X, HEADER_H + 4, CONTENT_W, "Threshold", thresholdDb, -96,
+                      0, "dB", threshFocused, threshFocused && _editMode);
+        itemOffset = 1;
+    }
+
+    // Pregain row
+    bool pregFocused = (_focusIdx == itemOffset);
+    drawSliderRow(CONTENT_X, HEADER_H + 4 + itemOffset * ROW_H, CONTENT_W, "Pregain", pregainDb, -24,
                   24, "dB", pregFocused, pregFocused && _editMode);
 
     constexpr uint8_t VISIBLE = 4;
@@ -2258,8 +2430,8 @@ void Display::drawEffectEqCommon() {
         uint8_t bi = (uint8_t)(_paramScroll + i);
         if (bi >= MAX_EQ_BANDS) break;
 
-        int16_t y = HEADER_H + 4 + (i + 1) * ROW_H;
-        bool focused = (_focusIdx == bi + 1);
+        int16_t y = HEADER_H + 4 + (i + itemOffset + 1) * ROW_H;
+        bool focused = (_focusIdx == bi + itemOffset + 1);
         uint16_t rowBg = focused ? Color::PANEL : Color::BG;
 
         d.fillRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, rowBg);
@@ -2269,18 +2441,25 @@ void Display::drawEffectEqCommon() {
 
         bool bandEnabled = false;
         char label[20];
-        if (eq) {
-            const EQFilterParams& bp = eq->getBandParams(bi);
-            bandEnabled = (bp.enabled != 0);
-            if (bandEnabled) {
-                const char* tname = EQ_FILTER_TYPE_NAMES[(uint8_t)bp.type];
-                snprintf(label, sizeof(label), "B%d [%s] %dHz", bi + 1, tname,
-                        (int)bp.f0);
-            } else {
-                snprintf(label, sizeof(label), "B%d  (off)", bi + 1);
-            }
+        
+        // Get band params from either ISF preset or EQ
+        EQFilterParams bp;
+        if (isIsfContext && isf) {
+            const ISFPreset& preset = isf->getPreset(isfPresetIdx);
+            bp = preset.filters.getBandParams(bi);
+        } else if (eq) {
+            bp = eq->getBandParams(bi);
         } else {
-            snprintf(label, sizeof(label), "Band %d", bi + 1);
+            bp = { 0, EQFilterType::EQ_FILTER_TYPE_PEAKING, 1000, 0, 256 };
+        }
+        
+        bandEnabled = (bp.enabled != 0);
+        if (bandEnabled) {
+            const char* tname = EQ_FILTER_TYPE_NAMES[(uint8_t)bp.type];
+            snprintf(label, sizeof(label), "B%d [%s] %dHz", bi + 1, tname,
+                    (int)bp.f0);
+        } else {
+            snprintf(label, sizeof(label), "B%d  (off)", bi + 1);
         }
 
         d.setTextColor(bandEnabled ? (focused ? Color::TEXT_FOCUS : Color::TEXT)
@@ -2291,7 +2470,7 @@ void Display::drawEffectEqCommon() {
         d.setTextColor(bandEnabled ? Color::RED : Color::GREEN, rowBg);
         d.setTextDatum(MR_DATUM);
         d.drawString(bandEnabled ? "Press to DEL" : "Press ADD",
-                     CONTENT_W + 20, y + (ROW_H - 2) / 2);
+                     CONTENT_W - 10, y + (ROW_H - 2) / 2);
     }
 
     uint8_t cnt = getItemCount();
@@ -2318,11 +2497,12 @@ void Display::drawEffectEqGraph() {
     TFT_eSprite& d = _spr;
     NavEntry& nav = currentNav();
 
-    constexpr int16_t GX = 0, GY = 0, GW = DISP_W, GH = 190;
+    constexpr int16_t GX = 0, GY = 0, GW = DISP_W, GH = 180;
 
     d.fillRect(GX, GY, GW, GH, 0x0821);
     d.drawRect(GX, GY, GW, GH, Color::BORDER);
 
+    // Horizontal dB lines
     const int8_t dbLines[] = { -24, -18, -12, -6, 0, 6, 12, 18, 24 };
     for (int8_t db : dbLines) {
         int16_t y = GY + GH / 2 - (int16_t)(db * GH / 48);
@@ -2338,10 +2518,38 @@ void Display::drawEffectEqGraph() {
         }
     }
 
+    // Vertical frequency lines (log scale: 20, 50, 100, 200, 500, 1k, 2k, 5k, 10k, 20k)
+    const uint16_t freqLines[] = { 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
+    for (uint16_t freq : freqLines) {
+        float logF = log10f((float)freq / 20.0f) / log10f(20000.0f / 20.0f);
+        int16_t x = GX + (int16_t)(logF * GW);
+        uint16_t c = (freq == 1000) ? Color::BORDER : 0x18C3;
+        d.drawFastVLine(x, GY, GH, c);
+        // Frequency labels at bottom
+        char lbl[6];
+        if (freq >= 1000) snprintf(lbl, sizeof(lbl), "%dk", freq / 1000);
+        else snprintf(lbl, sizeof(lbl), "%d", freq);
+        d.setTextColor(Color::TEXT_DIM, 0x0821);
+        d.setTextDatum(TC_DATUM);
+        d.setTextSize(1);
+        d.drawString(lbl, freq != 20000 ? x : x - 8, GY + GH + 2);
+    }
+
     EqBandDesc bands[MAX_EQ_BANDS];
+    
+    // Check if this is ISF context
+    bool isIsfContext = (nav.module == DisplayModuleID::ISF1 || nav.module == DisplayModuleID::ISF2);
     ParametricEQ* eq = getEqPtr(nav.module);
+    IndexSelectableFilter* isf = getIsfPtr(nav.module);
+    
     for (uint8_t i = 0; i < MAX_EQ_BANDS; i++) {
-        if (eq) {
+        if (isIsfContext && isf) {
+            // Get band params from ISF preset
+            const ISFPreset& preset = isf->getPreset(nav.subContext);
+            const EQFilterParams& bp = preset.filters.getBandParams(i);
+            bands[i] = { bp.enabled != 0, (EQFilterType)bp.type, (float)bp.f0,
+                         DB_Q8_TO_FLOAT(bp.gain), Q_Q610_TO_FLOAT(bp.Q) };
+        } else if (eq) {
             const EQFilterParams& bp = eq->getBandParams(i);
             bands[i] = { bp.enabled != 0, (EQFilterType)bp.type, (float)bp.f0,
                          DB_Q8_TO_FLOAT(bp.gain), Q_Q610_TO_FLOAT(bp.Q) };
@@ -2351,7 +2559,16 @@ void Display::drawEffectEqGraph() {
         }
     }
 
-    drawEqCurve(bands, MAX_EQ_BANDS, GX, GY, GW, GH);
+    // Get pregain from ISF or EQ
+    float pregainDb = 0.0f;
+    if (isIsfContext && isf) {
+        const ISFPreset& preset = isf->getPreset(nav.subContext);
+        pregainDb = DB_Q8_TO_FLOAT((int16_t)preset.filters.getPregain());
+    } else if (eq) {
+        pregainDb = DB_Q8_TO_FLOAT((int16_t)eq->getPregain());
+    }
+
+    drawEqCurve(bands, MAX_EQ_BANDS, GX, GY, GW, GH, pregainDb);
 
     for (uint8_t i = 0; i < MAX_EQ_BANDS; i++) {
         if (!bands[i].enabled) continue;
@@ -2375,16 +2592,16 @@ void Display::drawEffectEqGraph() {
         const char* typeName = EQ_FILTER_TYPE_NAMES[(uint8_t)fb.type];
         char info[48];
         if (EQ_FILTER_HAS_GAIN[(uint8_t)fb.type]) {
-            snprintf(info, sizeof(info), "B%d [%s] %.0fHz %.1fdB Q%.2f",
+            snprintf(info, sizeof(info), "B%d [%s] %.0fHz %.1fdB Q%.3f",
                     _focusIdx + 1, typeName, fb.freq, fb.gain, fb.q);
         } else {
-            snprintf(info, sizeof(info), "B%d [%s] %.0fHz  Q%.2f",
+            snprintf(info, sizeof(info), "B%d [%s] %.0fHz  Q%.3f",
                     _focusIdx + 1, typeName, fb.freq, fb.q);
         }
         d.setTextColor(Color::TEXT, Color::BG);
         d.setTextDatum(ML_DATUM);
         d.setTextSize(1);
-        d.drawString(info, 4, GH + 2);
+        d.drawString(info, 4, GH + 24);
     }
 
     float hf = (_holdTracking && _focusIdx == getItemCount() - 1)
@@ -2398,10 +2615,32 @@ void Display::drawEqBandEdit() {
     TFT_eSprite& d = _spr;
     NavEntry& nav = currentNav();
 
-    ParametricEQ* eq = getEqPtr(nav.module);
+    // Check if this is ISF context
+    bool isIsfContext = (nav.module == DisplayModuleID::ISF1 || nav.module == DisplayModuleID::ISF2);
     uint8_t bandIdx = nav.subContext;
     float curFreq = 1000, curGain = 0, curQ = 0.707f;
-    if (eq) {
+    
+    ParametricEQ* eq = getEqPtr(nav.module);
+    IndexSelectableFilter* isf = getIsfPtr(nav.module);
+    
+    if (isIsfContext && isf && nav.subContext < MAX_EQ_BANDS) {
+        // ISF context: get band from ISF preset stored in parent nav
+        // Find parent ISF preset context from nav stack
+        uint8_t presetIdx = 0;
+        for (int8_t i = _navTop - 1; i >= 0; i--) {
+            if (_navStack[i].screen == ScreenID::EFFECT_EQ_COMMON && 
+                (_navStack[i].module == DisplayModuleID::ISF1 || _navStack[i].module == DisplayModuleID::ISF2)) {
+                presetIdx = _navStack[i].subContext;
+                break;
+            }
+        }
+        const ISFPreset& preset = isf->getPreset(presetIdx);
+        const EQFilterParams& bp = preset.filters.getBandParams(bandIdx);
+        curFreq = (float)bp.f0;
+        curGain = DB_Q8_TO_FLOAT(bp.gain);
+        curQ = Q_Q610_TO_FLOAT(bp.Q);
+        _bandEditType = (EQFilterType)bp.type;
+    } else if (eq) {
         const EQFilterParams& bp = eq->getBandParams(bandIdx);
         curFreq = (float)bp.f0;
         curGain = DB_Q8_TO_FLOAT(bp.gain);
@@ -2443,8 +2682,8 @@ void Display::drawEqBandEdit() {
     }
 
     drawSliderRow(CONTENT_X, HEADER_H + 4 + 3 * ROW_H, CONTENT_W, "Q", curQ,
-                  0.1f, 10, "", _focusIdx == qItem,
-                  _focusIdx == qItem && _editMode);
+                  0.01f, 10, "", _focusIdx == qItem,
+                  _focusIdx == qItem && _editMode, 3);
 
     float hf = (_holdTracking && _focusIdx == backItem)
                    ? (float)(millis() - _focusHoldStartMs) / AUTO_CONFIRM_MS
@@ -2526,9 +2765,8 @@ void Display::drawEffectIsfCommon() {
                   hf);
 }
 
-static const char* DRC_MODE_NAMES[] = { "Fullband", "2 Band", "2 Band + FB",
-                                        "3 Band",  "3 Band + FB" };
-static const char* DRC_CF_TYPE_NAMES[] = { "", "", "LR2", "LR4", "Linkwitz" };
+static const char* DRC_MODE_NAMES[] = { "Fullband", "2 Band", "3 Band" };
+static const char* DRC_CF_TYPE_NAMES[] = { "Butter 1", "LR2", "LR4", "Q-Ctrl" };
 
 void Display::drawDrcConfig() {
     TFT_eSprite& d = _spr;
@@ -2962,7 +3200,7 @@ void Display::drawInputRow(int16_t x, int16_t y, int16_t w, const char* label,
     constexpr int16_t VAL_W = 60;
     int16_t valX = x + w - VAL_W - 4;
     char valBuf[12];
-    snprintf(valBuf, sizeof(valBuf), "%.1f %s", value, unit ? unit : "");
+    snprintf(valBuf, sizeof(valBuf), "%.1f%s", value, unit ? unit : "");
 
     constexpr uint16_t VAL_BG_FOCUSED = 0x18A3;
     constexpr uint16_t VAL_BG_NORMAL  = 0x1082;
@@ -3120,7 +3358,7 @@ static float biquadMagnitudeDb(uint8_t type,float freq,float f0,float Q,float ga
 }
 
 void Display::drawEqCurve(const EqBandDesc* bands, uint8_t nBands,
-                          int16_t rx, int16_t ry, int16_t rw, int16_t rh) {
+                          int16_t rx, int16_t ry, int16_t rw, int16_t rh, float pregainDb) {
     TFT_eSprite& d = _spr;
     // Use rw as step count so each pixel column is drawn exactly once.
     // DISP_W was used before, causing multiple draws per pixel when rw < DISP_W.
@@ -3130,7 +3368,7 @@ void Display::drawEqCurve(const EqBandDesc* bands, uint8_t nBands,
     for (int px = 0; px < steps; px++) {
         float logF  = (float)px / steps;
         float freq  = 20.0f * powf(1000.0f, logF);
-        float totalDb = 0.0f;
+        float totalDb = pregainDb;  // Start with pregain offset
         for (uint8_t b = 0; b < nBands; b++) {
             if (!bands[b].enabled) continue;
             totalDb += biquadMagnitudeDb((uint8_t)bands[b].type, freq,

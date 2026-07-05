@@ -2,17 +2,11 @@
  * @file drc.cpp
  * @brief DRC — Multi-band Dynamic Range Compressor
  *
- * Architecture per MVSilicon SDK patterns:
- *   - Crossover splits input into up to 3 sub-bands (LR2 or LR4 Linkwitz-Riley)
- *   - Each band has independent threshold/ratio/attack/release/pregain
- *   - Optional fullband stage applied on summed output
- *   - Fast math: fast_linear_to_db + fast_db_to_gain (no log10f/powf per sample)
- *   - Decimated dB+gain computation every DRC_DECIM (8) samples
- *
- * Crossover filter design (Linkwitz-Riley):
- *   LR2  = 2nd order: 1 LP biquad + 1 HP biquad per crossover
- *   LR4  = 4th order: 2 cascaded LP biquads + 2 cascaded HP biquads per crossover
- *          (achieved by calling LR2 design twice with same fc, then cascade)
+ * Simplified architecture:
+ *   - 3 modes: Fullband (1 band), 2 Band, 3 Band
+ *   - 4 crossover filter types: Butterworth-1, LR2, LR4, Q-controlled-2
+ *   - Per-band: threshold, ratio, attack, release, pregain, lookahead
+ *   - Fast math: fast_linear_to_db + fast_db_to_gain
  */
 
 #include "drc.h"
@@ -24,8 +18,7 @@
 // init
 // ============================================================================
 void DRC::init(int32_t sampleRate, int32_t numChannels) {
-    // Giữ lại lookaheadMs trước khi init — SR có thể đổi (44.1k/48k/96k)
-    // recalcBand() sẽ tính lại lookaheadSamples = lookaheadMs * newSampleRate
+    // Save lookahead before init - SR may change
     float savedLookaheadMs[MAX_BANDS];
     for (int i = 0; i < MAX_BANDS; i++)
         savedLookaheadMs[i] = _bands[i].lookaheadMs;
@@ -38,8 +31,6 @@ void DRC::init(int32_t sampleRate, int32_t numChannels) {
     _fc[1]       = 2000;
     _qLp         = 717;   // 0.70 in Q6.10
     _qHp         = 717;
-    _numCf       = 0;
-    _fullbandOn  = true;
 
     // Default band params
     for (int i = 0; i < MAX_BANDS; i++) {
@@ -52,7 +43,7 @@ void DRC::init(int32_t sampleRate, int32_t numChannels) {
         _bands[i].state.gainLinear = 1.0f;
         _bands[i].state.decimCount = 0;
         _bands[i].lookaheadMs = savedLookaheadMs[i];
-        // Alloc PSRAM buffer một lần cho mỗi band
+        // Alloc PSRAM buffer once per band
         if (_bands[i].laDelayBuf == nullptr) {
             size_t sz = (DRCBand::DRC_LOOKAHEAD_MAX + 1) * 2 * sizeof(float);
             _bands[i].laDelayBuf = (float*)PSRAM_MALLOC(sz);
@@ -94,22 +85,19 @@ void DRC::reset() {
 }
 
 // ============================================================================
-// recalcBand — pre-compute cached values per SDK slope pattern
+// recalcBand — pre-compute cached values
 // ============================================================================
 void DRC::recalcBand(uint8_t band) {
     if (band >= MAX_BANDS) return;
     DRCBand& b = _bands[band];
 
     b.thresholdDb = (float)b.thresholdDbInt / 100.0f;
-
-    // slope = (1 - 1/R), same as compander SDK pattern
     b.slopeAbove  = DynamicsProcessor::ratioToSlope(b.ratioX100);
-
     b.pregain      = (float)b.pregainQ412 / 4096.0f;
     b.attackCoeff  = DynamicsProcessor::calcCoeff(_sampleRate, b.attackMs);
     b.releaseCoeff = DynamicsProcessor::calcCoeff(_sampleRate, b.releaseMs);
 
-    // Lookahead: ms → samples, clamp vào [0, DRC_LOOKAHEAD_MAX]
+    // Lookahead: ms → samples
     if (b.lookaheadMs <= 0.0f) {
         b.lookaheadSamples = 0;
     } else {
@@ -119,35 +107,25 @@ void DRC::recalcBand(uint8_t band) {
 }
 
 // ============================================================================
-// designCrossover — crossover LP/HP filter pair per SDK DRC init table
+// designCrossover — crossover LP/HP filter pair
 //
-//   DRC_CF_NONE : fullband mode, crossover không dùng (không gọi hàm này)
-//   DRC_CF_B1   : 1st-order Butterworth (ORDER1 biquad), single stage
-//   DRC_CF_LR2  : 2nd-order Linkwitz-Riley = 1 Butterworth biquad Q=0.7071
-//   DRC_CF_LR4  : 4th-order Linkwitz-Riley = 2 cascaded Butterworth Q=0.7071
-//   DRC_CF_Q4   : 4th-order Q-controlled   = 2 cascaded biquads với q_l/q_h
-//                 Q từ UI ở dạng Q6.10 (717 = 0.70) → chia 1024 để lấy float
+//   DRC_CF_BUTTERWORTH_1 : 1st-order Butterworth (ORDER1 biquad)
+//   DRC_CF_LR2          : 2nd-order Linkwitz-Riley = 1 Butterworth Q=0.7071
+//   DRC_CF_LR4          : 4th-order Linkwitz-Riley = 2 cascaded Butterworth
+//   DRC_CF_QCTRL_2      : 2nd-order Q-controlled = 1 biquad with custom Q
 //
-//   B1 và LR2 chỉ dùng stage[0]; stage[1] bypass (LP@20kHz / HP@1Hz).
-//   LR4 và Q4  dùng cả stage[0] và stage[1] (cascaded).
-//
-// Bảng sử dụng theo SDK (xem DRC init doc):
-//   q_l, q_h   : chỉ đọc khi cf_type == DRC_CF_Q4
-//   fc[0]      : dùng khi mode có ít nhất 2 band
-//   fc[1]      : chỉ dùng khi mode có 3 band
 // ============================================================================
 void DRC::designCrossover(uint8_t idx) {
     if (idx >= DRC_MAX_CROSSOVERS) return;
 
     const float fc  = (float)_fc[idx];
     const float fs  = (float)_sampleRate;
-    // Q6.10 → float: 717 = 0.70, 1024 = 1.0 (chỉ dùng với DRC_CF_Q4)
     const float qLp = (float)_qLp / 1024.0f;
     const float qHp = (float)_qHp / 1024.0f;
 
     switch (_cfType) {
 
-        case DRC_CF_B1:
+        case DRC_CF_BUTTERWORTH_1:
             // 1st-order: single ORDER1 biquad, stage[1] bypass
             _xoverLp[idx][0].design(EQ_FILTER_TYPE_LOW_PASS_ORDER1,  fc, 0.7071f, 0.0f, fs);
             _xoverHp[idx][0].design(EQ_FILTER_TYPE_HIGH_PASS_ORDER1, fc, 0.7071f, 0.0f, fs);
@@ -171,18 +149,16 @@ void DRC::designCrossover(uint8_t idx) {
             _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS, fc, 0.7071f, 0.0f, fs);
             break;
 
-        case DRC_CF_Q4:
-            // 4th-order Q-controlled: 2 cascaded biquads với q_l và q_h từ UI
-            // SDK: q_l cho LP path, q_h cho HP path; cả 2 stage dùng cùng Q
+        case DRC_CF_QCTRL_2:
+            // 2nd-order Q-controlled: 1 biquad with custom Q, stage[1] bypass
             _xoverLp[idx][0].design(EQ_FILTER_TYPE_LOW_PASS,  fc, qLp, 0.0f, fs);
             _xoverHp[idx][0].design(EQ_FILTER_TYPE_HIGH_PASS, fc, qHp, 0.0f, fs);
-            _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  fc, qLp, 0.0f, fs);
-            _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS, fc, qHp, 0.0f, fs);
+            _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  20000.0f, 0.7071f, 0.0f, fs);
+            _xoverHp[idx][1].design(EQ_FILTER_TYPE_HIGH_PASS,     1.0f, 0.7071f, 0.0f, fs);
             break;
 
-        case DRC_CF_NONE:
         default:
-            // Fullband mode — không có crossover, bypass toàn bộ
+            // Bypass
             _xoverLp[idx][0].design(EQ_FILTER_TYPE_LOW_PASS,  20000.0f, 0.7071f, 0.0f, fs);
             _xoverHp[idx][0].design(EQ_FILTER_TYPE_HIGH_PASS,     1.0f, 0.7071f, 0.0f, fs);
             _xoverLp[idx][1].design(EQ_FILTER_TYPE_LOW_PASS,  20000.0f, 0.7071f, 0.0f, fs);
@@ -192,28 +168,19 @@ void DRC::designCrossover(uint8_t idx) {
 }
 
 // ============================================================================
-// getNumBands — number of sub-bands from mode (excluding fullband)
+// getNumBands — number of bands from mode
 // ============================================================================
 int DRC::getNumBands() const {
     switch (_mode) {
-        case DRC_MODE_FULLBAND:         return 0;
-        case DRC_MODE_2BAND:            return 2;
-        case DRC_MODE_2BAND_FULLBAND:   return 2;
-        case DRC_MODE_3BAND:            return 3;
-        case DRC_MODE_3BAND_FULLBAND:   return 3;
-        default:                        return 0;
+        case DRC_MODE_FULLBAND: return 1;
+        case DRC_MODE_2BAND:    return 2;
+        case DRC_MODE_3BAND:    return 3;
+        default:                return 1;
     }
 }
 
 // ============================================================================
 // applyBandDRC — compression for a single band buffer, in-place
-//   buf: interleaved stereo float (L,R,L,R,...)
-//   numSamples: number of FRAMES (pairs)
-//
-// Lookahead: khi b.lookaheadSamples > 0, mỗi sample được ghi vào circular
-// buffer trước, level detection chạy trên tín hiệu hiện tại, còn output
-// lấy từ sample đã delay → compressor kịp react trước transient.
-// Khi lookaheadSamples = 0, path giống cũ, không overhead buffer.
 // ============================================================================
 void IRAM_ATTR DRC::applyBandDRC(DRCBand& b, float* buf, size_t numSamples) {
     float envelope   = b.state.envelope;
@@ -234,17 +201,17 @@ void IRAM_ATTR DRC::applyBandDRC(DRCBand& b, float* buf, size_t numSamples) {
         for (size_t i = 0; i < numSamples; i++) {
             const int base = (int)(i * numCh);
 
-            // 1. Ghi sample HIỆN TẠI vào delay buffer
+            // 1. Write current sample to delay buffer
             b.laDelayBuf[writeIdx * 2]     = buf[base];
             b.laDelayBuf[writeIdx * 2 + 1] = (numCh > 1) ? buf[base + 1] : buf[base];
 
-            // 2. Đọc sample ĐÃ DELAY (lookahead samples trước)
+            // 2. Read delayed sample
             int readIdx = writeIdx - lookahead;
             if (readIdx < 0) readIdx += bufSize;
             const float dL = b.laDelayBuf[readIdx * 2];
             const float dR = b.laDelayBuf[readIdx * 2 + 1];
 
-            // 3. Peak detection + pregain trên tín hiệu HIỆN TẠI
+            // 3. Peak detection + pregain on current sample
             float peak = 0.0f;
             for (int ch = 0; ch < numCh; ch++) {
                 float a = fast_abs(buf[base + ch] * pregain);
@@ -265,7 +232,7 @@ void IRAM_ATTR DRC::applyBandDRC(DRCBand& b, float* buf, size_t numSamples) {
                 gainLinear = fast_db_to_gain(gainDb);
             }
 
-            // 6. Apply gain lên tín hiệu ĐÃ DELAY
+            // 6. Apply gain to delayed sample
             const float totalGain = pregain * gainLinear;
             buf[base]     = dL * totalGain;
             if (numCh > 1) buf[base + 1] = dR * totalGain;
@@ -276,7 +243,7 @@ void IRAM_ATTR DRC::applyBandDRC(DRCBand& b, float* buf, size_t numSamples) {
         b.laWriteIdx = writeIdx;
 
     } else {
-        // ── No-lookahead path (original behaviour, zero overhead) ────────────
+        // No-lookahead path
         for (size_t i = 0; i < numSamples; i++) {
             const int base = (int)(i * numCh);
 
@@ -319,30 +286,23 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
     const int numBands = getNumBands();
 
     // ── Fullband mode — simplest path ─────────────────────────────────
-    if (numBands == 0) {
-        applyBandDRC(_bands[3], samples, numSamples);
+    if (numBands == 1) {
+        applyBandDRC(_bands[0], samples, numSamples);
         return;
     }
 
     const size_t frameStereo = numSamples * _numChannels;
 
     // ── Map sub-band buffers from scratchpad ──────────────────────────
-    // DRC runs at chain slot 8, after all EQ modules, so buf1-3 are free.
     _subBandPtr[0] = _scratchpad->buf1;
     _subBandPtr[1] = _scratchpad->buf2;
     _subBandPtr[2] = _scratchpad->buf3;
 
-    // ── Copy input into sub-band buffers for crossover processing ─────
-    // Band 0: LP1 → low sub-band
-    // Band 1: HP1→LP2 (if 3-band) → mid sub-band  /  HP1 (if 2-band) → high sub-band
-    // Band 2: HP1→HP2 (if 3-band) → high sub-band
-
-    // Copy input to band0 buffer
+    // ── Copy input into sub-band buffers ─────────────────────────────
     memcpy(_subBandPtr[0], samples, frameStereo * sizeof(float));
 
-    // ── 1st crossover: LP → band0, HP → band1 (and band2 if 3-band) ──
-    // Stage[1] chỉ active khi cf_type là LR4 hoặc Q4 (2 cascaded stages)
-    const bool needsTwoStages = (_cfType == DRC_CF_LR4 || _cfType == DRC_CF_Q4);
+    // ── 1st crossover: LP → band0, HP → band1 ────────────────────────
+    const bool needsTwoStages = (_cfType == DRC_CF_LR4);
     {
         // LP path for band0
         for (size_t i = 0; i < numSamples; i++) {
@@ -354,7 +314,7 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
             }
         }
 
-        // HP path for band1 (start from original input)
+        // HP path for band1
         memcpy(_subBandPtr[1], samples, frameStereo * sizeof(float));
         for (size_t i = 0; i < numSamples; i++) {
             for (int ch = 0; ch < _numChannels; ch++) {
@@ -366,8 +326,8 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
         }
     }
 
-    // ── 2nd crossover (only for 3-band modes) ─────────────────────────
-    if (numBands == 3 && _numCf >= 2) {
+    // ── 2nd crossover (only for 3-band mode) ─────────────────────────
+    if (numBands == 3) {
         // band2 = HP of band1
         memcpy(_subBandPtr[2], _subBandPtr[1], frameStereo * sizeof(float));
 
@@ -400,33 +360,20 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
         for (int b = 0; b < numBands; b++) sum += _subBandPtr[b][s];
         samples[s] = sum;
     }
-
-    // ── Optional fullband stage ───────────────────────────────────────
-    if (_fullbandOn) {
-        applyBandDRC(_bands[3], samples, numSamples);
-    }
 }
 
 // ============================================================================
 // Setters — Mode & Crossover
 // ============================================================================
 void DRC::setMode(DRCMode mode) {
-    if (mode < DRC_MODE_FULLBAND || mode > DRC_MODE_3BAND_FULLBAND) {
+    if (mode < DRC_MODE_FULLBAND || mode > DRC_MODE_3BAND) {
         mode = DRC_MODE_FULLBAND;
     }
     _mode = mode;
-    switch (mode) {
-        case DRC_MODE_FULLBAND:       _numCf = 0; _fullbandOn = true;  break;
-        case DRC_MODE_2BAND:          _numCf = 1; _fullbandOn = false; break;
-        case DRC_MODE_2BAND_FULLBAND: _numCf = 1; _fullbandOn = true;  break;
-        case DRC_MODE_3BAND:          _numCf = 2; _fullbandOn = false; break;
-        case DRC_MODE_3BAND_FULLBAND: _numCf = 2; _fullbandOn = true;  break;
-        default:                      _numCf = 0; _fullbandOn = true;  break;
-    }
 }
 
 void DRC::setCrossoverType(DRCCrossoverType cfType) {
-    if (cfType < DRC_CF_NONE || cfType > DRC_CF_Q4) {
+    if (cfType < DRC_CF_BUTTERWORTH_1 || cfType > DRC_CF_QCTRL_2) {
         cfType = DRC_CF_LR2;
     }
     _cfType = cfType;
@@ -443,8 +390,6 @@ void DRC::setCrossoverFreq(uint8_t idx, int32_t hz) {
 }
 
 void DRC::setCrossoverQ(uint8_t idx, int32_t q_q610) {
-    // Store Q but currently LR2/LR4 uses fixed Q=0.7071
-    // Reserved for DRC_CF_Q4 mode in future
     if (idx == 0) _qLp = q_q610;
     else          _qHp = q_q610;
     for (int i = 0; i < DRC_MAX_CROSSOVERS; i++) designCrossover(i);
@@ -491,8 +436,8 @@ void DRC::setLookahead(uint8_t band, float ms) {
     if (band >= MAX_BANDS) return;
     DRCBand& b = _bands[band];
     b.lookaheadMs = (ms < 0.0f) ? 0.0f : ms;
-    recalcBand(band);  // tính lại lookaheadSamples từ ms * sampleRate
-    // Flush delay buffer tránh stale data
+    recalcBand(band);
+    // Flush delay buffer
     if (b.laDelayBuf) {
         memset(b.laDelayBuf, 0, (DRCBand::DRC_LOOKAHEAD_MAX + 1) * 2 * sizeof(float));
     }

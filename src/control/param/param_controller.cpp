@@ -249,8 +249,8 @@ void ParamController::handleSetIsfBandParams(const UartCommand& cmd) {
     params.enabled = cmd.data[2] != 0;
     params.type = cmd.data[3];
     params.f0 = (uint16_t)freq;
-    params.gain = (int16_t)(gain * 256.0f);  // Internal Q8.8
-    params.Q = (uint16_t)(q * 1024.0f);      // Internal Q6.10
+    params.gain = (int16_t)(gain);
+    params.Q = (uint16_t)(q);
     preset.filters.setBand(bandIdx, params);
 
     isf->setPreset(presetIdx, preset, ISF_SET_BAND, bandIdx);
@@ -365,6 +365,13 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     for (uint8_t inst = 0; inst < 2; inst++) {
         IndexSelectableFilter& isf = (inst == 0) ? _pipeline->getIsf1() : _pipeline->getIsf2();
         uint8_t modId = (inst == 0) ? MODULE_ID_ISF_1 : MODULE_ID_ISF_2;
+
+        uint8_t buf[13];
+        buf[0] = inst;
+        packFloat(&buf[1], (float)isf.getRmsWindowMs());
+        packFloat(&buf[5], (float)isf.getSlewMs());
+        packFloat(&buf[9], (float)isf.getLookaheadMs());
+        _uart->sendFrame(CMD_REPORT_ISF_CONFIG, modId, buf, sizeof(buf));
 
         for (uint8_t p = 0; p < isf.getNumPresets(); p++) {
             const ISFPreset& preset = isf.getPreset(p);
@@ -485,9 +492,9 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     // --- DynEQ thresholds (float32 format) ---
     DynamicEQ& deq = _pipeline->getDynamicEq();
     uint8_t deqPkt[24];
-    packFloat(&deqPkt[0], (float)deq._lowThreshDb);
-    packFloat(&deqPkt[4], (float)deq._normalThreshDb);
-    packFloat(&deqPkt[8], (float)deq._highThreshDb);
+    packFloat(&deqPkt[0], (float)deq._lowThreshDb / 100.0f);
+    packFloat(&deqPkt[4], (float)deq._normalThreshDb / 100.0f);
+    packFloat(&deqPkt[8], (float)deq._highThreshDb / 100.0f);
     packFloat(&deqPkt[12], (float)deq._attackMs);
     packFloat(&deqPkt[16], (float)deq._releaseMs);
     packFloat(&deqPkt[20], deq._lookaheadMs);
@@ -572,8 +579,8 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
     params.enabled = (enabled != 0);
     params.type    = type;
     params.f0      = (uint16_t)freq;
-    params.gain    = (int16_t)(gainDb * 256.0f);  // Internal Q8.8
-    params.Q       = (uint16_t)(q * 1024.0f);     // Internal Q6.10
+    params.gain    = (int16_t)(gainDb);
+    params.Q       = (uint16_t)(q);
 
     ParametricEQ *eq = nullptr;
     uint8_t realBand = bandIdx;
@@ -615,7 +622,7 @@ void ParamController::handleSetEqBand(const UartCommand& cmd) {
         (cmd.moduleId == MODULE_ID_DYNAMIC_EQ && cmd.cmd == CMD_SET_DYNEQ_HIGH_BAND) ? "DynamicEQ HIGH" :
         (cmd.moduleId == MODULE_ID_PRE_EQ) ? "Pre" :
         (cmd.moduleId == MODULE_ID_EQ_DSP_1) ? "1" : "2",
-        pregainDb, bandIdx, params.type, freq, gainDb, q);
+        pregainDb, bandIdx, params.type, freq, DB_Q8_TO_FLOAT(gainDb), Q_Q610_TO_FLOAT(q));
     _uart->sendAck(cmd.moduleId, 0);
 }
 
@@ -631,9 +638,9 @@ void ParamController::handleSetDynEqThresholds(const UartCommand& cmd) {
     float lookaheadMs  = extractFloat(&cmd.data[20]);
     
     DynamicEQ& deq = _pipeline->getDynamicEq();
-    deq.setLowEnergyThreshold((int32_t)lowDb);
-    deq.setNormalEnergyThreshold((int32_t)normalDb);
-    deq.setHighEnergyThreshold((int32_t)highDb);
+    deq.setLowEnergyThreshold((int32_t)(lowDb * 100.0f));  // dB → ×100
+    deq.setNormalEnergyThreshold((int32_t)(normalDb * 100.0f)); // dB → ×100
+    deq.setHighEnergyThreshold((int32_t)(highDb * 100.0f)); // dB → ×100
     deq.setAttackTime((int32_t)attackMs);
     deq.setReleaseTime((int32_t)releaseMs);
     deq.setLookahead(lookaheadMs);

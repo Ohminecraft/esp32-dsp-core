@@ -40,6 +40,7 @@ class DspPipeline;
 class PresetManager;
 class ParametricEQ;
 class DspModule;
+class IndexSelectableFilter;
 
 // ─── Display dimensions ────────────────────────────────────────────────────────
 static constexpr int DISP_W = 320;
@@ -453,7 +454,7 @@ private:
                        float holdFrac = 0.0f);
 
     void drawEqCurve(const EqBandDesc* bands, uint8_t nBands,
-                     int16_t rx, int16_t ry, int16_t rw, int16_t rh);
+                     int16_t rx, int16_t ry, int16_t rw, int16_t rh, float pregainDb = 0.0f);
 
     void drawDrcCurve(float threshold, float ratio, float pregain,
                       int16_t rx, int16_t ry, int16_t rw, int16_t rh);
@@ -558,6 +559,7 @@ private:
     float getParamValue(NavEntry nav, uint8_t idx);
     void setParamValue(NavEntry nav, uint8_t idx, float val, UiParam* param);
     ParametricEQ* getEqPtr(DisplayModuleID id);
+    IndexSelectableFilter* getIsfPtr(DisplayModuleID id);
     DspModule* getModulePtr(DisplayModuleID id);
 
     // ── Utility ───────────────────────────────────────────────────────────────

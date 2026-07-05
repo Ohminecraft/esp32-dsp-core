@@ -26,13 +26,24 @@
         #define LOG_ERROR(tag, fmt, ...) Serial.printf("[E][%s] " fmt "\n", tag, ##__VA_ARGS__)
 
     #else
-        #define DBG_INIT(baud)
-        #define DBG_PRINT(...)
-        #define DBG_PRINTLN(...)
-        #define DBG_PRINTF(...)
-        #define LOG_INFO(tag, fmt, ...)
-        #define LOG_WARN(tag, fmt, ...)
-        #define LOG_ERROR(tag, fmt, ...)
+        #if ARDUINO_USB_MODE == 1
+            #define DBG_INIT(baud)      Serial0.begin(115200, SERIAL_8N1, TX, RX)
+            #define DBG_PRINT(...)      Serial0.print(__VA_ARGS__)
+            #define DBG_PRINTLN(...)    Serial0.println(__VA_ARGS__)
+            #define DBG_PRINTF(...)     Serial0.printf(__VA_ARGS__)
+
+            #define LOG_INFO(tag, fmt, ...)  Serial0.printf("[I][%s] " fmt "\n", tag, ##__VA_ARGS__)
+            #define LOG_WARN(tag, fmt, ...)  Serial0.printf("[W][%s] " fmt "\n", tag, ##__VA_ARGS__)
+            #define LOG_ERROR(tag, fmt, ...) Serial0.printf("[E][%s] " fmt "\n", tag, ##__VA_ARGS__)
+        #else
+            #define DBG_INIT(baud)
+            #define DBG_PRINT(...)
+            #define DBG_PRINTLN(...)
+            #define DBG_PRINTF(...)
+            #define LOG_INFO(tag, fmt, ...)
+            #define LOG_WARN(tag, fmt, ...)
+            #define LOG_ERROR(tag, fmt, ...)
+        #endif
     #endif
 #else
 

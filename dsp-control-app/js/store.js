@@ -226,6 +226,13 @@ class Store extends EventEmitter {
         return this._activeIsfPreset;
     }
 
+    updateIsfConfig(which, rmsMs, slewMs, lookaheadMs) {
+        const isf = this.getIsfInstance(which);
+        isf.rmsMs = rmsMs;
+        isf.slewMs = slewMs;
+        isf.lookaheadMs = lookaheadMs;
+    }
+
     /** Update ISF runtime state from firmware REPORT_ISF frame. */
     updateIsfState(which, levelDb, slewIndex, activeA, activeB) {
         const isf = this.getIsfInstance(which);

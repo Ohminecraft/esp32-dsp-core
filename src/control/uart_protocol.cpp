@@ -9,6 +9,10 @@
 
 void UartProtocol::init(uint32_t baud) {
     //Serial2.begin(baud, SERIAL_8N1, UART_CONTROL_RX_PIN, UART_CONTROL_TX_PIN);
+    #ifndef USE_BUILTIN_SERIAL
+    UART.setPins(UART_CONTROL_RX_PIN, UART_CONTROL_TX_PIN);
+    #endif
+
     UART.begin(115200);
     resetParser();
 }

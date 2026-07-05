@@ -8,7 +8,6 @@
 
 #include <stdint.h>
 #include <esp_attr.h>
-//#include <esp_dsp.h>
 
 // ============================================================================
 // Communication Format Macros
@@ -66,20 +65,19 @@ typedef struct {
 // DRC & Crossover Types
 // ============================================================================
 
+// DRC Modes (simplified to 3 modes)
 typedef enum {
-    DRC_MODE_FULLBAND = 0,
-    DRC_MODE_2BAND,
-    DRC_MODE_2BAND_FULLBAND,
-    DRC_MODE_3BAND,
-    DRC_MODE_3BAND_FULLBAND
+    DRC_MODE_FULLBAND = 0,   // Single fullband compressor
+    DRC_MODE_2BAND,          // 2-band with 1 crossover
+    DRC_MODE_3BAND           // 3-band with 2 crossovers
 } DRCMode;
 
+// Crossover Filter Types
 typedef enum {
-    DRC_CF_NONE = 0,
-    DRC_CF_B1,
-    DRC_CF_LR2,
-    DRC_CF_LR4,
-    DRC_CF_Q4
+    DRC_CF_BUTTERWORTH_1 = 0,  // Butterworth order 1
+    DRC_CF_LR2,                // Linkwitz-Riley order 2
+    DRC_CF_LR4,                // Linkwitz-Riley order 4
+    DRC_CF_QCTRL_2             // Q-controller order 2
 } DRCCrossoverType;
 
 #endif // DSP_TYPES_H

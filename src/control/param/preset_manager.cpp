@@ -532,7 +532,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     if (pd.drc_ratio       < 100) pd.drc_ratio = 400;
     if (pd.drc_attackMs   <= 0) pd.drc_attackMs  = 5;
     if (pd.drc_releaseMs  <= 0) pd.drc_releaseMs = 160;
-    if (pd.drc_mode < DRC_MODE_FULLBAND || pd.drc_mode > DRC_MODE_3BAND_FULLBAND)
+    if (pd.drc_mode < DRC_MODE_FULLBAND || pd.drc_mode > DRC_MODE_3BAND)
         pd.drc_mode = DRC_MODE_FULLBAND;
 
     // Apply enable mask

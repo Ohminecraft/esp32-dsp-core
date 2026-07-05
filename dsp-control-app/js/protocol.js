@@ -50,16 +50,17 @@ export const CMD = {
     GET_REPORT_CPU_USAGE: 0x39, // Request CPU usage report
     SEND_REPORT_CPU_USAGE: 0x40,
     REPORT_ISF: 0x41,       // Push ISF state
-    REPORT_ISF_PRESET: 0x42, // Push ISF preset data
-    REPORT_ISF_BAND_PER_PRESET: 0x43,
-    REPORT_ENABLE_MASK: 0x44,
-    CURRENT_PRESET_INDEX: 0x45,
+    REPORT_ISF_CONFIG: 0x42, // Push ISF config
+    REPORT_ISF_PRESET: 0x43, // Push ISF preset data
+    REPORT_ISF_BAND_PER_PRESET: 0x44,
+    REPORT_ENABLE_MASK: 0x4B,
+    CURRENT_PRESET_INDEX: 0x4A,
     // Live meter reports — sent by firmware when UI polls GET_MODULE_METER
-    REPORT_DYNBASS:   0x46, // energyDb(f32) + alpha(f32)
-    REPORT_DYNEQ:     0x47, // energyDb(f32) + alphaLow(f32) + alphaHigh(f32)
-    REPORT_COMPANDER: 0x48, // envLinear(f32, 0..1) + gainDb(f32)
-    REPORT_DRC:       0x49, // gainDb(f32) × 4 bands
-    GET_MODULE_METER: 0x4A, // Request one meter report; data[0]=moduleId
+    REPORT_DYNBASS:   0x45, // energyDb(f32) + alpha(f32)
+    REPORT_DYNEQ:     0x46, // energyDb(f32) + alphaLow(f32) + alphaHigh(f32)
+    REPORT_COMPANDER: 0x47, // envLinear(f32, 0..1) + gainDb(f32)
+    REPORT_DRC:       0x48, // gainDb(f32) × 4 bands
+    GET_MODULE_METER: 0x49, // Request one meter report; data[0]=moduleId
     ACK_RESPONSE: 0xFE,
     ERROR: 0xFF
 };
@@ -271,10 +272,10 @@ export function buildSetIsfBandParams(moduleId, presetIdx, bandIdx, presetObj) {
         presetIdx,
         bandIdx,
         band.enabled ? 1 : 0,
-        (band.type || 0) & 0xFF,
-        ...floatToLE(band.freq || 1000),
-        ...floatToLE(band.gain || 0),
-        ...floatToLE(band.q || 0.707)
+        band.type,
+        ...floatToLE(band.freq),
+        ...floatToLE(dbToQ88(band.gain)),
+        ...floatToLE(qToQ610(band.q))
     ];
 
     return buildFrame(CMD.SET_ISF_BAND_PARAMS, moduleId, data);

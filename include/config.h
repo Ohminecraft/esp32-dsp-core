@@ -108,21 +108,22 @@
 
 // reporting commands:
 
-#define CMD_REPORT_ENABLE_MASK         0x44
+#define CMD_REPORT_ENABLE_MASK         0x4B
 #define CMD_GET_REPORT_CPU_USAGE       0x39
 #define CMD_SEND_REPORT_CPU_USAGE      0x40 
 #define CMD_REPORT_ISF                 0x41
-#define CMD_REPORT_ISF_PRESET          0x42
-#define CMD_REPORT_ISF_BAND_PER_PRESET 0x43
-#define CMD_REPORT_DYNBASS             0x46
-#define CMD_REPORT_DYNEQ               0x47
-#define CMD_REPORT_COMPANDER           0x48
-#define CMD_REPORT_DRC                 0x49
-#define CMD_GET_MODULE_METER           0x4A
+#define CMD_REPORT_ISF_CONFIG          0x42
+#define CMD_REPORT_ISF_PRESET          0x43
+#define CMD_REPORT_ISF_BAND_PER_PRESET 0x44
+#define CMD_REPORT_DYNBASS             0x45
+#define CMD_REPORT_DYNEQ               0x46
+#define CMD_REPORT_COMPANDER           0x47
+#define CMD_REPORT_DRC                 0x48
+#define CMD_GET_MODULE_METER           0x49
 
 // App-level commands (not direct DSP control, more for user interaction)
 
-#define CMD_GET_CURRENT_PRESET_INDEX   0x45
+#define CMD_GET_CURRENT_PRESET_INDEX   0x4A
 #define CMD_SAVE_PRESET                0x08
 #define CMD_LOAD_PRESET                0x09
 #define CMD_GET_ALL_STATE              0x0A

@@ -403,7 +403,7 @@ parser.onFrame((frame) => {
                 break;
             case MODULE.DYNAMIC_BASS:
                 if (pIndex === 0) store.updateParam('dynamicBass', 'cutoffFreq', val);
-                else if (pIndex === 1) store.updateParam('dynamicBass', 'gainBoost', val * 100);      // dB → ×100
+                else if (pIndex === 1) store.updateParam('dynamicBass', 'gainBoost', val);
                 else if (pIndex === 2) store.updateParam('dynamicBass', 'enhanced', val);
                 else if (pIndex === 3) store.updateParam('dynamicBass', 'boostthreshold', val);
                 else if (pIndex === 4) store.updateParam('dynamicBass', 'neutralthreshold', val);
@@ -485,9 +485,9 @@ parser.onFrame((frame) => {
         store.emit('eq:changed');
     }
     else if (frame.cmd === CMD.SET_DYNEQ_THRESH && frame.data.length >= 24) {
-        store.updateParam('dynamicEq', 'lowThresh', Math.round(leToFloat(frame.data, 0) * 100));
-        store.updateParam('dynamicEq', 'normalThresh', Math.round(leToFloat(frame.data, 4) * 100));
-        store.updateParam('dynamicEq', 'highThresh', Math.round(leToFloat(frame.data, 8) * 100));
+        store.updateParam('dynamicEq', 'lowThresh', Math.round(leToFloat(frame.data, 0)));
+        store.updateParam('dynamicEq', 'normalThresh', Math.round(leToFloat(frame.data, 4)));
+        store.updateParam('dynamicEq', 'highThresh', Math.round(leToFloat(frame.data, 8)));
         store.updateParam('dynamicEq', 'attackMs', Math.round(leToFloat(frame.data, 12)));
         store.updateParam('dynamicEq', 'releaseMs', Math.round(leToFloat(frame.data, 16)));
         store.updateParam('dynamicEq', 'lookaheadMs', leToFloat(frame.data, 20));
@@ -497,6 +497,15 @@ parser.onFrame((frame) => {
         const heapPct = frame.data[2];
         const fs = readInt32(frame.data, 3);
         updateCpuUI(cpu10 / 10.0, 100 - heapPct, fs);
+    }
+    else if (frame.cmd === CMD.REPORT_ISF_CONFIG && frame.data.length >= 13) {
+        // Data: instance(1) + rmsWindowMs(f32) + slewMs(f32) + lookaheadMs(f32) = 13 bytes
+        const inst = frame.data[0];
+        const which = inst === 0 ? 'isf1' : 'isf2';
+        const rmsWindowMs = leToFloat(frame.data, 1);
+        const slewMs = leToFloat(frame.data, 5);
+        const lookaheadMs = leToFloat(frame.data, 9);
+        store.updateIsfConfig(which, rmsWindowMs, slewMs, lookaheadMs);
     }
     else if (frame.cmd === CMD.REPORT_ISF && frame.data.length >= 16) {
         // Data: instance(1)+levelDb(f32)+slewIdx(f32)+lookaheadMs(f32)+activeA(1)+activeB(1)+numPresets(1) = 16 bytes
@@ -860,22 +869,22 @@ function buildModuleBody(body, mod) {
             // Build sliders and wire cross-constraints:
             //   highThresh >= normalThresh >= lowThresh
             const { slider: slLow, valInput: vsLow } =
-                addSlider(body, 'Low Thresh', -6000, 0, 100, 'dB',
+                addSlider(body, 'Low Thresh', -60, 0, 0.1, 'dB',
                     () => store.dynamicEq.lowThresh,
                     (v) => { store.dynamicEq.lowThresh = v; sendFrame(buildSetDynEqThresholds(v, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); },
-                    null, 0.01);
+                    null, 1);
 
             const { slider: slNorm, valInput: vsNorm } =
-                addSlider(body, 'Normal Thresh', -6000, 0, 100, 'dB',
+                addSlider(body, 'Normal Thresh', -60, 0, 0.1, 'dB',
                     () => store.dynamicEq.normalThresh,
                     (v) => { store.dynamicEq.normalThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, v, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); },
-                    null, 0.01);
+                    null, 1);
 
             const { slider: slHigh, valInput: vsHigh } =
-                addSlider(body, 'High Thresh', -6000, 0, 100, 'dB',
+                addSlider(body, 'High Thresh', -60, 0, 0.1, 'dB',
                     () => store.dynamicEq.highThresh,
                     (v) => { store.dynamicEq.highThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, v, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); },
-                    null, 0.01);
+                    null, 1);
 
             // Constraint enforcement (runs after addSlider's own listener)
             slLow.addEventListener('input', () => {
@@ -884,12 +893,12 @@ function buildModuleBody(body, mod) {
                 if (v > parseFloat(slNorm.value)) {
                     slNorm.value = v;
                     store.dynamicEq.normalThresh = v;
-                    vsNorm.value = (v * 0.01).toFixed(2);
+                    vsNorm.value = (v * 1).toFixed(2);
                     // normal raising might also need to push high up
                     if (v > parseFloat(slHigh.value)) {
                         slHigh.value = v;
                         store.dynamicEq.highThresh = v;
-                        vsHigh.value = (v * 0.01).toFixed(2);
+                        vsHigh.value = (v * 1).toFixed(2);
                     }
                 }
             });
@@ -900,13 +909,13 @@ function buildModuleBody(body, mod) {
                 if (parseFloat(slLow.value) > v) {
                     slLow.value = v;
                     store.dynamicEq.lowThresh = v;
-                    vsLow.value = (v * 0.01).toFixed(2);
+                    vsLow.value = (v * 1).toFixed(2);
                 }
                 // clamp high ≥ normal
                 if (parseFloat(slHigh.value) < v) {
                     slHigh.value = v;
                     store.dynamicEq.highThresh = v;
-                    vsHigh.value = (v * 0.01).toFixed(2);
+                    vsHigh.value = (v * 1).toFixed(2);
                 }
             });
 
@@ -916,12 +925,12 @@ function buildModuleBody(body, mod) {
                 if (v < parseFloat(slNorm.value)) {
                     slNorm.value = v;
                     store.dynamicEq.normalThresh = v;
-                    vsNorm.value = (v * 0.01).toFixed(2);
+                    vsNorm.value = (v * 1).toFixed(2);
                     // normal dropping might also need to push low down
                     if (v < parseFloat(slLow.value)) {
                         slLow.value = v;
                         store.dynamicEq.lowThresh = v;
-                        vsLow.value = (v * 0.01).toFixed(2);
+                        vsLow.value = (v * 1).toFixed(2);
                     }
                 }
             });
@@ -934,7 +943,7 @@ function buildModuleBody(body, mod) {
                 (v) => { store.dynamicEq.releaseMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, v, store.dynamicEq.lookaheadMs)); });
             addSlider(body, 'Lookahead', 0, 10, 0.1, 'ms',
                 () => store.dynamicEq.lookaheadMs,
-                (v) => { store.dynamicEq.lookaheadMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, v)); }, null, 0.1);
+                (v) => { store.dynamicEq.lookaheadMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, v)); }, null, 1);
 
             /*
             const syncBtn = document.createElement('button');
@@ -2254,6 +2263,7 @@ function buildIsfPanel(container, which) {
 
             if (fFreq && fFreq !== targetActiveElem) fFreq.value = draggedBand.freq;
             if (fGain && fGain !== targetActiveElem) fGain.value = draggedBand.gain.toFixed(1);
+            if (fQ && fQ !== targetActiveElem) fQ.value = draggedBand.q;
         }
         syncIsfBandParams(which, currentPreset, bandArrayIdx);
     });
@@ -2331,10 +2341,10 @@ function mountGraphToAccordion(acc) {
 
     if (eqState) {
         if (moduleId !== String(MODULE.PRE_EQ)) {
-            addSlider(controls, 'Pregain', -2400, 2400, 50, 'dB',
-            () => (eqState.pregain || 0) * 100,
+            addSlider(controls, 'Pregain', -24, 24, 0.5, 'dB',
+            () => (eqState.pregain),
             (v) => {
-                eqState.pregain = v / 100;
+                eqState.pregain = v;
                 store.emit('eq:changed');
                 let bandIdx = eqState.bands.findIndex(b => b.enabled);
                 if (bandIdx === -1) bandIdx = 0;
@@ -2348,7 +2358,7 @@ function mountGraphToAccordion(acc) {
                     syncDynEqBand(moduleId === 'DYNEQ_HIGH', bandIdx);
                 }
             },
-            null, 0.01);
+            null, 1);
         }
     }
 
