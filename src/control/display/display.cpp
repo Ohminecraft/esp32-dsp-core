@@ -576,6 +576,14 @@ void Display::update(EncoderEvent enc) {
             _dynEqAlphaLow = dynEq.isEnabled() ? dynEq.getAlphaLow() : 0.0f;
             _dynEqAlphaHigh = dynEq.isEnabled() ? dynEq.getAlphaHigh() : 0.0f;
             _dynEqEnergyDb = dynEq.isEnabled() ? dynEq.getEnergyDb() : -96.0f;
+            IndexSelectableFilter& isf1 = _pipeline->getIsf1();
+            _isfLevelDb[0] = isf1.isEnabled() ? isf1.getCurrentLevelDb() : -96.0f;
+            _isfActiveA[0] = isf1.isEnabled() ? isf1.getActiveA() : 0;
+            _isfActiveB[0] = isf1.isEnabled() ? isf1.getActiveB() : 0;
+            IndexSelectableFilter& isf2 = _pipeline->getIsf2();
+            _isfLevelDb[1] = isf2.isEnabled() ? isf2.getCurrentLevelDb() : -96.0f;
+            _isfActiveA[1] = isf2.isEnabled() ? isf2.getActiveA() : 0;
+            _isfActiveB[1] = isf2.isEnabled() ? isf2.getActiveB() : 0;
             _dirty = true;
         }
     }
@@ -1933,20 +1941,53 @@ void Display::drawMainMenu() {
 
             Compander& comp = _pipeline->getCompander();
             if (comp.isEnabled()) {
-                float gr = constrain(-_companderGainDb, 0.0f, 30.0f);
-                hBar("Comp", gr / 30.0f,
-                     gr > 20 ? Color::RED : gr > 12 ? Color::YELLOW : Color::GREEN);
+                float gr = max(0.0f, min(100.0f, (-_companderGainDb) / 24.0f * 100.0f));
+                hBar("Comp", gr / 100.0f, Color::RED);
             }
             DynamicBass& db = _pipeline->getDynamicBass();
             if (db.isEnabled()) {
-                float a = constrain(_dynBassAlpha, 0.0f, 1.0f);
-                hBar("DBass", a, Color::GREEN);
+                float pct = max(0.0f, min(100.0f, (_dynBassEnergyDb + 60.0f) / 60.0f * 100.0f));
+                hBar("DBass", pct / 100.0f, _dynBassAlpha > 0.05f ? Color::GREEN : abs(_dynBassAlpha) <= 0.05f ? Color::YELLOW : _dynBassAlpha < -0.05f ? Color::RED : Color::ACCENT);
             }
             DynamicEQ& deq = _pipeline->getDynamicEq();
             if (deq.isEnabled()) {
-                float a = constrain((_dynEqAlphaLow + _dynEqAlphaHigh) * 0.5f, 0.0f, 1.0f);
-                hBar("DEQ", a, Color::ACCENT);
+                float pct = max(0.0f, min(100.0f, (_dynEqEnergyDb + 60.0f) / 60.0f * 100.0f));
+                float alphaFlat = max(0.0f, 1.0f - _dynEqAlphaLow - _dynEqAlphaHigh);
+                hBar("DEQ", pct / 100.0f, _dynEqAlphaLow > 0.02f ? Color::GREEN : alphaFlat > 0.5f ? Color::YELLOW : _dynEqAlphaHigh > 0.02f ? Color::RED : Color::ACCENT);
             }
+            DRC& drcomp = _pipeline->getDrc();
+            if (drcomp.isEnabled()) {
+                // Collapse to ONE row: chỉ hiện band đang bị nén nhiều nhất (worst-case GR).
+                // Băng nào "sống" phụ vào _mode — bands[] cố định 0=Low,1=Mid,2=High,3=Full,
+                // Fullband chỉ dùng slot 3, 2-Band bỏ qua Mid(1), 3-Band dùng đủ 0/1/2.
+                uint8_t activeIdx[3]; uint8_t activeCount;
+                switch (drcomp._mode) {
+                    case DRC_MODE_2BAND: activeIdx[0] = 0; activeIdx[1] = 2; activeCount = 2; break;
+                    case DRC_MODE_3BAND: activeIdx[0] = 0; activeIdx[1] = 1; activeIdx[2] = 2; activeCount = 3; break;
+                    default:              activeIdx[0] = 3; activeCount = 1; break; // Fullband
+                }
+                float worstGr = 0.0f;
+                for (uint8_t i = 0; i < activeCount; i++)
+                    worstGr = max(worstGr, -_drcGainDb[activeIdx[i]]);
+                float gr = constrain(worstGr, 0.0f, 24.0f);
+                hBar("DRC", gr / 24.0f,
+                     gr > 16.0f ? Color::RED : gr > 8.0f ? Color::YELLOW : Color::GREEN);
+            }
+
+            // ISF1 / ISF2 — level meter theo RMS, đổi màu ACCENT khi đang crossfade
+            // giữa 2 preset (activeA != activeB), tức lúc chuyển preset mượt qua slew time.
+            auto isfBar = [&](const char* lbl, IndexSelectableFilter& isf, uint8_t i) {
+                if (!isf.isEnabled()) return;
+                float lvl = constrain((_isfLevelDb[i] + 60.0f) / 60.0f, 0.0f, 1.0f);
+                bool blending = _isfActiveA[i] != _isfActiveB[i];
+                uint16_t col = blending ? Color::ACCENT
+                             : _isfLevelDb[i] > -6.0f  ? Color::RED
+                             : _isfLevelDb[i] > -18.0f ? Color::YELLOW
+                                                        : Color::GREEN;
+                hBar(lbl, lvl, col);
+            };
+            isfBar("ISF1", _pipeline->getIsf1(), 0);
+            isfBar("ISF2", _pipeline->getIsf2(), 1);
         }
 
     } else {

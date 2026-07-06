@@ -539,6 +539,10 @@ private:
     uint32_t _mmTabReturnStartMs = 0;
     static constexpr uint32_t TAB_RETURN_HOLD_MS = 500;
 
+    float   _isfLevelDb[2];
+    uint8_t _isfActiveA[2];
+    uint8_t _isfActiveB[2];
+
     void drawBatteryWidget(int16_t x, int16_t y);
     void drawPowerOffScreen();
     
