@@ -73,9 +73,9 @@ struct PresetData {
     int32_t db_lookaheadMs10; // ms×10, 0=disabled
 
     // ── DRC ───────────────────────────────────────────────────────────────────
-    int32_t drc_thresholdDb, drc_ratio, drc_attackMs, drc_releaseMs, drc_pregainQ412;
-    int32_t drc_mode;
-    int32_t drc_lookaheadMs10[4]; // per-band ms×10; index 3 = fullband
+    int32_t drc_mode, drc_crossoverflttype, drc_crossoverfreq[2], drc_Q[2];
+    int32_t drc_thresholdDb[4], drc_ratio[4], drc_attackMs[4], drc_releaseMs[4], drc_pregain[4];
+    int32_t drc_lookaheadMs[4]; // per-band ms; index 0 = fullband
 
     // ── EQ1 / EQ2 ─────────────────────────────────────────────────────────────
     int16_t        eq1_pregain_q88;
@@ -291,7 +291,7 @@ void PresetManager::saveDefault(uint8_t slot) {
     pd.pre_vol_mono = 0;
 
     // Compander defaults
-    pd.cp_thresholdDb  = -2000;
+    pd.cp_thresholdDb  = -20;
     pd.cp_ratioBelow   = 100;
     pd.cp_ratioAbove   = 400;
     pd.cp_attackMs     = 10;
@@ -315,13 +315,20 @@ void PresetManager::saveDefault(uint8_t slot) {
     pd.db_boostfullthreshold  = -2400;
 
     // DRC defaults
-    pd.drc_thresholdDb = -1500;
-    pd.drc_ratio       = 400;
-    pd.drc_attackMs    = 5;
-    pd.drc_releaseMs   = 160;
-    pd.drc_pregainQ412 = 4096;
-    pd.drc_mode        = DRC_MODE_FULLBAND;
-    memset(pd.drc_lookaheadMs10, 0, sizeof(pd.drc_lookaheadMs10)); // disabled by default
+    pd.drc_mode             = DRC_MODE_FULLBAND;
+    pd.drc_crossoverflttype = DRC_CF_BUTTERWORTH_1;
+    pd.drc_crossoverfreq[0] = 120;
+    pd.drc_crossoverfreq[1] = 6000;
+    pd.drc_Q[0] = 724;
+    pd.drc_Q[1] = 724;
+    for (int i = 0; i < 4; i++) {
+        pd.drc_thresholdDb[i] = -1500;
+        pd.drc_ratio[i] = 400;
+        pd.drc_attackMs[i] = 5;
+        pd.drc_releaseMs[i] = 160;
+        pd.drc_pregain[i] = 0;
+        pd.drc_lookaheadMs[i] = 0;
+    }
 
     // DynEQ defaults
     pd.deq_lowThresh  = -4000;
@@ -424,14 +431,21 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.db_lookaheadMs10      = (int32_t)(pipeline.getDynamicBass()._lookaheadMs * 10.0f + 0.5f);
 
     // DRC (fullband band[3])
-    pd.drc_thresholdDb = pipeline.getDrc()._bands[3].thresholdDbInt;
-    pd.drc_ratio       = pipeline.getDrc()._bands[3].ratioX100;
-    pd.drc_attackMs    = pipeline.getDrc()._bands[3].attackMs;
-    pd.drc_releaseMs   = pipeline.getDrc()._bands[3].releaseMs;
-    pd.drc_pregainQ412 = pipeline.getDrc()._bands[3].pregainQ412;
-    pd.drc_mode        = (int32_t)pipeline.getDrc()._mode;
-    for (int b = 0; b < 4; b++)
-        pd.drc_lookaheadMs10[b] = (int32_t)(pipeline.getDrc()._bands[b].lookaheadMs * 10.0f + 0.5f);
+    pd.drc_mode             = (int32_t)pipeline.getDrc()._mode;
+    pd.drc_crossoverflttype = pipeline.getDrc()._cfType;
+    pd.drc_crossoverfreq[0] = pipeline.getDrc()._fc[0];
+    pd.drc_crossoverfreq[1] = pipeline.getDrc()._fc[1];
+    pd.drc_Q[0]             = pipeline.getDrc()._qLp;
+    pd.drc_Q[1]             = pipeline.getDrc()._qHp;
+
+    for (int b = 0; b < 4; b++) {
+        pd.drc_thresholdDb[b] = pipeline.getDrc()._bands[b].thresholdDb * 100.0f;
+        pd.drc_ratio[b]       = pipeline.getDrc()._bands[b].ratioX100;
+        pd.drc_attackMs[b]    = pipeline.getDrc()._bands[b].attackMs;
+        pd.drc_releaseMs[b]   = pipeline.getDrc()._bands[b].releaseMs;
+        pd.drc_pregain[b] = pipeline.getDrc()._bands[b].pregain * 100.0f;
+        pd.drc_lookaheadMs[b] = (int32_t)(pipeline.getDrc()._bands[b].lookaheadMs + 0.5f);
+    }
 
     // EQ1 / EQ2
     pd.eq1_pregain_q88 = pipeline.getEqDsp_1().getPregain();
@@ -521,20 +535,6 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
         return false;
     }
 
-    // Sanity guards
-    if (pd.cp_pregainQ412 <= 0) pd.cp_pregainQ412 = 4096;
-    if (pd.cp_ratioBelow  < 10) pd.cp_ratioBelow  = 100;
-    if (pd.cp_ratioAbove  < 100) pd.cp_ratioAbove = 400;
-    if (pd.cp_attackMs    <= 0) pd.cp_attackMs    = 10;
-    if (pd.cp_releaseMs   <= 0) pd.cp_releaseMs   = 100;
-    if (pd.cp_lookaheadMs10 < 0) pd.cp_lookaheadMs10 = 0;
-    if (pd.drc_pregainQ412 <= 0) pd.drc_pregainQ412 = 4096;
-    if (pd.drc_ratio       < 100) pd.drc_ratio = 400;
-    if (pd.drc_attackMs   <= 0) pd.drc_attackMs  = 5;
-    if (pd.drc_releaseMs  <= 0) pd.drc_releaseMs = 160;
-    if (pd.drc_mode < DRC_MODE_FULLBAND || pd.drc_mode > DRC_MODE_3BAND)
-        pd.drc_mode = DRC_MODE_FULLBAND;
-
     // Apply enable mask
     DspModule** chain = pipeline.getChain();
     for (size_t i = 0; i < pipeline.getChainLength(); i++) {
@@ -595,14 +595,21 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     for (int i = 0; i < MAX_EQ_BANDS; i++)
         pipeline.getDynamicEq().getEqHigh().setBand(i, pd.deq_high_bands[i]);
 
-    pipeline.getDrc().setThreshold(3, pd.drc_thresholdDb);
-    pipeline.getDrc().setRatio(3, pd.drc_ratio);
-    pipeline.getDrc().setAttackTime(3, pd.drc_attackMs);
-    pipeline.getDrc().setReleaseTime(3, pd.drc_releaseMs);
-    pipeline.getDrc().setPregain(3, pd.drc_pregainQ412);
     pipeline.getDrc().setMode((DRCMode)pd.drc_mode);
-    for (int b = 0; b < 4; b++)
-        pipeline.getDrc().setLookahead((uint8_t)b, (float)pd.drc_lookaheadMs10[b] / 10.0f);
+    pipeline.getDrc().setCrossoverType((DRCCrossoverType)pd.drc_crossoverflttype);
+    pipeline.getDrc().setCrossoverFreq(0, pd.drc_crossoverfreq[0]);
+    pipeline.getDrc().setCrossoverFreq(1, pd.drc_crossoverfreq[1]);
+    pipeline.getDrc().setCrossoverQ(0, pd.drc_Q[0]);
+    pipeline.getDrc().setCrossoverQ(1, pd.drc_Q[1]);
+
+    for (int i = 0; i < 4; i++) {
+        pipeline.getDrc()._bands[i].thresholdDb = (float)pd.drc_thresholdDb[i] / 100.0f;
+        pipeline.getDrc()._bands[i].ratioX100 = pd.drc_ratio[i];
+        pipeline.getDrc()._bands[i].attackMs = pd.drc_attackMs[i];
+        pipeline.getDrc()._bands[i].releaseMs = pd.drc_releaseMs[i];
+        pipeline.getDrc()._bands[i].pregain = (float)pd.drc_pregain[i] / 100.0f;
+        pipeline.getDrc()._bands[i].lookaheadMs= pd.drc_lookaheadMs[i];
+    }
 
     pipeline.getLeftRightEq().getEqLeft().setPregain(pd.eql_pregain_q88);
     for (int i = 0; i < MAX_EQ_BANDS; i++)

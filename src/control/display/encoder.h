@@ -23,6 +23,7 @@
 #include <Arduino.h>
 #include <RotaryEncoder.h>
 #include "display.h"   // for EncoderEvent
+#include "config.h"
 
 class Encoder {
 public:

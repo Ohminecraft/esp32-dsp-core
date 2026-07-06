@@ -20,23 +20,21 @@
 #include "config.h"
 
 // Max sub-band frame buffer: 3 bands × frameSize × channels
-static constexpr int DRC_MAX_BANDS     = 3;
+static constexpr int DRC_MAX_BANDS     = 4; // fullband, low, mid, high
 static constexpr int DRC_MAX_CROSSOVERS = 2;
 static constexpr int DRC_DECIM         = 8;  // decimate dB/gain every N samples
 
 struct DRCBand {
     // ── Raw params ──────────────────────────────────────────────────
-    int32_t thresholdDbInt; // 0.01 dB steps, e.g. -1500 = -15.00 dB
     int32_t ratioX100;      // 0.01 steps, e.g. 400 = 4.00:1
     int32_t attackMs;
     int32_t releaseMs;
-    int32_t pregainQ412;    // Q4.12, 4096 = 1.0 (0dB)
 
     // ── Cached computed ──────────────────────────────────────────────
     float thresholdDb;
     float slopeAbove;       // (1 - 1/ratio) — pre-computed per SDK
     float pregain;          // linear
-    float attackCoeff;
+    float attackCoeff; 
     float releaseCoeff;
 
     // ── Run-time state ──────────────────────────────────────────────
@@ -69,11 +67,11 @@ public:
     void setCrossoverQ(uint8_t idx, int32_t q_q610);  // Q6.10 format
 
     // ── Per-band params (band: 0-2 = bands, mapping depends on mode) ────────
-    void setThreshold(uint8_t band, int32_t db_001);
+    void setThreshold(uint8_t band, float db);
     void setRatio(uint8_t band, int32_t ratio_x100);
     void setAttackTime(uint8_t band, int32_t ms);
     void setReleaseTime(uint8_t band, int32_t ms);
-    void setPregain(uint8_t band, int32_t gain_q412);
+    void setPregain(uint8_t band, float gaindb);
     void setLookahead(uint8_t band, float ms);
 
     // ---- Runtime state getters (for live meter) ----
@@ -100,7 +98,7 @@ private:
     Biquad _xoverHp[DRC_MAX_CROSSOVERS][2];  // HP stages [crossover][stage]
 
     // ── Sub-band buffer pointers (mapped from SharedScratchpad) ────────
-    float* _subBandPtr[DRC_MAX_BANDS] = {nullptr, nullptr, nullptr};
+    float* _subBandPtr[DRC_MAX_BANDS - 1] = {nullptr, nullptr, nullptr};
 
     void recalcBand(uint8_t band);
     void designCrossover(uint8_t idx);

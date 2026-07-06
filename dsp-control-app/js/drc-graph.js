@@ -199,7 +199,7 @@ export class DRCGraph {
             ctx.fillText(label, x + 28, y + 10);
         };
 
-        drawLegendItem(legendX, legendY,      '#e84040',   [5, 3], `Threshold ${thresholdDb.toFixed(1)} dB`);
+        drawLegendItem(legendX, legendY,      '#e84040',   [5, 3], `Threshold ${thresholdDb} dB`);
         drawLegendItem(legendX, legendY + 18, 'rgba(200,210,230,0.4)', [4, 4], '1:1');
         drawLegendItem(legendX, legendY + 36, '#22cc55',   [],      `Ratio ${ratio.toFixed(0)}:1`);
 
@@ -291,7 +291,7 @@ export class DRCGraph {
         ctx.fillStyle  = '#ffcc33';
         ctx.font       = 'bold 10px Inter, sans-serif';
         ctx.textAlign  = ox > pad.left + this._plotW * 0.75 ? 'right' : 'left';
-        ctx.fillText(`GR ${gainDb.toFixed(1)} dB`, ox + (ctx.textAlign === 'left' ? 8 : -8), oy - 7);
+        ctx.fillText(`GR ${gainDb} dB`, ox + (ctx.textAlign === 'left' ? 8 : -8), oy - 7);
 
         ctx.restore();
     }

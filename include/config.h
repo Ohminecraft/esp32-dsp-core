@@ -193,6 +193,9 @@
 #define AUTO_SHUTDONW_TIMER_MS 1800000 // 30min
 #define SHUTDOWN_COUNTDOWN_MS 5000 // 5s
 
+//#define ENCODER_EC11_BLUEPCB
+#define ENCODER_EC11_BLACKPCB // KY-040
+
 // Trigger GPIO settings now make for HYT QCC5125 remote control. Can customize gpio and timing parameters in web app or electron app (future).
 #define TRIGGER_GPIO_ACTIVE_LEVEL         HIGH    // Active state level (HIGH/LOW)
 #define TRIGGER_BT_KICK_DURATION_MS       100     // Duration for BT Kick trigger pulse

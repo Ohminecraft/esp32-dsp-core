@@ -442,6 +442,10 @@ private:
                       const char* label, float value, const char* unit,
                       bool focused);
 
+    void drawInputRow(int16_t x, int16_t y, int16_t w,
+                      const char* label, float value, const char* unit,
+                      bool focused, uint8_t decimals);
+
     void drawFilterTypeRow(int16_t x, int16_t y, int16_t w,
                            EQFilterType current,
                            bool focused, bool editing);

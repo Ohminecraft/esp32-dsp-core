@@ -109,19 +109,20 @@ class Store extends EventEmitter {
         this._activeIsfPreset = 0;
 
         // DRC — multi-band with crossover
+        // Band mapping: band[0]=Fullband, band[1]=Low, band[2]=Mid, band[3]=High
         this.drc = {
-            mode: 0,           // 0=Fullband, 1=2Band, 2=2Band+Full, 3=3Band, 4=3Band+Full
-            cfType: 1,         // 0=None, 1=Butterworth1, 2=LR2, 3=LR4, 4=Q4
+            mode: 0,           // 0=Fullband, 1=2Band, 2=3Band
+            cfType: 0,         // 0=Butterworth1, 1=LR2, 2=LR4, 3=Q-Ctrl (matches dsp_types.h enum)
             fc1: 300,          // crossover freq 1 (Hz)
             fc2: 2000,         // crossover freq 2 (Hz)
-            qLp: 717,          // Q LP (Q6.10: 717 ≈ 0.70)
-            qHp: 717,          // Q HP (Q6.10)
-            activeBand: 3,     // which band is shown in UI (3 = fullband)
+            qLp: 717,          // Q LP (Q6.10: 717 ≈ 0.70) - only used when cfType === 3 (Q-Ctrl)
+            qHp: 717,          // Q HP (Q6.10) - only used when cfType === 3 (Q-Ctrl)
+            activeBand: 0,     // which band is shown in UI (0 = fullband default)
             bands: [
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 },
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 },
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 },
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 160, pregain: 4096, lookaheadMs: 0 }  // fullband
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 }, // band[0] = Fullband
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 }, // band[1] = Low
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 }, // band[2] = Mid
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 160, pregain: 4096, lookaheadMs: 0 }  // band[3] = High
             ]
         };
 

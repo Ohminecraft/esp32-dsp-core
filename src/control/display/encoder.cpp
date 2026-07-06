@@ -15,7 +15,13 @@ void Encoder::init(uint8_t pinA, uint8_t pinB, uint8_t sw) {
     _sw = sw;
     pinMode(sw, INPUT_PULLUP);
 
-    encoder = new RotaryEncoder(pinA, pinB, RotaryEncoder::LatchMode::FOUR3);
+    #if defined(ENCODER_EC11_BLUEPCB)
+        encoder = new RotaryEncoder(pinA, pinB, RotaryEncoder::LatchMode::FOUR3);
+    #elif defined(ENCODER_EC11_BLACKPCB)
+        encoder = new RotaryEncoder(pinA, pinB, RotaryEncoder::LatchMode::TWO03);
+    #else
+        encoder = new RotaryEncoder(pinA, pinB, RotaryEncoder::LatchMode::FOUR3);
+    #endif
     attachInterrupt(digitalPinToInterrupt(pinA), checkPosition, CHANGE);
     attachInterrupt(digitalPinToInterrupt(pinB), checkPosition, CHANGE);
 }

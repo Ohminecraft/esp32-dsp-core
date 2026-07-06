@@ -1111,24 +1111,62 @@ void Display::onConfirm() {
         else if (_focusIdx == cnt - 2) pushScreen(ScreenID::DRC_BAND_SELECT, nav.module);
         else if (_focusIdx == 0 || _focusIdx == 1) toggleEditMode();
         else {
-            _kbContext = nav; _kbParamIdx = _focusIdx - 2;
-            static float tempVal;
-            if (_pipeline) {
-                DRC& drc = _pipeline->getDrc();
-                if (_kbParamIdx == 0) tempVal = (float)drc._fc[0];
-                else if (_kbParamIdx == 1) tempVal = Q_Q610_TO_FLOAT(drc._qLp);
-                else if (_kbParamIdx == 2) tempVal = (float)drc._fc[1];
-                else if (_kbParamIdx == 3) tempVal = Q_Q610_TO_FLOAT(drc._qHp);
-                else tempVal = 0.0f;
-            } else tempVal = 0.0f;
-            bool isQ = (_kbParamIdx == 1 || _kbParamIdx == 3);
+            // Calculate _kbParamIdx based on dynamic item positions
+            _kbContext = nav;
+            _kbParamIdx = 0;  // Will be calculated below
+            static float tempVal;  // Static for keyboard callback
+            
+            if (!_pipeline) { tempVal = 0.0f; pushKeyboard(&tempVal, 20.0f, 20000.0f, false, ScreenID::DRC_CONFIG); break; }
+            
+            DRC& drc = _pipeline->getDrc();
+            DRCMode mode = drc._mode;
+            DRCCrossoverType cfType = drc._cfType;
+            
+            // Build mapping from focusIdx to actual param
+            // Items: 0=Mode, 1=CFType(if !Fullband), then Freq1, Q1(if QCtrl), Freq2(if 3Band), Q2(if 3Band+QCtrl)
+            uint8_t idx = 2;  // Start after Mode and CFType
+            uint8_t freq1Idx = 0, q1Idx = 0, freq2Idx = 0, q2Idx = 0;
+            
+            if (mode != DRC_MODE_FULLBAND) {
+                freq1Idx = idx++;
+                if (cfType == DRC_CF_QCTRL_2) q1Idx = idx++;
+                if (mode == DRC_MODE_3BAND) {
+                    freq2Idx = idx++;
+                    if (cfType == DRC_CF_QCTRL_2) q2Idx = idx++;
+                }
+            }
+            
+            // tempVal already declared as static above, reuse it
+            tempVal = 0.0f;
+            bool isQ = false;
+            
+            if (_focusIdx == freq1Idx) {
+                _kbParamIdx = 0;
+                tempVal = (float)drc._fc[0];
+                isQ = false;
+            } else if (_focusIdx == q1Idx) {
+                _kbParamIdx = 1;
+                tempVal = Q_Q610_TO_FLOAT(drc._qLp);
+                isQ = true;
+            } else if (_focusIdx == freq2Idx) {
+                _kbParamIdx = 2;
+                tempVal = (float)drc._fc[1];
+                isQ = false;
+            } else if (_focusIdx == q2Idx) {
+                _kbParamIdx = 3;
+                tempVal = Q_Q610_TO_FLOAT(drc._qHp);
+                isQ = true;
+            }
+            
             pushKeyboard(&tempVal, isQ ? 0.1f : 20.0f, isQ ? 4.0f : 20000.0f, isQ, ScreenID::DRC_CONFIG);
         }
         break;
     }
     case ScreenID::DRC_BAND_SELECT:
         if (_focusIdx == getItemCount() - 1) popScreen();
-        else { _drcActiveBand = _focusIdx; pushScreen(ScreenID::DRC_BAND_PARAMS, nav.module); }
+        else {
+            _drcActiveBand = _pipeline->getDrc()._mode == DRC_MODE_FULLBAND ? _focusIdx : _focusIdx + 1;
+            pushScreen(ScreenID::DRC_BAND_PARAMS, nav.module); }
         break;
     case ScreenID::DRC_BAND_PARAMS: {
         uint8_t cnt = getItemCount();
@@ -1349,10 +1387,16 @@ void Display::editDelta(int8_t dir) {
     if (s == ScreenID::DRC_CONFIG && _pipeline && _editMode) {
         DRC& drc = _pipeline->getDrc();
         if (_focusIdx == 0) {
-            int8_t m = (int8_t)drc._mode + dir; if (m < 0) m = 4; if (m > 4) m = 0;
+            // Mode: 0=Fullband, 1=2-Band, 2=3-Band - wrap correctly
+            int8_t m = (int8_t)drc._mode + dir;
+            if (m < 0) m = 2;  // Wrap to 3-Band
+            if (m > 2) m = 0;  // Wrap to Fullband
             drc.setMode((DRCMode)m); _dirty = true; return;
         } else if (_focusIdx == 1) {
-            int8_t t = (int8_t)drc._cfType + dir; if (t < 2) t = 4; if (t > 4) t = 2;
+            // CF Type: 0=Butter1, 1=LR2, 2=LR4, 3=Q-Ctrl
+            int8_t t = (int8_t)drc._cfType + dir;
+            if (t < 0) t = 3;  // Wrap to Q-Ctrl
+            if (t > 3) t = 0;  // Wrap to Butter1
             drc.setCrossoverType((DRCCrossoverType)t); _dirty = true; return;
         }
     }
@@ -1372,17 +1416,17 @@ void Display::editDelta(int8_t dir) {
         if (s == ScreenID::DRC_BAND_PARAMS && _pipeline) {
             if (_focusIdx >= 6) return;
             uint8_t pi = _focusIdx; DRC& drc = _pipeline->getDrc(); uint8_t band = _drcActiveBand;
-            const UiParam drcParams[] = { { "Pregain","dB",-24,24,1,0 },{ "Threshold","dB",-60,0,0.5f,1 },{ "Ratio",":1",1,100,1,0 },{ "Attack","ms",1,2000,10,0 },{ "Release","ms",1,2000,10,0 },{ "Lookahead","ms",0,10,1,0 } };
+            const UiParam drcParams[] = { { "Pregain","dB",-72,18,1,0 },{ "Threshold","dB",-60,0,0.5f,1 },{ "Ratio",":1",1,100,1,0 },{ "Attack","ms",1,2000,10,0 },{ "Release","ms",1,2000,10,0 },{ "Lookahead","ms",0,10,1,0 } };
             float cur = 0;
-            if (pi == 0) { float pregainLinear = PREGAIN_Q412_TO_FLOAT(drc._bands[band].pregainQ412); cur = (pregainLinear > 0.0001f) ? 20*log10f(pregainLinear) : -96; }
-            else if (pi == 1) cur = DRC_TH_TO_FLOAT_DB(drc._bands[band].thresholdDbInt);
+            if (pi == 0) cur = (drc._bands[band].pregain);
+            else if (pi == 1) cur = (drc._bands[band].thresholdDb);
             else if (pi == 2) cur = (float)drc._bands[band].ratioX100/100;
             else if (pi == 3) cur = (float)drc._bands[band].attackMs;
             else if (pi == 4) cur = (float)drc._bands[band].releaseMs;
             else if (pi == 5) cur = drc._bands[band].lookaheadMs;
-            float nxt = constrain(cur + dir*drcParams[pi].step, drcParams[pi].minVal, drcParams[pi].maxVal);
-            if (pi == 0) { nxt = roundf(nxt); float linearGain = powf(10,nxt/20); drc.setPregain(band,FLOAT_TO_PREGAIN_Q412(linearGain)); }
-            else if (pi == 1) drc.setThreshold(band,FLOAT_DB_TO_DRC_TH(nxt));
+            float nxt = constrain(cur + dir * drcParams[pi].step, drcParams[pi].minVal, drcParams[pi].maxVal);
+            if (pi == 0) { drc.setPregain(band, nxt); }
+            else if (pi == 1) drc.setThreshold(band, nxt);
             else if (pi == 2) drc.setRatio(band,(int32_t)(nxt*100));
             else if (pi == 3) drc.setAttackTime(band,(int32_t)nxt);
             else if (pi == 4) drc.setReleaseTime(band,(int32_t)nxt);
@@ -1467,7 +1511,36 @@ uint8_t Display::getItemCount() const {
             nPresets = isf.getNumPresets(); 
         } 
         return 3 + 2 + nPresets + 1; }
-    case ScreenID::DRC_CONFIG: return 2 + 4 + 2;
+    case ScreenID::DRC_CONFIG: {
+        // Dynamic item count based on mode and cfType
+        // Items: Mode (always) + CF Type (if not Fullband) + crossover settings + NEXT + BACK
+        if (!_pipeline) return 4;  // Mode + NEXT + BACK minimum
+        
+        DRC& drc = _pipeline->getDrc();
+        DRCMode mode = drc._mode;
+        DRCCrossoverType cfType = drc._cfType;
+        
+        uint8_t count = 1;  // Mode (always visible)
+        
+        if (mode != DRC_MODE_FULLBAND) {
+            count += 1;  // CF Type
+            count += 1;  // Freq 1 (always shown when not Fullband)
+            
+            if (cfType == DRC_CF_QCTRL_2) {
+                count += 1;  // Q 1
+            }
+            
+            if (mode == DRC_MODE_3BAND) {
+                count += 1;  // Freq 2
+                if (cfType == DRC_CF_QCTRL_2) {
+                    count += 1;  // Q 2
+                }
+            }
+        }
+        
+        count += 2;  // NEXT + BACK
+        return count;
+    }
     case ScreenID::DRC_BAND_SELECT: { 
         if (!_pipeline) return 1; 
         DRC& drc = _pipeline->getDrc(); 
@@ -2778,7 +2851,7 @@ void Display::drawDrcConfig() {
     d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
 
     DRCMode mode = DRC_MODE_FULLBAND;
-    DRCCrossoverType cfType = (DRCCrossoverType)2;
+    DRCCrossoverType cfType = DRC_CF_BUTTERWORTH_1;
     if (_pipeline) {
         DRC& drc = _pipeline->getDrc();
         mode = drc._mode;
@@ -2787,7 +2860,12 @@ void Display::drawDrcConfig() {
     _drcMode = (uint8_t)mode;
     _drcCfType = (uint8_t)cfType;
 
-    // Mode row
+    // Determine visibility based on mode and cfType
+    bool showCfType = (mode != DRC_MODE_FULLBAND);  // Hide CF Type in Fullband
+    bool show2ndCrossover = (mode == DRC_MODE_3BAND);  // Show Freq2/Q2 only in 3-Band
+    bool isQCtrl = (cfType == DRC_CF_QCTRL_2);  // Q controls only for Q-controller
+
+    // Mode row (always visible)
     {
         int16_t y = HEADER_H + 4;
         bool focused = (_focusIdx == 0);
@@ -2803,7 +2881,7 @@ void Display::drawDrcConfig() {
 
         d.setTextColor(editing ? Color::ACCENT2 : Color::ACCENT, bg);
         d.setTextDatum(MR_DATUM);
-        const char* modeStr = (_drcMode <= 4) ? DRC_MODE_NAMES[_drcMode] : "?";
+        const char* modeStr = (_drcMode <= 2) ? DRC_MODE_NAMES[_drcMode] : "?";
         d.drawString(modeStr, CONTENT_X + CONTENT_W - 6, y + (ROW_H - 2) / 2);
 
         if (editing) {
@@ -2813,8 +2891,8 @@ void Display::drawDrcConfig() {
         }
     }
 
-    // CF Type row
-    {
+    // CF Type row (hidden in Fullband mode)
+    if (showCfType) {
         int16_t y = HEADER_H + 4 + ROW_H;
         bool focused = (_focusIdx == 1);
         bool editing = focused && _editMode;
@@ -2839,28 +2917,49 @@ void Display::drawDrcConfig() {
         }
     }
 
-    const char* xoverNames[] = { "Freq 1", "Q 1", "Freq 2", "Q 2" };
-    const char* xoverUnits[] = { "Hz", "", "Hz", "" };
-    float xoverVals[4] = { 200, 0.707f, 3000, 0.707f };
+    // Crossover settings (hidden in Fullband mode)
+    if (showCfType) {
+        float xoverVals[4] = { 200, 0.707f, 3000, 0.707f };
+        if (_pipeline) {
+            DRC& drc = _pipeline->getDrc();
+            xoverVals[0] = (float)drc._fc[0];
+            xoverVals[1] = Q_Q610_TO_FLOAT(drc._qLp);
+            xoverVals[2] = (float)drc._fc[1];
+            xoverVals[3] = Q_Q610_TO_FLOAT(drc._qHp);
+        }
 
-    if (_pipeline) {
-        DRC& drc = _pipeline->getDrc();
-        xoverVals[0] = (float)drc._fc[0];
-        xoverVals[1] = Q_Q610_TO_FLOAT(drc._qLp);
-        xoverVals[2] = (float)drc._fc[1];
-        xoverVals[3] = Q_Q610_TO_FLOAT(drc._qHp);
-    }
+        uint8_t rowIdx = 2;  // Start after Mode and CF Type
 
-    for (uint8_t i = 0; i < 4; i++) {
-        int8_t visIdx = (int8_t)i - _paramScroll;
-        if (visIdx < 0 || visIdx >= VISIBLE_ROWS_DRC_CONFIG) continue;
+        // Freq 1 (always shown when not Fullband)
+        {
+            int16_t y = HEADER_H + 4 + rowIdx * ROW_H;
+            bool focused = (_focusIdx == rowIdx);
+            drawInputRow(CONTENT_X, y, CONTENT_W, "Freq 1", xoverVals[0], "Hz", focused, 0);
+            rowIdx++;
+        }
 
-        int16_t y = HEADER_H + 4 + (visIdx + 2) * ROW_H;
-        if (y + ROW_H > FOOTER_Y) continue;
+        // Q 1 (only when Q-controller selected)
+        if (isQCtrl) {
+            int16_t y = HEADER_H + 4 + rowIdx * ROW_H;
+            bool focused = (_focusIdx == rowIdx);
+            drawInputRow(CONTENT_X, y, CONTENT_W, "Q (LP)", xoverVals[1], "", focused, 3);
+            rowIdx++;
+        }
 
-        bool focused = (_focusIdx == 2 + i);
-        drawInputRow(CONTENT_X, y, CONTENT_W, xoverNames[i], xoverVals[i],
-                     xoverUnits[i], focused);
+        // Freq 2 (only in 3-Band mode)
+        if (show2ndCrossover) {
+            int16_t y = HEADER_H + 4 + rowIdx * ROW_H;
+            bool focused = (_focusIdx == rowIdx);
+            drawInputRow(CONTENT_X, y, CONTENT_W, "Freq 2", xoverVals[2], "Hz", focused, 0);
+            rowIdx++;
+
+            // Q 2 (only in 3-Band mode + Q-controller)
+            if (isQCtrl) {
+                int16_t y2 = HEADER_H + 4 + rowIdx * ROW_H;
+                bool focused2 = (_focusIdx == rowIdx);
+                drawInputRow(CONTENT_X, y2, CONTENT_W, "Q (HP)", xoverVals[3], "", focused2, 3);
+            }
+        }
     }
 
     uint8_t cnt = getItemCount();
@@ -2885,18 +2984,30 @@ void Display::drawDrcBandSelect() {
     d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
 
     uint8_t bandCount = 1;
+    DRCMode mode = DRC_MODE_FULLBAND;
     if (_pipeline) {
         DRC& drc = _pipeline->getDrc();
-        switch (drc._mode) {
-        case DRC_MODE_FULLBAND:       bandCount = 1; break;
-        case DRC_MODE_2BAND:          bandCount = 2; break;
-        case DRC_MODE_2BAND_FULLBAND:  bandCount = 3; break;
-        case DRC_MODE_3BAND:          bandCount = 3; break;
-        case DRC_MODE_3BAND_FULLBAND:  bandCount = 4; break;
+        mode = drc._mode;
+        switch (mode) {
+        case DRC_MODE_FULLBAND: bandCount = 1; break;
+        case DRC_MODE_2BAND:    bandCount = 2; break;
+        case DRC_MODE_3BAND:    bandCount = 3; break;
         }
     }
 
-    const char* bandLabels[] = { "Band 1", "Band 2", "Band 3", "Fullband" };
+    // Band labels based on mode:
+    // Fullband: "Fullband"
+    // 2 Band: "Low", "High"
+    // 3 Band: "Low", "Mid", "High"
+    const char* bandLabelsFullband[] = { "Fullband" };
+    const char* bandLabels2Band[] = { "Low", "High" };
+    const char* bandLabels3Band[] = { "Low", "Mid", "High" };
+    const char** bandLabels = bandLabelsFullband;
+    switch (mode) {
+        case DRC_MODE_FULLBAND: bandLabels = bandLabelsFullband; break;
+        case DRC_MODE_2BAND:    bandLabels = bandLabels2Band; break;
+        case DRC_MODE_3BAND:    bandLabels = bandLabels3Band; break;
+    }
     int16_t tabW = (CONTENT_W - 8) / 2;
     constexpr int16_t tabH = 40;
 
@@ -2948,18 +3059,16 @@ void Display::drawDrcBandParams() {
     if (_pipeline) {
         DRC& drc = _pipeline->getDrc();
         uint8_t band = _drcActiveBand;
-        float pregainLinear = PREGAIN_Q412_TO_FLOAT(drc._bands[band].pregainQ412);
-        bpVals[0] = (pregainLinear > 0.0001f) ? roundf(20 * log10f(pregainLinear))
-                                               : -96;
-        bpVals[1] = DRC_TH_TO_FLOAT_DB(drc._bands[band].thresholdDbInt);
+        bpVals[0] = drc._bands[band].pregain;
+        bpVals[1] = drc._bands[band].thresholdDb;
         bpVals[2] = (float)drc._bands[band].ratioX100 / 100;
         bpVals[3] = (float)drc._bands[band].attackMs;
         bpVals[4] = (float)drc._bands[band].releaseMs;
         bpVals[5] = drc._bands[band].lookaheadMs;
     }
 
-    static const float bpMins[] = { -24, -60, 1, 1, 1, 0 };
-    static const float bpMaxs[] = { 24, 0, 100, 2000, 2000, 10 };
+    static const float bpMins[] = { -72, -90, 1, 1, 1, 0 };
+    static const float bpMaxs[] = { 18, 0, 100, 2000, 2000, 10 };
 
     for (uint8_t i = 0; i < VISIBLE_ROWS_DRC_PARAMS; i++) {
         uint8_t pi = (uint8_t)(_paramScroll + i);
@@ -2968,7 +3077,7 @@ void Display::drawDrcBandParams() {
         bool focused = (_focusIdx == pi);
         bool editing = focused && _editMode;
         drawSliderRow(CONTENT_X, y, CONTENT_W, bpNames[pi], bpVals[pi],
-                      bpMins[pi], bpMaxs[pi], bpUnits[pi], focused, editing);
+                      bpMins[pi], bpMaxs[pi], bpUnits[pi], focused, editing, pi >= 2 ? 0 : 2);
     }
 
     int16_t graphY = HEADER_H + 4 + VISIBLE_ROWS_DRC_PARAMS * ROW_H + 2;
@@ -3183,6 +3292,11 @@ void Display::drawSwitchRow(int16_t x, int16_t y, int16_t w,
 
 void Display::drawInputRow(int16_t x, int16_t y, int16_t w, const char* label,
                             float value, const char* unit, bool focused) {
+    drawInputRow(x, y, w, label, value, unit, focused, 1);
+}
+
+void Display::drawInputRow(int16_t x, int16_t y, int16_t w, const char* label,
+                            float value, const char* unit, bool focused, uint8_t decimals) {
     TFT_eSprite& d = _spr;
     int16_t h = ROW_H - 2;
 
@@ -3200,8 +3314,7 @@ void Display::drawInputRow(int16_t x, int16_t y, int16_t w, const char* label,
     constexpr int16_t VAL_W = 60;
     int16_t valX = x + w - VAL_W - 4;
     char valBuf[12];
-    snprintf(valBuf, sizeof(valBuf), "%.1f%s", value, unit ? unit : "");
-
+    formatFloat(valBuf, sizeof(valBuf), value, decimals, unit);
     constexpr uint16_t VAL_BG_FOCUSED = 0x18A3;
     constexpr uint16_t VAL_BG_NORMAL  = 0x1082;
     uint16_t valBg = focused ? VAL_BG_FOCUSED : VAL_BG_NORMAL;
@@ -3449,7 +3562,7 @@ void Display::drawDrcCurve(float threshold, float ratio, float pregain,
     if (rh > 40) {
         int16_t lx = rx + 4, ly = ry + rh - 32;
         char thrLbl[16], ratLbl[12];
-        snprintf(thrLbl, sizeof(thrLbl), "Thr %.0fdB", threshold);
+        snprintf(thrLbl, sizeof(thrLbl), "Thr %.2fdB", threshold);
         snprintf(ratLbl, sizeof(ratLbl), "%.0f:1",     ratio);
         d.setTextDatum(ML_DATUM);
         d.setTextSize(1);

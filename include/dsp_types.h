@@ -21,14 +21,6 @@
 #define Q_Q610_TO_FLOAT(x)     ((float)(x) / 1024.0f)
 #define FLOAT_TO_Q_Q610(x)     ((int16_t)((x) * 1024.0f))
 
-// Pregain in Q4.12 format (4096 = unity/0dB)
-#define PREGAIN_Q412_TO_FLOAT(x) ((float)(x) / 4096.0f)
-#define FLOAT_TO_PREGAIN_Q412(x) ((int32_t)((x) * 4096.0f))
-
-// DRC threshold: 0.01dB steps (e.g., -2550 = -25.50dB)
-#define DRC_TH_TO_FLOAT_DB(x)   ((float)(x) / 100.0f)
-#define FLOAT_DB_TO_DRC_TH(x)   ((int32_t)((x) * 100.0f))
-
 static inline int32_t IRAM_ATTR floatToI32Sat(float x) {
     if (x >= 1.0f)  return INT32_MAX;
     if (x <= -1.0f) return INT32_MIN;

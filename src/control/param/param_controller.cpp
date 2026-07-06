@@ -457,16 +457,20 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     // --- DRC (float32) ---
     DRC& drc = _pipeline->getDrc();
     sendParamI32(MODULE_ID_DRC, 0x10, (int32_t)drc._mode);
-    // Fullband params
-    sendParamF32(MODULE_ID_DRC, 0x38 + 0, (float)drc._bands[3].thresholdDbInt / 100.0f);
-    sendParamF32(MODULE_ID_DRC, 0x38 + 1, (float)drc._bands[3].ratioX100 / 100.0f);
-    sendParamF32(MODULE_ID_DRC, 0x38 + 2, (float)drc._bands[3].attackMs);
-    sendParamF32(MODULE_ID_DRC, 0x38 + 3, (float)drc._bands[3].releaseMs);
-    sendParamF32(MODULE_ID_DRC, 0x38 + 4, (float)drc._bands[3].pregainQ412 / 4096.0f);
-    for (int b = 0; b < 4; b++) {
-        sendParamF32(MODULE_ID_DRC, (uint8_t)(0x20 + b * 8 + 5), drc._bands[b].lookaheadMs);
+    sendParamI32(MODULE_ID_DRC, 0x11, (int32_t)drc._cfType);
+    sendParamF32(MODULE_ID_DRC, 0x12, drc._fc[0]);
+    sendParamF32(MODULE_ID_DRC, 0x13, drc._qLp);
+    sendParamF32(MODULE_ID_DRC, 0x14, drc._fc[1]);
+    sendParamF32(MODULE_ID_DRC, 0x15, drc._qHp);
+    const uint8_t idxbandBase[4] = {0x20, 0x28, 0x30, 0x38};
+    for (int p = 0; p < DRC_MAX_BANDS; p++) {
+        sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 0, (float)drc._bands[p].thresholdDb);
+        sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 1, (float)drc._bands[p].ratioX100 / 100.0f);
+        sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 2, (float)drc._bands[p].attackMs);
+        sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 3, (float)drc._bands[p].releaseMs);
+        sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 4, (float)drc._bands[p].pregain);
+        sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 5, drc._bands[p].lookaheadMs);
     }
-
     // --- EQ bands (float32 format) ---
     auto sendEq = [&](uint8_t cmdEq, uint8_t mid, ParametricEQ& eq, bool isRight = false) {
         float pregainDb = (float)eq.getPregain() / 256.0f;
@@ -718,11 +722,11 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
                 uint8_t band  = (paramId - 0x20) >> 3;  // 0-3
                 uint8_t param = (paramId - 0x20) & 0x07;
                 switch (param) {
-                    case 0: drc.setThreshold(band, (int32_t)(fValue * 100.0f));    break; // dB → ×100
-                    case 1: drc.setRatio(band, (int32_t)(fValue * 100.0f));        break; // ratio → ×100
+                    case 0: drc.setThreshold(band, fValue);    break; // dB → ×100
+                    case 1: drc.setRatio(band, (int32_t)(fValue));        break; // ratio → ×100
                     case 2: drc.setAttackTime(band, iValue);   break;
                     case 3: drc.setReleaseTime(band, iValue);  break;
-                    case 4: drc.setPregain(band, (int16_t)(fValue * 4096.0f));     break; // dB → Q4.12
+                    case 4: drc.setPregain(band, fValue);     break;
                     case 5: drc.setLookahead(band, fValue); break; // ms direct
                     default: _uart->sendError(0x04); return;
                 }

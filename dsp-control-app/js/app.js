@@ -361,7 +361,9 @@ parser.onFrame((frame) => {
             setTimeout(() => sendFrame(buildWifiScan()), 1500);
         }
     }
-    else if (frame.cmd === CMD.ERROR) showStatus(`Error: 0x${frame.data[0]?.toString(16)}`, 'error');
+    else if (frame.cmd === CMD.ERROR) {
+        showStatus(`Error: 0x${frame.data[0]?.toString(16)}`, 'error');
+    }
     else if (frame.cmd === CMD.REPORT_ENABLE_MASK && frame.data.length >= 2) {
         // Firmware sends enable mask after GET_ALL_STATE
         // Bits correspond to chain order: [0]=preGain ... [11]=postGain
@@ -372,67 +374,77 @@ parser.onFrame((frame) => {
         });
     }
     else if (frame.cmd === CMD.SET_PARAM && frame.data.length >= 5) {
-        const pIndex = frame.data[0];
-        const val = leToFloat(frame.data, 1);  // float32 from firmware
-
-        switch (frame.moduleId) {
-            case MODULE.PRE_GAIN:
-                if (pIndex === 0) store.updateParam('preGain', 'gainDb', val);      // already dB
-                else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
-                else if (pIndex === 2) store.updateParam('preGain', 'mono', val !== 0);
-                break;
-            case MODULE.POST_GAIN:
-                if (pIndex === 0) store.updateParam('postGain', 'gainDb', val);     // already dB
-                else if (pIndex === 1) store.updateParam('postGain', 'mute', val !== 0);
-                else if (pIndex === 2) store.updateParam('postGain', 'mono', val !== 0);
-                break;
-            case MODULE.COMPANDER:
-                // Firmware now sends float32 values directly
-                if (pIndex === 0) store.updateParam('compander', 'threshold', val);      // dB
-                else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val * 256); // float → Q8.8
-                else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val * 256); // float → Q8.8
-                else if (pIndex === 3) store.updateParam('compander', 'attackMs', val);
-                else if (pIndex === 4) store.updateParam('compander', 'releaseMs', val);
-                else if (pIndex === 5) store.updateParam('compander', 'pregain', val * 4096);   // dB → Q4.12
-                else if (pIndex === 6) store.updateParam('compander', 'lookaheadMs', val);      // already ms
-                break;
-            case MODULE.EXCITER:
-                if (pIndex === 0) store.updateParam('exciter', 'cutoffFreq', val);
-                else if (pIndex === 1) store.updateParam('exciter', 'dry', val);
-                else if (pIndex === 2) store.updateParam('exciter', 'wet', val);
-                break;
-            case MODULE.DYNAMIC_BASS:
-                if (pIndex === 0) store.updateParam('dynamicBass', 'cutoffFreq', val);
-                else if (pIndex === 1) store.updateParam('dynamicBass', 'gainBoost', val);
-                else if (pIndex === 2) store.updateParam('dynamicBass', 'enhanced', val);
-                else if (pIndex === 3) store.updateParam('dynamicBass', 'boostthreshold', val);
-                else if (pIndex === 4) store.updateParam('dynamicBass', 'neutralthreshold', val);
-                else if (pIndex === 5) store.updateParam('dynamicBass', 'clipthreshold', val);
-                else if (pIndex === 6) store.updateParam('dynamicBass', 'clipattack', val);
-                else if (pIndex === 7) store.updateParam('dynamicBass', 'cliprelease', val);
-                else if (pIndex === 8) store.updateParam('dynamicBass', 'lookaheadMs', val);  // already ms
-                break;
-            case MODULE.DRC: {
-                // Firmware sends float32, convert to internal store format
-                if (pIndex === 0x10) {
-                    store.drc.mode = val;  // enum, keep as int
-                } else if (pIndex >= 0x20 && pIndex <= 0x3F) {
-                    const bandIdx = (pIndex - 0x20) >> 3;
-                    const param   = (pIndex - 0x20) & 0x07;
-                    const drcBand = store.drc.bands[bandIdx];
-                    if (drcBand) {
-                        if (param === 0) drcBand.threshold = val * 100;      // dB → ×100
-                        else if (param === 1) drcBand.ratio = val * 100;     // float → ×100
-                        else if (param === 2) drcBand.attackMs = val;
-                        else if (param === 3) drcBand.releaseMs = val;
-                        else if (param === 4) drcBand.pregain = val * 4096;  // dB → Q4.12
-                        else if (param === 5) drcBand.lookaheadMs = val;     // already ms
-                    }
+    const pIndex = frame.data[0];
+    const val = leToFloat(frame.data, 1);  // float32 from firmware
+    switch (frame.moduleId) {
+        case MODULE.PRE_GAIN:
+            if (pIndex === 0) store.updateParam('preGain', 'gainDb', val);      // already dB
+            else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
+            else if (pIndex === 2) store.updateParam('preGain', 'mono', val !== 0);
+            break;
+        case MODULE.POST_GAIN:
+            if (pIndex === 0) store.updateParam('postGain', 'gainDb', val);     // already dB
+            else if (pIndex === 1) store.updateParam('postGain', 'mute', val !== 0);
+            else if (pIndex === 2) store.updateParam('postGain', 'mono', val !== 0);
+            break;
+        case MODULE.COMPANDER:
+            if (pIndex === 0) store.updateParam('compander', 'threshold', val);      // dB
+            else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val * 256); // float → Q8.8
+            else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val * 256); // float → Q8.8
+            else if (pIndex === 3) store.updateParam('compander', 'attackMs', val);
+            else if (pIndex === 4) store.updateParam('compander', 'releaseMs', val);
+            else if (pIndex === 5) store.updateParam('compander', 'pregain', val * 4096);   // dB → Q4.12
+            else if (pIndex === 6) store.updateParam('compander', 'lookaheadMs', val);      // already ms
+            break;
+        case MODULE.EXCITER:
+            if (pIndex === 0) store.updateParam('exciter', 'cutoffFreq', val);
+            else if (pIndex === 1) store.updateParam('exciter', 'dry', val);
+            else if (pIndex === 2) store.updateParam('exciter', 'wet', val);
+            break;
+        case MODULE.DYNAMIC_BASS:
+            if (pIndex === 0) store.updateParam('dynamicBass', 'cutoffFreq', val);
+            else if (pIndex === 1) store.updateParam('dynamicBass', 'gainBoost', val);
+            else if (pIndex === 2) store.updateParam('dynamicBass', 'enhanced', val);
+            else if (pIndex === 3) store.updateParam('dynamicBass', 'boostthreshold', val);
+            else if (pIndex === 4) store.updateParam('dynamicBass', 'neutralthreshold', val);
+            else if (pIndex === 5) store.updateParam('dynamicBass', 'clipthreshold', val);
+            else if (pIndex === 6) store.updateParam('dynamicBass', 'clipattack', val);
+            else if (pIndex === 7) store.updateParam('dynamicBass', 'cliprelease', val);
+            else if (pIndex === 8) store.updateParam('dynamicBass', 'lookaheadMs', val);  // already ms
+            break;
+        case MODULE.DRC: {
+            // Firmware sends float32, convert to internal store format
+            if (pIndex === 0x10) {
+                store.drc.mode = val;  // enum, keep as int
+            } else if (pIndex === 0x11) {
+                store.drc.cfType = val;
+            } else if (pIndex === 0x12) {
+                store.drc.fc1 = val;
+            } else if (pIndex === 0x13) {
+                store.drc.qLp = val;
+            } else if (pIndex === 0x14) {
+                store.drc.fc2 = val;
+            } else if (pIndex === 0x15) {
+                store.drc.qHp = val;
+            } else if (pIndex >= 0x20 && pIndex <= 0x3F) {
+                const bandIdx = (pIndex - 0x20) >> 3;
+                const param   = (pIndex - 0x20) & 0x07;
+                const drcBand = store.drc.bands[bandIdx];
+                if (drcBand) {
+                    if (param === 0) drcBand.threshold = val;
+                    else if (param === 1) drcBand.ratio = val;
+                    else if (param === 2) drcBand.attackMs = val;
+                    else if (param === 3) drcBand.releaseMs = val;
+                    else if (param === 4) drcBand.pregain = val;
+                    else if (param === 5) drcBand.lookaheadMs = val;     // already ms
                 }
-                break;
             }
+            break;
         }
+        default:
+            console.debug(`[SET_PARAM] Unknown module=${frame.moduleId} idx=${pIndex} val=${val}`);
     }
+}
     else if (frame.cmd === CMD.SET_EQ_BAND && frame.data.length >= 19) {
         // New float32 layout: pregainDb(f32) + band(1) + enabled(1) + type(1) + freq(f32) + gainDb(f32) + Q(f32) = 19 bytes
         const d = frame.data;
@@ -523,7 +535,7 @@ parser.onFrame((frame) => {
         store.updateIsfState(which, levelDb, slewIdx, activeA, activeB);
         renderIsfLevelMeter(which, levelDb, slewIdx, activeA, activeB);
     }
-    else if (frame.cmd === CMD.REPORT_ISF_BAND_PER_PRESET && frame.data.length >= 16) {
+    else if (frame.cmd === CMD.REPORT_ISF_BAND_PER_PRESET && frame.data.length >= 16) {;
         // Layout: presetIdx(1) + bandIdx(1) + enabled(1) + type(1) + freq(f32) + gain(f32) + Q(f32) = 16 bytes
         const d = frame.data;
         const moduleId  = frame.moduleId;
@@ -607,6 +619,12 @@ parser.onFrame((frame) => {
                 renderWifiList();
             }
         }
+    }
+    else {
+        console.warn(
+            `[CMD] Unhandled cmd=0x${frame.cmd.toString(16).padStart(2, "0")} module=${frame.moduleId} len=${frame.data.length}`,
+            frame
+        );
     }
 });
 
@@ -1023,8 +1041,8 @@ function buildDrcPanel(container) {
 
     const refreshGraph = () => {
         const band = d.bands[d.activeBand];
-        const thDb = band.threshold / 100;
-        const ratio = band.ratio / 100;
+        const thDb = band.threshold;
+        const ratio = band.ratio;
         drcGraph.draw(thDb, ratio);
     };
     refreshGraph();
@@ -1042,11 +1060,9 @@ function buildDrcPanel(container) {
     const modeSelect = document.createElement('select');
     modeSelect.className = 'drc-select';
     [
-        [0, 'Full Band'],
-        [1, '2 Band'],
-        [2, '2 Band + Full'],
-        [3, '3 Band'],
-        [4, '3 Band + Full'],
+        [0, 'Fullband'],
+        [1, '2-Band'],
+        [2, '3-Band'],
     ].forEach(([val, name]) => {
         const opt = document.createElement('option');
         opt.value = val;
@@ -1072,10 +1088,10 @@ function buildDrcPanel(container) {
     const cfSelect = document.createElement('select');
     cfSelect.className = 'drc-select';
     [
-        [1, 'Butterworth, order=1'],
-        [2, 'Linkwitz-Riley, order=2'],
-        [3, 'Linkwitz-Riley, order=4'],
-        [4, 'Q-controlled, order=4'],
+        [0, 'Butterworth, order=1'],
+        [1, 'Linkwitz-Riley, order=2'],
+        [2, 'Linkwitz-Riley, order=4'],
+        [3, 'Q-controller, order=2'],
     ].forEach(([val, name]) => {
         const opt = document.createElement('option');
         opt.value = val;
@@ -1158,31 +1174,32 @@ function buildDrcPanel(container) {
 
     const buildBandControls = (bandIdx) => {
         bandControls.innerHTML = '';
+        //if ()
         const band = d.bands[bandIdx];
         const pBase = BAND_PARAM[bandIdx];
 
-        addSlider(bandControls, 'Pregain', -7200, 1800, 25, 'dB',
-            () => Math.round((Math.log10(band.pregain / 4096) * 20) * 100),
+        addSlider(bandControls, 'Pregain', -72, 18, 0.1, 'dB',
+            () => band.pregain,
             (v) => {
-                band.pregain = Math.round(Math.pow(10, v / 2000) * 4096);
+                band.pregain = v;
                 sendFrame(buildSetParam(MODULE.DRC, pBase + 4, band.pregain));
-            }, null, 0.01);
+            }, null, 1);
 
-        addSlider(bandControls, 'Threshold', -9000, 0, 50, 'dB',
+        addSlider(bandControls, 'Threshold', -90, 0, 0.1, 'dB',
             () => band.threshold,
             (v) => {
                 band.threshold = v;
                 sendFrame(buildSetParam(MODULE.DRC, pBase + 0, v));
                 refreshGraph();
-            }, null, 0.01);
+            }, null, 1);
 
-        addSlider(bandControls, 'Ratio', 100, 10000, 100, ':1',
+        addSlider(bandControls, 'Ratio', 1, 100, 1, ':1',
             () => band.ratio,
             (v) => {
                 band.ratio = v;
-                sendFrame(buildSetParam(MODULE.DRC, pBase + 1, v));
+                sendFrame(buildSetParam(MODULE.DRC, pBase + 1, v * 100));
                 refreshGraph();
-            }, null, 0.01);
+            }, null, 1);
 
         addSlider(bandControls, 'Attack', 1, 2000, 1, 'ms',
             () => band.attackMs,
@@ -1203,11 +1220,19 @@ function buildDrcPanel(container) {
     const renderTabs = () => {
         tabsRow.innerHTML = '';
         const visibleBands = getBandCount(d.mode);
+        const mode = d.mode;
 
         for (let tabPos = 0; tabPos < visibleBands; tabPos++) {
-            const bandIdx = tabToBandIdx(tabPos, d.mode);
-            const isFullband = (bandIdx === 3);
-            const label = isFullband ? '● Full' : `Band ${tabPos + 1}`;
+            const bandIdx = tabToBandIdx(tabPos, mode);
+            // Generate tab label based on mode
+            let label;
+            if (mode === 0) {
+                label = '● Fullband';
+            } else if (mode === 1) {
+                label = tabPos === 0 ? '● Low' : '● High';
+            } else {
+                label = tabPos === 0 ? '● Low' : tabPos === 1 ? '● Mid' : '● High';
+            }
             const tab = document.createElement('button');
             tab.className = 'drc-tab' + (d.activeBand === bandIdx ? ' active' : '');
             tab.textContent = label;
@@ -1216,37 +1241,39 @@ function buildDrcPanel(container) {
                 refreshGraph();
                 buildBandControls(bandIdx);
                 tabsRow.querySelectorAll('.drc-tab').forEach((t, idx) => {
-                    t.classList.toggle('active', tabToBandIdx(idx, d.mode) === bandIdx);
+                    t.classList.toggle('active', tabToBandIdx(idx, mode) === bandIdx);
                 });
             });
             tabsRow.appendChild(tab);
         }
     };
 
-    // For fullband-only mode, show fullband = bands[3]
+    // Band count based on mode:
+    // mode 0 (Fullband): 1 band (band[0])
+    // mode 1 (2-Band): 2 bands (band[1]=Low, band[2]=High)
+    // mode 2 (3-Band): 3 bands (band[1]=Low, band[2]=Mid, band[3]=High)
     const getBandCount = (mode) => {
         switch (mode) {
-            case 0: return 1;  // fullband only → show index 3
-            case 1: return 2;
-            case 2: return 3;  // band1, band2, fullband
-            case 3: return 3;
-            case 4: return 4;
+            case 0: return 1;  // Fullband → band[0]
+            case 1: return 2;  // 2-Band → band[1], band[2]
+            case 2: return 3;  // 3-Band → band[1], band[2], band[3]
             default: return 1;
         }
     };
 
     // Map tab position → band index
+    // mode 0 (Fullband): tabPos=0 → band[0]
+    // mode 1 (2-Band): tabPos=0→band[1], tabPos=1→band[2]
+    // mode 2 (3-Band): tabPos=0→band[1], tabPos=1→band[2], tabPos=2→band[3]
     const tabToBandIdx = (tabPos, mode) => {
-        if (mode === 0) return 3;   // fullband
-        if (mode === 2 && tabPos === 2) return 3;   // 2band+full → tab2=fullband
-        if (mode === 4 && tabPos === 3) return 3;   // 3band+full → tab3=fullband
-        return tabPos;
+        if (mode === 0) return 0;   // Fullband → band[0]
+        return tabPos + 1;          // 2-Band/3-Band → offset by 1
     };
 
     const updateBandTabs = () => {
         // Always resolve activeBand to correct band index
         if (d.mode === 0) {
-            d.activeBand = 3;  // fullband mode → always show band[3]
+            d.activeBand = 0;  // fullband mode → always show band[0]
         } else {
             const count = getBandCount(d.mode);
             // If current activeBand is out of range, reset to first visible
@@ -1260,14 +1287,17 @@ function buildDrcPanel(container) {
     };
 
     const updateCrossoverVisibility = () => {
-        const needCf = d.mode !== 0;
-        const need2Cf = d.mode === 3 || d.mode === 4;
-        const needQ = d.cfType === 4;
+        const needCf = d.mode !== 0;           // Show crossover settings when not Fullband
+        const need2Cf = d.mode === 2;          // 3-Band needs 2 crossovers
+        const isQCtrl = d.cfType === 3;        // Q-controller selected
+        const needQ1 = needCf && isQCtrl;      // Show Q(LP) when 2-Band/3-Band + Q-Ctrl
+        const needQ2 = need2Cf && isQCtrl;     // Show Q(HP) when 3-Band + Q-Ctrl
+        
         cfRow.style.display  = needCf ? '' : 'none';
         cf1Row.style.display = needCf ? '' : 'none';
         cf2Row.style.display = need2Cf ? '' : 'none';
-        qLpLabel.style.display = qLpInp.style.display = needQ ? '' : 'none';
-        qHpLabel.style.display = qHpInp.style.display = needQ ? '' : 'none';
+        qLpLabel.style.display = qLpInp.style.display = needQ1 ? '' : 'none';
+        qHpLabel.style.display = qHpInp.style.display = needQ2 ? '' : 'none';
     };
 
     updateCrossoverVisibility();
