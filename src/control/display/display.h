@@ -247,12 +247,12 @@ struct AnimationState {
     uint16_t presetSweepFinishedBg[MAX_PRESET_SLOTS];
     
     // Timing constants
-    static constexpr uint16_t FOCUS_ANIM_MS   = 200;
-    static constexpr uint16_t SWEEP_ANIM_MS   = 300;
-    static constexpr uint16_t VALUE_ANIM_MS   = 400;
-    static constexpr uint16_t PRESET_SWEEP_MS = 350;
-    static constexpr uint16_t MOD_SWEEP_MS    = 300;
-    static constexpr uint16_t SAVE_SWEEP_MS   = 400;
+    static constexpr uint16_t FOCUS_ANIM_MS   = 400;
+    static constexpr uint16_t SWEEP_ANIM_MS   = 500;
+    static constexpr uint16_t VALUE_ANIM_MS   = 700;
+    static constexpr uint16_t PRESET_SWEEP_MS = 450;
+    static constexpr uint16_t MOD_SWEEP_MS    = 400;
+    static constexpr uint16_t SAVE_SWEEP_MS   = 500;
     
     void reset() {
         prevFocusIdx = 0;

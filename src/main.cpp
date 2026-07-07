@@ -598,11 +598,15 @@ void setup() {
     );
  
     // 7.1. Init AudioSync — starts PCNT clock monitor on Core    //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)
+    #if defined(USE_MASTER_MODE)
+    g_pipelineReady = true; // Start audio task immediately for testing without AudioSync 
+    #else
     LOG_INFO("INIT", "Initializing AudioSync clock monitor...");
     g_audioSync.init(onRateChange);
     g_isclockabsent = true;
-    //g_pipelineReady = true; // Start audio task immediately for testing without AudioSync 
+    #endif
 
+    #if !defined(USE_MASTER_MODE)
     // 7.2. Create AudioSync monitor task (Core 0, Priority 5)
     xTaskCreatePinnedToCore(
         g_audioSync.monitorTask,
@@ -613,6 +617,7 @@ void setup() {
         &g_syncTaskHandle,
         SYNC_TASK_CORE
     );
+    #endif
     
     // 8. Create control task (Core 0)
     xTaskCreatePinnedToCore(

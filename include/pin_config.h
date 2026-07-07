@@ -45,10 +45,10 @@
 // ============================================================================
 
 // I2S Input/Output Full
-#define I2S_IN_OUT_BCK_PIN         17      // BCK
-#define I2S_IN_OUT_WS_PIN          16      // WS 
-#define I2S_IN_OUT_DATA_OUT_PIN    8      // DOUT
-#define I2S_IN_OUT_DATA_IN_PIN     6      // DIN
+#define I2S_IN_OUT_BCK_PIN         10      // BCK
+#define I2S_IN_OUT_WS_PIN          11      // WS 
+#define I2S_IN_OUT_DATA_OUT_PIN    13      // DOUT
+#define I2S_IN_OUT_DATA_IN_PIN     12      // DIN
 
 // I2S Output Subwoffer (WIP)
 #define I2S_SUB_BCK_PIN            I2S_IN_OUT_BCK_PIN      // BCK same as in/out full 
@@ -75,6 +75,10 @@
 #define I2S_IN_OUT_WS_PIN          25      // WS 
 #define I2S_IN_OUT_DATA_OUT_PIN    22      // DOUT
 #define I2S_IN_OUT_DATA_IN_PIN     35      // DIN
+
+#if defined(USE_MASTER_MODE)
+#define I2S_IN_OUT_MCLK_PIN 0
+#endif
 
 // I2S Output Subwoffer (WIP)
 #define I2S_SUB_BCK_PIN            I2S_IN_OUT_BCK_PIN      // BCK same as in/out full 

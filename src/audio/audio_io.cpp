@@ -111,14 +111,20 @@ void AudioIO::initI2S() {
     // i2s_new_channel with both tx + rx handles = full-duplex pair.
     i2s_chan_config_t chan_cfg = {};
     chan_cfg.id            = I2S_INPUT_OUTPUT_FULL_PORT;
-    chan_cfg.role          = I2S_ROLE_SLAVE;         // Input audio (input must drive clock)
+    #if defined(USE_MASTER_MODE)
+    chan_cfg.role          = I2S_ROLE_MASTER;
+    #else
+    chan_cfg.role          = I2S_ROLE_SLAVE; // Input audio (input must drive clock)
+    #endif
     chan_cfg.dma_desc_num  = DSP_DMA_BUFFER_COUNT;   // DMA ring buffer has 8 descriptors (buffers)
     chan_cfg.dma_frame_num = DSP_FRAME_SIZE;
     chan_cfg.auto_clear    = true;               // zero-fill TX on underrun → no noise
 
+    #ifdef USING_SUB_OUT
     i2s_chan_config_t sub_chan_cfg = chan_cfg;
     sub_chan_cfg.id        = I2S_OUTPUT_SUB_PORT;
-
+    #endif
+    
     // Pass both handles → IDF allocates a full-duplex pair on the same port
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &_txHandle, &_rxHandle));
     #ifdef USING_SUB_OUT
@@ -141,7 +147,11 @@ void AudioIO::initI2S() {
     // DIN comes from QCC5125 DOUT.
     // MCLK: PCM5102A does not need MCLK (uses BCK-derived internal clock).
     //       Set to UNUSED unless your PCM5102A board requires it.
+    #if defined(USE_MASTER_MODE)
+    std_cfg.gpio_cfg.mclk = (gpio_num_t)I2S_IN_OUT_MCLK_PIN;
+    #else
     std_cfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;
+    #endif
     std_cfg.gpio_cfg.bclk = (gpio_num_t)I2S_IN_OUT_BCK_PIN;      // shared BCLK from QCC5125
     std_cfg.gpio_cfg.ws   = (gpio_num_t)I2S_IN_OUT_WS_PIN;       // shared LRCK from QCC5125
     std_cfg.gpio_cfg.din  = (gpio_num_t)I2S_IN_OUT_DATA_IN_PIN;     // QCC5125 DOUT → ESP32 DIN
@@ -207,7 +217,11 @@ void AudioIO::initI2S() {
     i2s_set_clk(I2S_INPUT_OUTPUT_FULL_PORT, (uint32_t)_sampleRate, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_STEREO);
 */
 
+#if defined(USE_MASTER_MODE)
+    LOG_INFO(TAG, "Init: full-duplex master on I2S_NUM_0, %ld Hz", (long)_sampleRate);
+#else
     LOG_INFO(TAG, "Init: full-duplex slave on I2S_NUM_0, %ld Hz", (long)_sampleRate);
+#endif
     LOG_INFO(TAG, "  BCLK=GPIO%d  WS=GPIO%d  DIN=GPIO%d  DOUT=GPIO%d",
              I2S_IN_OUT_BCK_PIN, I2S_IN_OUT_WS_PIN, I2S_IN_OUT_DATA_IN_PIN, I2S_IN_OUT_DATA_OUT_PIN);
 }
