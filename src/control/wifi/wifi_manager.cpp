@@ -19,6 +19,8 @@ void WiFiManager::init() {
     WiFi.disconnect(true);
     delay(100);
 
+    _loadApNVS(); // load root AP override (if any) before the first _startAP()/_startSTA()
+
     if (_loadNVS()) {
         LOG_INFO(TAG, "Saved STA config found — SSID: %s", _staSsid);
         _startSTA();
@@ -105,6 +107,23 @@ void WiFiManager::setAPMode() {
     _startAP();
 }
 
+void WiFiManager::setAPMode(const char* ssid, const char* pass) {
+    LOG_INFO(TAG, "Root AP credentials updated — SSID: %s", ssid);
+    strncpy(_apSsidOverride, ssid, sizeof(_apSsidOverride) - 1);
+    _apSsidOverride[sizeof(_apSsidOverride) - 1] = '\0';
+    strncpy(_apPassOverride, pass ? pass : "", sizeof(_apPassOverride) - 1);
+    _apPassOverride[sizeof(_apPassOverride) - 1] = '\0';
+    _saveApNVS(_apSsidOverride, _apPassOverride);
+
+    // Apply immediately if currently broadcasting as AP; if in STA mode right
+    // now, the new credentials simply take effect next time AP mode starts
+    // (STA connection stays undisturbed).
+    if (_apMode) {
+        WiFi.softAPdisconnect(true);
+        _startAP();
+    }
+}
+
 // ── public: UART payload builder ─────────────────────────────────────────────
 
 void WiFiManager::buildStatusPayload(uint8_t* buf, uint16_t& len) const {
@@ -130,20 +149,37 @@ void WiFiManager::buildStatusPayload(uint8_t* buf, uint16_t& len) const {
     len = 7 + ssidLen;
 }
 
+// ── public: credential view (CMD_WIFI_GET_CONFIG) ────────────────────────────
+
+void WiFiManager::getApCredentials(char* ssidOut, size_t ssidLen, char* passOut, size_t passLen) const {
+    const char* ssid = _apSsidOverride[0] ? _apSsidOverride : WIFI_AP_SSID;
+    const char* pass = _apPassOverride[0] ? _apPassOverride : WIFI_AP_PASS;
+    if (ssidOut && ssidLen) { strncpy(ssidOut, ssid, ssidLen - 1); ssidOut[ssidLen - 1] = '\0'; }
+    if (passOut && passLen) { strncpy(passOut, pass, passLen - 1); passOut[passLen - 1] = '\0'; }
+}
+
+void WiFiManager::getStaCredentials(char* ssidOut, size_t ssidLen, char* passOut, size_t passLen) const {
+    if (ssidOut && ssidLen) { strncpy(ssidOut, _staSsid, ssidLen - 1); ssidOut[ssidLen - 1] = '\0'; }
+    if (passOut && passLen) { strncpy(passOut, _staPass, passLen - 1); passOut[passLen - 1] = '\0'; }
+}
+
 // ── private ───────────────────────────────────────────────────────────────────
 
 void WiFiManager::_startAP() {
     _apMode = true;
     _ready  = false;
 
+    char ssid[33] = {}, pass[65] = {};
+    getApCredentials(ssid, sizeof(ssid), pass, sizeof(pass));
+
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(WIFI_AP_IP, WIFI_AP_GATEWAY, WIFI_AP_SUBNET);
 
-    bool ok = WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS);
+    bool ok = WiFi.softAP(ssid, pass);
     if (ok) {
         WiFi.setTxPower(WIFI_POWER_20dBm); // Max power for best range/reception
         _ready  = true;
-        LOG_INFO(TAG, "AP started — SSID: %s  IP: %s, or (esp32-dsp.local)", WIFI_AP_SSID,
+        LOG_INFO(TAG, "AP started — SSID: %s  IP: %s, or (esp32-dsp.local)", ssid,
                  WiFi.softAPIP().toString().c_str());
         MDNS.end(); // End any previous mDNS instance (e.g. from failed STA attempt) before starting a new one
         if (MDNS.begin("esp32-dsp")) {
@@ -234,4 +270,24 @@ void WiFiManager::_clearNVS() {
     _prefs.clear();
     _prefs.end();
     LOG_INFO(TAG, "WiFi config cleared from NVS");
+}
+
+// ── private: root AP override persistence ────────────────────────────────────
+// Stored in its own "wifi_ap_cfg" namespace (separate from STA's "wifi_cfg")
+// so that _clearNVS()'s _prefs.clear() — called by setAPMode()/"forget STA" —
+// can never wipe out the user's custom AP name/password as a side effect.
+
+void WiFiManager::_loadApNVS() {
+    _prefs.begin(WIFI_AP_NVS_NS, /*readOnly=*/true);
+    _prefs.getString("ap_ssid", _apSsidOverride, sizeof(_apSsidOverride));
+    _prefs.getString("ap_pass", _apPassOverride, sizeof(_apPassOverride));
+    _prefs.end();
+}
+
+void WiFiManager::_saveApNVS(const char* ssid, const char* pass) {
+    _prefs.begin(WIFI_AP_NVS_NS, /*readOnly=*/false);
+    _prefs.putString("ap_ssid", ssid);
+    _prefs.putString("ap_pass", pass);
+    _prefs.end();
+    LOG_INFO(TAG, "Root AP override saved to NVS");
 }

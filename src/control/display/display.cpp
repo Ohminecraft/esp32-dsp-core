@@ -481,6 +481,10 @@ void Display::setSettings(SettingsManager* settingsMgr) {
     }
 }
 
+void Display::setWifiManager(WiFiManager* wifiMgr) {
+    _wifiMgr = wifiMgr;
+}
+
 void Display::pushKeyboard(float* target, float minVal, float maxVal, bool allowDot, ScreenID returnTo) {
     _kb.target = target; _kb.minVal = minVal; _kb.maxVal = maxVal;
     _kb.allowDot = allowDot; _kb.returnScreen = returnTo;
@@ -902,6 +906,12 @@ void Display::handleEncoder(EncoderEvent enc) {
                 wifiOnOffTriggered = true;
                 _dirty = true; return;
             }
+            // WiFi Info nav button — only present (at index 1) once WiFi is enabled.
+            // Condition must stay identical to getItemCount()/drawSettings().
+            if (_wifiMgr && _settingsWifi && _focusIdx == 1) {
+                pushScreen(ScreenID::WIFI_INFO);
+                _dirty = true; return;
+            }
             // Brightness and battery items - toggle edit mode with sweep animation
             toggleEditMode();
             _dirty = true; return;
@@ -915,6 +925,19 @@ void Display::handleEncoder(EncoderEvent enc) {
                     _presetTargetSlot = _focusIdx;
                     _presetMgr->loadPreset(_presetTargetSlot, *_pipeline);
                     _presetMgr->saveCurrentSlotIndex(_presetTargetSlot);
+                    VolumeControl& pre = _pipeline->getPreGain();
+                    float db = -32.0f + _mmparam.vol * 32.0f / 32.0f;
+                    pre.setGainDb(FLOAT_TO_DB_Q8(db));
+                    pre.setMute(_mmparam.vol <= 0);
+                    ParametricEQ& preEq = _pipeline->getPreEq();
+                    const int8_t toneParams[3] = { _mmparam.bass, _mmparam.mid, _mmparam.treble };
+                    for (uint8_t i = 0; i < 3; i++) {
+                        EQFilterParams p = preEq.getBandParams(i);
+                        float gainDb = ((float)toneParams[i] / 100.0f) * (_maxRangeParam * 2.0f) - _maxRangeParam;
+                        p.gain = FLOAT_TO_DB_Q8(gainDb);
+                        preEq.setBand(i, p);
+                    }
+
                     // Preset sweep: old slot exit → new slot entry
                     if (oldSlot != (int8_t)_focusIdx) {
                         _anim.presetPrevSlot = oldSlot;
@@ -1041,14 +1064,24 @@ void Display::onConfirm() {
     switch (s) {
     case ScreenID::SETTINGS: {
         const uint8_t backIdx = getItemCount() - 1;
+        const bool wifiInfoAvailable = (_wifiMgr != nullptr) && _settingsWifi;
+        const uint8_t resetIdx = backIdx - 1; // last battery item, only meaningful when battery present
+
         if (_focusIdx == backIdx) {
             popScreen();
-        } else if (_battery && _battery->isPresent() && _focusIdx == 6) {
+        } else if (wifiInfoAvailable && _focusIdx == 1) {
+            pushScreen(ScreenID::WIFI_INFO);
+        } else if (_battery && _battery->isPresent() && _focusIdx == resetIdx) {
             // Reset coulomb counter (triggered by hold via SW_HOLD handler)
             _battery->resetCoulombCounter();
         } else {
             toggleEditMode();
         }
+        break;
+    }
+    case ScreenID::WIFI_INFO: {
+        // Only focusable item is BACK
+        popScreen();
         break;
     }
     case ScreenID::EFFECT_COMMON: {
@@ -1444,8 +1477,12 @@ void Display::editDelta(int8_t dir) {
         return;
     }
     if (s == ScreenID::SETTINGS) {
-        // Item 1: Brightness (0-255)
-        if (_focusIdx == 1 && _settingsMgr) {
+        const bool wifiInfoAvailable = (_wifiMgr != nullptr) && _settingsWifi;
+        const uint8_t brightnessIdx = wifiInfoAvailable ? 2 : 1;
+        const uint8_t battBaseIdx   = brightnessIdx + 1; // cellS; mAh/shunt follow +1/+2
+
+        // Brightness (0-255)
+        if (_focusIdx == brightnessIdx && _settingsMgr) {
             uint8_t brightness = _settingsMgr->getBrightness();
             int16_t newBrightness = (int16_t)brightness + dir * 5;
             newBrightness = constrain(newBrightness, 20, 255);
@@ -1456,29 +1493,31 @@ void Display::editDelta(int8_t dir) {
             #endif
             _dirty = true; return;
         }
-        // Battery items start at index 2 (if present)
+        // Battery items (if present): cellS, cellMah, shuntMOhm
         else if (_battery && _battery->isPresent()) {
             BatteryConfig& cfg = _battery->editConfig();
-            if (_focusIdx == 2) {
+            if (_focusIdx == battBaseIdx) {
                 // Cell count 1S–6S
                 int8_t cs = (int8_t)cfg.cellS + dir;
                 if (cs < 1) cs = 6;
                 if (cs > 6) cs = 1;
                 cfg.cellS = (uint8_t)cs;
                 _battery->applyConfig();
-            } else if (_focusIdx == 4) {
+            } else if (_focusIdx == battBaseIdx + 1) {
                 // Cell mAh: step 50 mAh, range 100–20000
                 int32_t mah = (int32_t)cfg.cellMah + dir * 50;
                 mah = constrain(mah, 100, 20000);
                 cfg.cellMah = (uint32_t)mah;
                 _battery->applyConfig();
-            } else if (_focusIdx == 5) {
+            } else if (_focusIdx == battBaseIdx + 2) {
                 // Shunt mΩ: step 1 mΩ, range 1–1000
                 int32_t shunt = (int32_t)cfg.shuntMOhm + dir;
                 shunt = constrain(shunt, 1, 1000);
                 cfg.shuntMOhm = (uint32_t)shunt;
                 _battery->applyConfig();
             }
+            // battBaseIdx+3 (Reset button) has no editDelta action on purpose —
+            // it's a hold-to-confirm nav button, not an adjustable value.
         }
         _dirty = true; return;
     }
@@ -1491,13 +1530,15 @@ uint8_t Display::getItemCount() const {
     case ScreenID::SPLASH:    return 0;
     case ScreenID::MAIN_MENU: return 5;   // 0=tab bar, 1-4=items in active tab
     case ScreenID::SETTINGS: {
-        // 0=WiFi, 1=Brightness,
-        // then battery items (if present): 2=cellS, 3=cellMah, 4=shuntMOhm, 5=resetCoulomb
+        // 0=WiFi, [1=WiFi Info, only when WiFi enabled], then Brightness,
+        // then battery items (if present): cellS, cellMah, shuntMOhm, resetCoulomb
         // Last = BACK.
         uint8_t n = 2; // WiFi + Brightness
+        if (_wifiMgr && _settingsWifi) n += 1; // WiFi Info nav button
         if (_battery && _battery->isPresent()) n += 4; // cellS + mAh + shunt + reset
         return n + 1; // +1 for BACK
     }
+    case ScreenID::WIFI_INFO: return 1; // only BACK is focusable — everything else is read-only info
     case ScreenID::DSP_LIST:  return MAX_PRESET_SLOTS + 1 + MODULE_COUNT + 1;
     case ScreenID::EFFECT_COMMON: { 
         NavEntry nav = _navStack[_navTop];
@@ -1573,6 +1614,7 @@ void Display::draw() {
     case ScreenID::SPLASH: drawSplash(); break;
     case ScreenID::MAIN_MENU: drawMainMenu(); break;
     case ScreenID::SETTINGS: drawSettings(); break;
+    case ScreenID::WIFI_INFO: drawWifiInfo(); break;
     case ScreenID::DSP_LIST: drawDspList(); break;
     case ScreenID::EFFECT_COMMON: drawEffectCommon(); break;
     case ScreenID::EFFECT_EQ_COMMON: drawEffectEqCommon(); break;
@@ -2065,14 +2107,16 @@ void Display::drawSettings() {
     d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
 
      // ── Settings item list ────────────────────────────────────────────────────
-    // focusIdx:
-    //   0  = WiFi switch
-    //   1  = Trigger switch
-    //   2  = Cell count   (1S–6S)    — battery
-    //   3  = Cell mAh                — battery
-    //   4  = Shunt mΩ               — battery
-    //   5  = Reset coulomb counter   — battery nav button
-    //   6  = BACK
+    // focusIdx (dynamic — shifts depending on which optional sections show):
+    //   0            = WiFi switch
+    //   [1]          = WiFi Info nav button   — only when WiFi is enabled
+    //   brightnessIdx = Brightness
+    //   [+0..+3]     = Cell count / Cell mAh / Shunt mΩ / Reset coulomb — battery only
+    //   last         = BACK
+
+    const bool wifiInfoAvailable = (_wifiMgr != nullptr) && _settingsWifi;
+    const uint8_t brightnessIdx = wifiInfoAvailable ? 2 : 1;
+    const uint8_t battBaseIdx   = brightnessIdx + 1; // cellS idx; mAh/shunt/reset follow +1/+2/+3
 
     int16_t y = HEADER_H + 4;
 
@@ -2088,9 +2132,16 @@ void Display::drawSettings() {
     y += ROW_H;
     #endif
 
+    // WiFi Info nav button — only shown once WiFi is turned on
+    if (wifiInfoAvailable) {
+        drawNavButton(CONTENT_X, y, CONTENT_W, ROW_H - 2, "WiFi Info >",
+                      _focusIdx == 1, false, 0.0f);
+        y += ROW_H;
+    }
+
     // Brightness slider
     {
-        bool focused = (_focusIdx == 1);
+        bool focused = (_focusIdx == brightnessIdx);
         uint8_t brightness = _settingsMgr ? _settingsMgr->getBrightness() : 255;
         drawSliderRow(CONTENT_X, y, CONTENT_W, "Brightness", (float)brightness, 20, 255, "", focused, focused && _editMode, 0);
     }
@@ -2109,7 +2160,7 @@ void Display::drawSettings() {
 
         // Cell count selector (1S–6S)
         {
-            bool focused = (_focusIdx == 2);
+            bool focused = (_focusIdx == battBaseIdx);
             uint16_t bg, border, textCol;
             getFocusColors(focused, bg, border, textCol);
             d.fillRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, bg);
@@ -2140,7 +2191,7 @@ void Display::drawSettings() {
 
         // Cell mAh
         {
-            bool focused = (_focusIdx == 3);
+            bool focused = (_focusIdx == battBaseIdx + 1);
             uint16_t bg, border, textCol;
             getFocusColors(focused, bg, border, textCol);
             d.fillRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, bg);
@@ -2158,7 +2209,7 @@ void Display::drawSettings() {
 
         // Shunt mΩ
         {
-            bool focused = (_focusIdx == 4);
+            bool focused = (_focusIdx == battBaseIdx + 2);
             uint16_t bg, border, textCol;
             getFocusColors(focused, bg, border, textCol);
             d.fillRect(CONTENT_X, y, CONTENT_W, ROW_H - 2, bg);
@@ -2176,13 +2227,14 @@ void Display::drawSettings() {
 
         // Reset coulomb counter button
         {
-            float holdFrac = (_holdTracking && _focusIdx == 5)
+            uint8_t resetIdx = battBaseIdx + 3;
+            float holdFrac = (_holdTracking && _focusIdx == resetIdx)
                              ? (float)(millis() - _focusHoldStartMs) / 2000.0f
                              : 0.0f;
             drawNavButton(CONTENT_X, y, CONTENT_W, ROW_H - 2,
                           "Reset Coulomb Counter (hold)",
-                          _focusIdx == 5,
-                          _holdTracking && _focusIdx == 5, holdFrac);
+                          _focusIdx == resetIdx,
+                          _holdTracking && _focusIdx == resetIdx, holdFrac);
         }
         y += ROW_H;
     } else {
@@ -2195,6 +2247,77 @@ void Display::drawSettings() {
     }
 
     // BACK button (always last)
+    const uint8_t backIdx = getItemCount() - 1;
+    float holdFrac = (_holdTracking && _focusIdx == backIdx)
+                     ? (float)(millis() - _focusHoldStartMs) / AUTO_CONFIRM_MS
+                     : 0.0f;
+    drawNavButton(CONTENT_X, FOOTER_Y, CONTENT_W, NAV_BTN_H, "BACK",
+                  _focusIdx == backIdx,
+                  _holdTracking && _focusIdx == backIdx, holdFrac);
+}
+
+void Display::drawWifiInfo() {
+    TFT_eSprite& d = _spr;
+
+    d.setTextDatum(ML_DATUM);
+    d.setTextColor(Color::ACCENT, Color::BG);
+    d.setTextSize(1);
+    d.drawString("WIFI INFO", CONTENT_X, 10);
+    d.drawFastHLine(CONTENT_X, HEADER_H, CONTENT_W, Color::BORDER);
+
+    constexpr int16_t LINE_H = 16;
+    constexpr int16_t VALUE_X = CONTENT_X + 70;
+    int16_t y = HEADER_H + 10;
+
+    auto drawLine = [&](const char* label, const char* value, uint16_t valueColor) {
+        d.setTextDatum(ML_DATUM);
+        d.setTextColor(Color::TEXT_DIM, Color::BG);
+        d.setTextSize(1);
+        d.drawString(label, CONTENT_X + 4, y);
+        d.setTextColor(valueColor, Color::BG);
+        d.drawString(value, VALUE_X, y);
+        y += LINE_H;
+    };
+    auto drawSectionHeader = [&](const char* title) {
+        y += 5;
+        d.drawFastHLine(CONTENT_X, y, CONTENT_W, Color::BORDER);
+        y += 9;
+        d.setTextDatum(ML_DATUM);
+        d.setTextColor(Color::TEXT_DIM, Color::BG);
+        d.setTextSize(1);
+        d.drawString(title, CONTENT_X + 2, y);
+        y += LINE_H;
+    };
+
+    if (!_wifiMgr) {
+        d.setTextColor(Color::TEXT_DIM, Color::BG);
+        d.drawString("WiFi manager not available", CONTENT_X + 4, y);
+    } else {
+        bool apMode = _wifiMgr->isAPMode();
+        drawLine("Mode:", apMode ? "Access Point" : "Station", apMode ? Color::YELLOW : Color::GREEN);
+        drawLine("IP:", _wifiMgr->getIP().toString().c_str(), Color::ACCENT);
+        drawLine("mDNS:", "esp32-dsp.local", Color::ACCENT);
+
+        drawSectionHeader("ACCESS POINT (phone connects here)");
+        char apSsid[33] = {}, apPass[65] = {};
+        _wifiMgr->getApCredentials(apSsid, sizeof(apSsid), apPass, sizeof(apPass));
+        drawLine("SSID:", apSsid, Color::TEXT);
+        drawLine("Pass:", apPass[0] ? apPass : "(open network)", Color::TEXT);
+
+        drawSectionHeader("SAVED NETWORK (STA)");
+        if (_wifiMgr->hasStaCredentials()) {
+            char staSsid[33] = {}, staPass[65] = {};
+            _wifiMgr->getStaCredentials(staSsid, sizeof(staSsid), staPass, sizeof(staPass));
+            drawLine("SSID:", staSsid, Color::TEXT);
+            drawLine("Pass:", staPass, Color::TEXT);
+        } else {
+            d.setTextColor(Color::TEXT_DIM, Color::BG);
+            d.drawString("(none saved)", CONTENT_X + 4, y);
+            y += LINE_H;
+        }
+    }
+
+    // BACK button (only focusable item on this screen)
     const uint8_t backIdx = getItemCount() - 1;
     float holdFrac = (_holdTracking && _focusIdx == backIdx)
                      ? (float)(millis() - _focusHoldStartMs) / AUTO_CONFIRM_MS

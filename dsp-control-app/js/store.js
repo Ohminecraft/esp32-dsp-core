@@ -147,7 +147,26 @@ class Store extends EventEmitter {
             ssid: '',
             ip: '',
             rssi: 0,
-            scanResults: []
+            scanResults: [],
+            // Saved credentials (populated by WIFI_GET_CONFIG) — for "view SSID/password" UI
+            apSsid: '',
+            apPass: '',
+            hasSavedSta: false,
+            staSsid: '',
+            staPass: '',
+            configLoaded: false // true once a WIFI_GET_CONFIG reply has actually arrived
+        };
+
+        // Battery (populated by REPORT_BATTERY)
+        this.battery = {
+            present: false,
+            checked: false,  // true once any REPORT_BATTERY has arrived (present or not)
+            state: 'unknown', // 'normal' | 'warning' | 'critical' | 'charging'
+            soc: 0,           // 0..1
+            busVoltage: 0,
+            currentMa: 0,
+            consumedMah: 0,
+            totalMah: 0
         };
 
         // Selected module (for right panel)
@@ -350,7 +369,39 @@ class Store extends EventEmitter {
     setConnected(connected, portPath = '') {
         this.system.connected = connected;
         this.system.portPath = portPath;
+        if (!connected) {
+            this.wifi.configLoaded = false;
+            this.battery.present = false;
+            this.battery.checked = false;
+        }
         this.emit('connection:changed', connected);
+    }
+
+    // ─── WiFi Config (AP/STA credentials) ─────────────────────────
+
+    updateWifiConfig({ apSsid, apPass, hasSavedSta, staSsid, staPass }) {
+        this.wifi.apSsid = apSsid ?? this.wifi.apSsid;
+        this.wifi.apPass = apPass ?? this.wifi.apPass;
+        this.wifi.hasSavedSta = !!hasSavedSta;
+        this.wifi.staSsid = staSsid ?? '';
+        this.wifi.staPass = staPass ?? '';
+        this.wifi.configLoaded = true;
+        this.emit('wifi:config-updated');
+    }
+
+    clearStaConfig() {
+        this.wifi.hasSavedSta = false;
+        this.wifi.staSsid = '';
+        this.wifi.staPass = '';
+        this.emit('wifi:config-updated');
+    }
+
+    // ─── Battery ────────────────────────────────────────────────────
+
+    updateBattery(data) {
+        Object.assign(this.battery, data);
+        this.battery.checked = true;
+        this.emit('battery:updated');
     }
 }
 

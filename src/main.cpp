@@ -460,6 +460,12 @@ void IRAM_ATTR controlTask(void* param) {
         // Smooth RGB LED update (Core 0)
         g_statusLED.update(s_usage, s_heapPct, g_currentSampleRate, g_isclockabsent);
 
+        #if defined(USING_BATTERY_MON) && !defined(USING_DISPLAY)
+            if (g_battery && g_battery.isPresent()) {
+                g_battery.update();
+            }
+        #endif
+
         vTaskDelay(1);
     }
 }
@@ -558,22 +564,25 @@ void setup() {
         g_presetMgr.loadPreset(defaultSlot, g_pipeline);
     }
 
-    #ifdef USING_DISPLAY
+    // 5. Init battery monitor
+    #ifdef USING_BATTERY_MON
         g_battery.begin(BATT_SDA, BATT_SCL);
+        g_paramCtrl.setBatteryMonitor(&g_battery);
         g_battery.onCritical([]{ g_userShutdownRequest = true; });
+    #endif
+
+    // 5.1 Load Main Menu Param
+    #if defined(USING_DISPLAY) && !defined(CONFIG_IDF_TARGET_ESP32)
         g_display.init();
         g_display.setBattery(&g_battery);
+        g_display.setWifiManager(&g_wifiMgr);
+        g_display.setPipeline(&g_pipeline, &g_presetMgr);
+        g_display.setSettings(&g_settingsMgr);
         g_encoder.init(ENCODER_A_PIN, ENCODER_B_PIN, ENCODER_BTN_PIN);
     #endif
 
-    // 5. Load Main Menu Param
-    #ifdef USING_DISPLAY
-        g_display.setPipeline(&g_pipeline, &g_presetMgr);
-        g_display.setSettings(&g_settingsMgr);
-    #endif
-
-    // 5.1 Start Display Task
-    #ifdef USING_DISPLAY
+    // 5.2 Start Display Task
+    #if defined(USING_DISPLAY) && !defined(CONFIG_IDF_TARGET_ESP32) // Force Turn off display module when using esp32
     xTaskCreatePinnedToCore(
         displayTask,
         "DisplayTask",

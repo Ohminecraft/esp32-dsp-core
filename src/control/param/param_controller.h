@@ -11,6 +11,7 @@
 #include "preset_manager.h"
 #include "../uart_protocol.h"
 #include "../wifi/wifi_manager.h"
+#include "../display/battery_monitor.h"
 
 extern volatile uint16_t s_cpu_usage;
 extern volatile uint8_t  s_heapPct;
@@ -24,6 +25,9 @@ public:
 
     void setWifiManager(WiFiManager* wifiMgr);
 
+    /** Wire up the battery monitor instance so CMD_GET_BATTERY_STATUS can report on it. */
+    void setBatteryMonitor(BatteryMonitor* batteryMgr);
+
     void handleCommand(const UartCommand& cmd);
 
 private:
@@ -31,6 +35,7 @@ private:
     UartProtocol*  _uart;
     PresetManager* _presetMgr;
     WiFiManager*   _wifiMgr = nullptr;
+    BatteryMonitor* _batteryMgr = nullptr;
 
     // ── Existing handlers ─────────────────────────────────────────────────────
     void handleEnableDisable(const UartCommand& cmd, bool enable);
@@ -42,6 +47,14 @@ private:
     void handleWifiSetSTA(const UartCommand& cmd);
     void handleWifiSetAP(const UartCommand& cmd);
     void handleWifiGetStatus(const UartCommand& cmd);
+
+    // ── WiFi config view/edit (view SSID+pass, change root AP, forget STA) ────
+    void handleWifiGetConfig(const UartCommand& cmd);
+    void handleWifiSetApConfig(const UartCommand& cmd);
+    void handleWifiClearSta(const UartCommand& cmd);
+
+    // ── Battery ────────────────────────────────────────────────────────────────
+    void handleGetBatteryStatus(const UartCommand& cmd);
 
     // ── ISF handlers ──────────────────────────────────────────────────────────
 

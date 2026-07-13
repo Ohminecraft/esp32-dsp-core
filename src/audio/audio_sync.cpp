@@ -41,10 +41,9 @@ static const char* TAG = "AudioSync";
 static constexpr int16_t PCNT_HIGH_LIMIT = 20000;
 static constexpr int16_t PCNT_LOW_LIMIT  = -1;
 
-// Rate tolerance: ±6%
-static constexpr float RATE_TOLERANCE = 0.06f;
+static constexpr float RATE_TOLERANCE = 0.03f;
 
-static constexpr int   RATE_CONFIRM_WINDOWS = 2;
+static constexpr int   RATE_CONFIRM_WINDOWS = 3;
 
 // ---------------------------------------------------------------------------
 // Static members
@@ -71,7 +70,7 @@ static int        pendingCount = 0;
 // PCNT overflow ISR
 // ---------------------------------------------------------------------------
 
-static bool pcntOverflowCb(pcnt_unit_handle_t,
+static bool IRAM_ATTR pcntOverflowCb(pcnt_unit_handle_t,
                                       const pcnt_watch_event_data_t*,
                                       void*) {
     // portENTER_CRITICAL_ISR is safe to call from IRAM ISR context
@@ -207,13 +206,17 @@ ClockState AudioSync::classifyRate(uint32_t measuredHz) {
         { 96000, ClockState::RATE_96000 },
     };
 
+    ClockState best     = ClockState::RATE_UNKNOWN;
+    float      bestDiff = RATE_TOLERANCE;
     for (auto& entry : table) {
         float ratio = (float)measuredHz / (float)entry.nominal;
-        if (fabsf(ratio - 1.0f) <= RATE_TOLERANCE) {
-            return entry.state;
+        float diff  = fabsf(ratio - 1.0f);
+        if (diff <= bestDiff) {
+            bestDiff = diff;
+            best     = entry.state;
         }
     }
-    return ClockState::RATE_UNKNOWN;
+    return best;
 }
 
 // Returns the exact nominal rate to pass to reinit — never the raw measured value.

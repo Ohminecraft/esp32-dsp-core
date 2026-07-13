@@ -7,6 +7,7 @@
 #define PRESET_MANAGER_H
 
 #include <nvs.h>
+#include <nvs_flash.h>
 #include "config.h"
 #include "../../effects/dsp_pipeline.h"
 

@@ -31,11 +31,12 @@
 #if defined(CONFIG_IDF_TARGET_ESP32) // ESP32 can handle max 256 frame size because out of heap
 #define DSP_FRAME_SIZE          256     // Samples per frame per channel
 #else 
-#define DSP_FRAME_SIZE          384 
+#define DSP_FRAME_SIZE          256 
 #endif
 #define DSP_FRAME_SAMPLES       (DSP_FRAME_SIZE * DSP_NUM_CHANNELS)
 
-#//define USING_SUB_OUT               // Enable separate sub out channel on I2S_NUM_0 (see txSubHandle in AudioIO) - requires wiring to separate DAC input and additional I2S channel init
+//define USING_SUB_OUT               // Enable separate sub out channel on I2S_NUM_0 (see txSubHandle in AudioIO) - requires wiring to separate DAC input and additional I2S channel init
+//#define USE_MASTER_MODE
 
 // ============================================================================
 // EQ Configuration
@@ -101,10 +102,13 @@
 
 // WiFi configuration commands
 
-#define CMD_WIFI_SCAN       0x10  // ESP32 scans WiFi, returns SSID list via ACK frames
-#define CMD_WIFI_SET_STA    0x11  // Data: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) + ip(4B opt)
-#define CMD_WIFI_SET_AP     0x12  // No data — switch back to AP mode
-#define CMD_WIFI_GET_STATUS 0x13  // No data — reply with mode/IP/SSID/RSSI
+#define CMD_WIFI_SCAN          0x10  // ESP32 scans WiFi, returns SSID list via ACK frames
+#define CMD_WIFI_SET_STA       0x11  // Data: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) + ip(4B opt)
+#define CMD_WIFI_SET_AP        0x12  // No data — switch back to AP mode
+#define CMD_WIFI_GET_STATUS    0x13  // No data — reply with mode/IP/SSID/RSSI
+#define CMD_WIFI_GET_CONFIG    0x14
+#define CMD_WIFI_SET_AP_CONFIG 0x15
+#define CMD_WIFI_CLEAR_STA     0x16
 
 // reporting commands:
 
@@ -120,9 +124,11 @@
 #define CMD_REPORT_COMPANDER           0x47
 #define CMD_REPORT_DRC                 0x48
 #define CMD_GET_MODULE_METER           0x49
+#define CMD_REPORT_BATTERY             0x4D
 
 // App-level commands (not direct DSP control, more for user interaction)
 
+#define CMD_GET_BATTERY_STATUS         0x4C
 #define CMD_GET_CURRENT_PRESET_INDEX   0x4A
 #define CMD_SAVE_PRESET                0x08
 #define CMD_LOAD_PRESET                0x09
@@ -172,7 +178,7 @@
 // Preset Configuration
 // ============================================================================
 
-#define MAX_PRESET_SLOTS        3
+#define MAX_PRESET_SLOTS        5
 
 // ============================================================================
 // AudioSync Configuration
@@ -186,11 +192,10 @@
 // ============================================================================
 
 #define USING_DISPLAY
+#define USING_BATTERY_MON
 #define DISABLE_PERF_LOG
 //#define ONLY_SERIAL
 #define USE_BUILTIN_SERIAL
-
-//#define USE_MASTER_MODE
 
 #define AUTO_SHUTDONW_TIMER_MS 1800000 // 30min
 #define SHUTDOWN_COUNTDOWN_MS 5000 // 5s

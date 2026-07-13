@@ -233,6 +233,11 @@ static void saveIsfInstance(ISFInstanceData& data,
 // ─────────────────────────────────────────────────────────────────────────────
 
 void PresetManager::init() {
+    esp_err_t err = nvs_flash_init_partition("nvs2");
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase_partition("nvs2"));
+        err = nvs_flash_init_partition("nvs2");
+    }
     for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
         if (!hasPreset(i)) saveDefault(i);
     }
@@ -369,7 +374,7 @@ void PresetManager::saveDefault(uint8_t slot) {
 
     String key = getSlotKey(slot);
     nvs_handle_t nvssave;
-    nvs_open(key.c_str(), NVS_READWRITE, &nvssave);
+    nvs_open_from_partition("nvs2", key.c_str(), NVS_READWRITE, &nvssave);
     nvs_set_blob(nvssave, "blob", &pd, sizeof(PresetData));
     nvs_commit(nvssave);
     nvs_close(nvssave);
@@ -487,7 +492,7 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
 
     String key = getSlotKey(slot);
     nvs_handle_t nvssave;
-    nvs_open(key.c_str(), NVS_READWRITE, &nvssave);
+    nvs_open_from_partition("nvs2", key.c_str(), NVS_READWRITE, &nvssave);
     nvs_set_blob(nvssave, "blob", &pd, sizeof(PresetData));
     nvs_commit(nvssave);
     nvs_close(nvssave);
@@ -508,7 +513,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
 
     String key = getSlotKey(slot);
     nvs_handle_t nvsload;
-    esp_err_t openErr = nvs_open(key.c_str(), NVS_READONLY, &nvsload);
+    esp_err_t openErr = nvs_open_from_partition("nvs2", key.c_str(), NVS_READONLY, &nvsload);
     if (openErr != ESP_OK) {
         LOG_WARN(TAG, "Slot %d nvs_open failed (err=%d). Re-initializing.", slot, openErr);
         saveDefault(slot);
@@ -686,12 +691,12 @@ bool PresetManager::hasPreset(uint8_t slot) {
     String key = getSlotKey(slot);
     size_t len;
     nvs_handle_t nvsload;
-    nvs_open(key.c_str(), NVS_READONLY, &nvsload);
+    nvs_open_from_partition("nvs2", key.c_str(), NVS_READONLY, &nvsload);
     nvs_get_blob(nvsload, "blob", NULL, &len);
     nvs_close(nvsload);
     return len == sizeof(PresetData);
 }
 
 String PresetManager::getSlotKey(uint8_t slot) {
-    return "dsp_s" + String(slot);
+    return "preset_" + String(slot);
 }

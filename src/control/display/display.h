@@ -27,6 +27,7 @@
 #include "../param/preset_manager.h"
 #include "../param/settings_manager.h"
 #include "battery_monitor.h"
+#include "../wifi/wifi_manager.h"
 #include "config.h" // For MAX_PRESET_SLOTS and DSP_MODULE_COUNT
 
 extern volatile bool g_userShutdownRequest;
@@ -86,6 +87,7 @@ enum class ScreenID : uint8_t {
     DRC_BAND_SELECT,
     DRC_BAND_PARAMS,
     KEYBOARD,
+    WIFI_INFO,
 };
 
 // ─── Module IDs mirrored for display (subset, add more as needed) ──────────────
@@ -325,6 +327,13 @@ public:
      */
     void setSettings(SettingsManager* settingsMgr);
 
+    /**
+     * Inject WiFi manager pointer after init — lets the Settings screen show
+     * the current root AP SSID/password and saved STA network (read-only;
+     * editing is done from app.js).
+     */
+    void setWifiManager(WiFiManager* wifiMgr);
+
     // ── Keyboard helper ───────────────────────────────────────────────────────
     void pushKeyboard(float* target, float minVal, float maxVal, bool allowDot, ScreenID returnTo);
 
@@ -386,6 +395,7 @@ private:
     DspPipeline*     _pipeline    = nullptr;
     PresetManager*   _presetMgr   = nullptr;
     SettingsManager* _settingsMgr = nullptr;
+    WiFiManager*     _wifiMgr     = nullptr;
 
     // ── Navigation ────────────────────────────────────────────────────────────
     void pushScreen(ScreenID s, DisplayModuleID mod = DisplayModuleID::NONE,
@@ -405,6 +415,7 @@ private:
     void drawSplash();
     void drawMainMenu();
     void drawSettings();
+    void drawWifiInfo();
     void drawDspList();
     void drawPresetSlots();
     void drawEffectCommon();

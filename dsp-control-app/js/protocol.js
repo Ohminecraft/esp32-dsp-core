@@ -47,6 +47,9 @@ export const CMD = {
     WIFI_SET_STA: 0x11,
     WIFI_SET_AP: 0x12,
     WIFI_GET_STATUS: 0x13,
+    WIFI_GET_CONFIG: 0x14,      // Request saved AP + STA credentials (view SSID/pass)
+    WIFI_SET_AP_CONFIG: 0x15,   // Change the root/base AP's SSID + password
+    WIFI_CLEAR_STA: 0x16,       // Forget previously-connected STA network
     GET_REPORT_CPU_USAGE: 0x39, // Request CPU usage report
     SEND_REPORT_CPU_USAGE: 0x40,
     REPORT_ISF: 0x41,       // Push ISF state
@@ -61,6 +64,8 @@ export const CMD = {
     REPORT_COMPANDER: 0x47, // envLinear(f32, 0..1) + gainDb(f32)
     REPORT_DRC:       0x48, // gainDb(f32) × 4 bands
     GET_MODULE_METER: 0x49, // Request one meter report; data[0]=moduleId
+    GET_BATTERY_STATUS: 0x4C, // Request battery status report
+    REPORT_BATTERY: 0x4D,      // Push battery status (SoC, mAh, voltage, current, state)
     ACK_RESPONSE: 0xFE,
     ERROR: 0xFF
 };
@@ -311,6 +316,18 @@ export function buildGetIsfState() {
 // ─── WiFi Builders ──────────────────────────────────────────────────────
 // (Unaffected by the numeric-value unification — SSIDs/passwords are text,
 //  IP/RSSI/enc flags are already plain single-purpose bytes.)
+//
+// WIFI_GET_CONFIG response payload (firmware → app), MODULE.SYSTEM:
+//   apSsidLen(1B)  + apSsid(NB)
+//   apPassLen(1B)  + apPass(MB)
+//   hasSta(1B)     — 0 = no STA network saved, 1 = saved
+//   staSsidLen(1B) + staSsid(NB)   (only meaningful if hasSta === 1)
+//   staPassLen(1B) + staPass(MB)   (only meaningful if hasSta === 1)
+//
+// REPORT_BATTERY payload (firmware → app), MODULE.SYSTEM, 22 bytes:
+//   present(1B) + state(1B) + soc(f32, 0..1) + busVoltage(f32)
+//   + currentMa(f32) + consumedMah(f32) + totalMah(f32)
+//   state: 0=NORMAL, 1=WARNING, 2=CRITICAL, 3=CHARGING
 
 export function buildWifiScan() { return buildFrame(CMD.WIFI_SCAN, MODULE.SYSTEM); }
 
@@ -337,6 +354,31 @@ export function buildWifiSetSTA(ssid, pass, staticIpStr = "") {
 
 export function buildWifiSetAP() { return buildFrame(CMD.WIFI_SET_AP, MODULE.SYSTEM); }
 export function buildWifiGetStatus() { return buildFrame(CMD.WIFI_GET_STATUS, MODULE.SYSTEM); }
+
+/** Request the saved AP (root) + STA credentials, for "view SSID/password" UI. */
+export function buildWifiGetConfig() { return buildFrame(CMD.WIFI_GET_CONFIG, MODULE.SYSTEM); }
+
+/**
+ * Change the root/base AP's SSID + password (the network the phone connects
+ * to directly). Firmware persists this and applies it immediately if
+ * currently in AP mode.
+ */
+export function buildWifiSetApConfig(ssid, pass) {
+    const enc = new TextEncoder();
+    const ssidBytes = enc.encode(ssid);
+    const passBytes = enc.encode(pass);
+    const data = [
+        Math.min(ssidBytes.length, 32), ...ssidBytes.slice(0, 32),
+        Math.min(passBytes.length, 64), ...passBytes.slice(0, 64)
+    ];
+    return buildFrame(CMD.WIFI_SET_AP_CONFIG, MODULE.SYSTEM, data);
+}
+
+/** Forget the previously-connected STA network and fall back to AP mode. */
+export function buildWifiClearSta() { return buildFrame(CMD.WIFI_CLEAR_STA, MODULE.SYSTEM); }
+
+/** Request a one-off battery status report (soc/mAh/voltage/current/state). */
+export function buildGetBatteryStatus() { return buildFrame(CMD.GET_BATTERY_STATUS, MODULE.SYSTEM); }
 
 // ─── Legacy integer helpers ─────────────────────────────────────────────
 // Still used for genuinely integer wire fields that aren't "measured

@@ -835,6 +835,227 @@ body {
     color: var(--text-dim);
 }
 
+/* ─── Battery widget (topbar, mirrors .cpu-container) ──────────── */
+.battery-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 15px;
+    background: var(--bg-body);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: opacity var(--transition);
+}
+
+.battery-container.disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.battery-icon {
+    font-size: 13px;
+    line-height: 1;
+}
+
+.battery-value {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-primary);
+    min-width: 26px;
+}
+
+.battery-value.state-normal   { color: var(--accent-green-d); }
+.battery-value.state-warning  { color: var(--accent-orange); }
+.battery-value.state-critical { color: var(--accent-red); }
+.battery-value.state-charging { color: var(--accent-dark); }
+.battery-value.state-na       { color: var(--text-dim); }
+
+/* Battery detail popover */
+.battery-detail-panel {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    box-shadow: var(--shadow-lg);
+    font-size: 12px;
+    min-width: 190px;
+    z-index: 999;
+}
+
+.battery-detail-panel.hidden {
+    display: none;
+}
+
+.bd-title {
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 6px;
+    color: var(--text-primary);
+}
+
+.bd-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 2px 0;
+}
+
+/* ─── WiFi status badge (topbar, mirrors #connection-status) ──── */
+.wifi-status-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: var(--radius-xl);
+    font-size: 11px;
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.wifi-status-badge.on {
+    background: var(--accent-green-l);
+    color: var(--accent-green-d);
+}
+
+.wifi-status-badge.off {
+    background: var(--bg-input);
+    color: var(--text-dim);
+}
+
+.wifi-status-badge .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.wifi-status-badge.on .status-dot {
+    background: var(--accent-green);
+    animation: pulse 2s infinite;
+}
+
+.wifi-status-badge.off .status-dot {
+    background: #cbd5e1;
+}
+
+/* ─── WiFi scan screen: two-column layout ───────────────────────
+   Scan+connect on the left, root AP config + saved STA network on
+   the right — replaces the old separate "Advanced Settings" popup.
+   Lives inside the dark #scan-overlay, so colors are tuned for that,
+   not the light card theme used elsewhere. */
+.wifi-scan-columns {
+    display: flex;
+    gap: 28px;
+    align-items: stretch;
+    text-align: left;
+    width: 100%;
+}
+
+.wifi-scan-col {
+    flex: 1;
+    min-width: 0;
+}
+
+.wifi-scan-col-right {
+    display: flex;
+    flex-direction: column;
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+}
+
+.wifi-scan-col-spacer {
+    flex: 1;
+    min-height: 12px;
+}
+
+@media (max-width: 640px) {
+    .wifi-scan-columns {
+        flex-direction: column;
+    }
+}
+
+.wifi-scan-section-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #94a3b8;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.wifi-scan-input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.07);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: var(--radius-sm);
+    padding: 7px 10px;
+    font-size: 12px;
+    font-family: var(--font-ui);
+    outline: none;
+    margin-bottom: 8px;
+    transition: border-color var(--transition);
+}
+
+.wifi-scan-input:focus {
+    border-color: var(--accent);
+}
+
+.wifi-scan-input-wrap {
+    position: relative;
+}
+
+.wifi-scan-eye {
+    position: absolute;
+    right: 6px;
+    top: 4px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    color: #94a3b8;
+}
+
+.wifi-scan-eye:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.wifi-scan-info-text {
+    font-size: 12px;
+    color: #94a3b8;
+    font-family: var(--font-mono);
+    padding: 6px 0;
+}
+
+.wifi-scan-status {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 10px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    display: none;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.wifi-scan-status.loading { color: #fbbf24; display: block; }
+.wifi-scan-status.unavailable { color: #f87171; display: block; }
+
 /* ─── Scrollbar ─────────────────────────────────────────────── */
 ::-webkit-scrollbar {
     width: 6px;
@@ -1231,4 +1452,4 @@ body {
     display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
     padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--border-light);
 }
-.isf-band-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; } 
+.isf-band-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }

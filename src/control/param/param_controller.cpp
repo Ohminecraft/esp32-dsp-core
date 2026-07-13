@@ -125,6 +125,20 @@ void ParamController::handleCommand(const UartCommand& cmd) {
             if (cmd.dataLen >= 1) {
                 bool ok = _presetMgr->loadPreset(cmd.data[0], *_pipeline);
                 _presetMgr->saveCurrentSlotIndex(cmd.data[0]);
+                MainMenuParam mmparam;
+                _presetMgr->loadMainMenuParam(&mmparam);
+                VolumeControl& pre = _pipeline->getPreGain();
+                float db = -32.0f + mmparam.vol * 32.0f / 32.0f;
+                pre.setGainDb(FLOAT_TO_DB_Q8(db));
+                pre.setMute(mmparam.vol <= 0);
+                ParametricEQ& preEq = _pipeline->getPreEq();
+                const int8_t toneParams[3] = { mmparam.bass, mmparam.mid, mmparam.treble };
+                for (uint8_t i = 0; i < 3; i++) {
+                    EQFilterParams p = preEq.getBandParams(i);
+                    float gainDb = ((float)toneParams[i] / 100.0f) * (16.0f * 2.0f) - 16.0f;
+                    p.gain = FLOAT_TO_DB_Q8(gainDb);
+                    preEq.setBand(i, p);
+                }
                 if (ok) {
                     // Thay vì sendAck, gửi toàn bộ state ngay (bao gồm ACK ở cuối)
                     handleGetAllState(cmd);
@@ -151,11 +165,22 @@ void ParamController::handleCommand(const UartCommand& cmd) {
             break;
         }
 
+        case CMD_GET_BATTERY_STATUS:
+            handleGetBatteryStatus(cmd);
+            break;
+
+        // NOTE: pre-existing pattern — case labels inside this `if` are jump
+        // targets for the switch regardless of g_usingWifi (the condition
+        // doesn't actually gate them); each handler already null-checks
+        // _wifiMgr itself, so this stays behaviorally safe.
         if (g_usingWifi) {
             case CMD_WIFI_SCAN:   handleWifiScan(cmd);      break;
             case CMD_WIFI_SET_STA: handleWifiSetSTA(cmd);   break;
             case CMD_WIFI_SET_AP:  handleWifiSetAP(cmd);    break;
             case CMD_WIFI_GET_STATUS: handleWifiGetStatus(cmd); break;
+            case CMD_WIFI_GET_CONFIG: handleWifiGetConfig(cmd); break;
+            case CMD_WIFI_SET_AP_CONFIG: handleWifiSetApConfig(cmd); break;
+            case CMD_WIFI_CLEAR_STA: handleWifiClearSta(cmd); break;
         }
         default:
             LOG_WARN(TAG, "Unknown command: 0x%02X", cmd.cmd);
@@ -352,15 +377,6 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     _uart->startBatch();
     uint8_t pkt[20];
 
-    // --- Module enable mask ---
-    uint16_t mask = 0;
-    DspModule** chain = _pipeline->getChain();
-    for (size_t i = 0; i < _pipeline->getChainLength(); i++) {
-        if (chain[i]->isEnabled()) mask |= (1u << i);
-    }
-    uint8_t maskPkt[2] = { (uint8_t)(mask & 0xFF), (uint8_t)(mask >> 8) };
-    _uart->sendFrame(CMD_REPORT_ENABLE_MASK, MODULE_ID_SYSTEM, maskPkt, 2);
-
     // --- Send ISF presets for both instances (float32 format) ---
     for (uint8_t inst = 0; inst < 2; inst++) {
         IndexSelectableFilter& isf = (inst == 0) ? _pipeline->getIsf1() : _pipeline->getIsf2();
@@ -414,10 +430,7 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
     // Helper: send param with int32 value (for enums/flags)
     auto sendParamI32 = [&](uint8_t mid, uint8_t pIndex, int32_t val) {
         pkt[0] = pIndex;
-        pkt[1] = val & 0xFF;
-        pkt[2] = (val >> 8) & 0xFF;
-        pkt[3] = (val >> 16) & 0xFF;
-        pkt[4] = (val >> 24) & 0xFF;
+        packFloat(&pkt[1], (float)val);
         _uart->sendFrame(CMD_SET_PARAM, mid, pkt, 5);
     };
 
@@ -431,8 +444,8 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
 
     // --- Compander (float32) ---
     sendParamF32(MODULE_ID_COMPANDER, 0, (float)_pipeline->getCompander()._thresholdDb);
-    sendParamF32(MODULE_ID_COMPANDER, 1, (float)_pipeline->getCompander()._ratioBelowQ88 / 256.0f);
-    sendParamF32(MODULE_ID_COMPANDER, 2, (float)_pipeline->getCompander()._ratioAboveQ88 / 256.0f);
+    sendParamF32(MODULE_ID_COMPANDER, 1, (float)_pipeline->getCompander()._ratioBelowQ88);
+    sendParamF32(MODULE_ID_COMPANDER, 2, (float)_pipeline->getCompander()._ratioAboveQ88);
     sendParamF32(MODULE_ID_COMPANDER, 3, (float)_pipeline->getCompander()._attackMs);
     sendParamF32(MODULE_ID_COMPANDER, 4, (float)_pipeline->getCompander()._releaseMs);
     sendParamF32(MODULE_ID_COMPANDER, 5, (float)_pipeline->getCompander()._pregainQ412 / 4096.0f);
@@ -456,12 +469,12 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
 
     // --- DRC (float32) ---
     DRC& drc = _pipeline->getDrc();
-    sendParamI32(MODULE_ID_DRC, 0x10, (int32_t)drc._mode);
-    sendParamI32(MODULE_ID_DRC, 0x11, (int32_t)drc._cfType);
-    sendParamF32(MODULE_ID_DRC, 0x12, drc._fc[0]);
-    sendParamF32(MODULE_ID_DRC, 0x13, drc._qLp);
-    sendParamF32(MODULE_ID_DRC, 0x14, drc._fc[1]);
-    sendParamF32(MODULE_ID_DRC, 0x15, drc._qHp);
+    sendParamI32(MODULE_ID_DRC, 0, drc._mode);
+    sendParamI32(MODULE_ID_DRC, 1, drc._cfType);
+    sendParamF32(MODULE_ID_DRC, 2, drc._fc[0]);
+    sendParamF32(MODULE_ID_DRC, 3, drc._qLp);
+    sendParamF32(MODULE_ID_DRC, 4, drc._fc[1]);
+    sendParamF32(MODULE_ID_DRC, 5, drc._qHp);
     const uint8_t idxbandBase[4] = {0x20, 0x28, 0x30, 0x38};
     for (int p = 0; p < DRC_MAX_BANDS; p++) {
         sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 0, (float)drc._bands[p].thresholdDb);
@@ -506,6 +519,15 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
 
     sendEq(CMD_SET_DYNEQ_LOW_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqLow);
     sendEq(CMD_SET_DYNEQ_HIGH_BAND, MODULE_ID_DYNAMIC_EQ, deq._eqHigh);
+
+    // --- Module enable mask ---
+    uint16_t mask = 0;
+    DspModule** chain = _pipeline->getChain();
+    for (size_t i = 0; i < _pipeline->getChainLength(); i++) {
+        if (chain[i]->isEnabled()) mask |= (1u << i);
+    }
+    uint8_t maskPkt[2] = { (uint8_t)(mask & 0xFF), (uint8_t)(mask >> 8) };
+    _uart->sendFrame(CMD_REPORT_ENABLE_MASK, MODULE_ID_SYSTEM, maskPkt, 2);
 
     // --- Current preset index ---
     pkt[0] = _presetMgr->getCurrentPresetIndex();
@@ -678,8 +700,8 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
         case MODULE_ID_COMPANDER:
             switch (paramId) {
                 case 0: _pipeline->getCompander().setThreshold(fValue); break; // dB
-                case 1: _pipeline->getCompander().setRatioBelow((int16_t)(fValue * 256.0f)); break; // ratio → Q8.8
-                case 2: _pipeline->getCompander().setRatioAbove((int16_t)(fValue * 256.0f)); break; // ratio → Q8.8
+                case 1: _pipeline->getCompander().setRatioBelow((int16_t)(fValue)); break;
+                case 2: _pipeline->getCompander().setRatioAbove((int16_t)(fValue)); break;
                 case 3: _pipeline->getCompander().setAttackTime(iValue);  break;
                 case 4: _pipeline->getCompander().setReleaseTime(iValue); break;
                 case 5: _pipeline->getCompander().setPregain((int16_t)(fValue * 4096.0f)); break; // dB → Q4.12
@@ -709,13 +731,15 @@ void ParamController::handleSetParam(const UartCommand& cmd) {
         case MODULE_ID_DRC: {
             DRC &drc = _pipeline->getDrc();
 
-            // ── Global params (paramId 0x10 - 0x1F) ────────────────────────
-            if (paramId == 0x10) { drc.setMode((DRCMode)iValue);                   break; }
-            if (paramId == 0x11) { drc.setCrossoverType((DRCCrossoverType)iValue); break; }
-            if (paramId == 0x12) { drc.setCrossoverFreq(0, iValue);                break; }
-            if (paramId == 0x13) { drc.setCrossoverFreq(1, iValue);                break; }
-            if (paramId == 0x14) { drc.setCrossoverQ(0, (int16_t)(fValue * 1024.0f)); break; } // Q → Q6.10
-            if (paramId == 0x15) { drc.setCrossoverQ(1, (int16_t)(fValue * 1024.0f)); break; } // Q → Q6.10
+            // ── Global params (paramId 0 - 5) ────────────────────────
+            switch (paramId) {
+                case 0: drc.setMode((DRCMode)iValue); break;
+                case 1: drc.setCrossoverType((DRCCrossoverType)iValue); break;
+                case 2: drc.setCrossoverFreq(0, iValue); break;
+                case 3: drc.setCrossoverFreq(1, iValue); break;
+                case 4: drc.setCrossoverQ(0, (int16_t)(fValue * 1024.0f)); break;
+                case 5: drc.setCrossoverQ(1, (int16_t)(fValue * 1024.0f)); break;
+            }
 
             // ── Per-band params (paramId 0x20 - 0x3F) ──────────────────────
             if (paramId >= 0x20 && paramId <= 0x3F) {
@@ -874,4 +898,131 @@ void ParamController::handleWifiGetStatus(const UartCommand &cmd) {
   LOG_INFO(TAG, "WiFi status sent — mode=%s IP=%s",
            _wifiMgr->isAPMode() ? "AP" : "STA",
            _wifiMgr->getIP().toString().c_str());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WiFi config — view saved AP/STA credentials, change root AP, forget STA
+// All state lives in WiFiManager's own NVS storage — no SettingsManager needed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ParamController::handleWifiGetConfig(const UartCommand &cmd) {
+  if (!_wifiMgr) { _uart->sendError(0x10); return; }
+
+  char apSsid[33] = {}, apPass[65] = {};
+  char staSsid[33] = {}, staPass[65] = {};
+  _wifiMgr->getApCredentials(apSsid, sizeof(apSsid), apPass, sizeof(apPass));
+  bool hasSta = _wifiMgr->hasStaCredentials();
+  if (hasSta) {
+    _wifiMgr->getStaCredentials(staSsid, sizeof(staSsid), staPass, sizeof(staPass));
+  }
+  // apSsid/apPass are always non-empty here — getApCredentials() already
+  // falls back to the compiled-in WIFI_AP_SSID/WIFI_AP_PASS defaults when no
+  // override has been saved, so this always reflects what's really broadcasting.
+
+  uint8_t pkt[1 + 32 + 1 + 64 + 1 + 1 + 32 + 1 + 64];
+  uint16_t len = 0;
+
+  uint8_t apSsidLen = (uint8_t)min((int)strlen(apSsid), 32);
+  pkt[len++] = apSsidLen;
+  memcpy(&pkt[len], apSsid, apSsidLen); len += apSsidLen;
+
+  uint8_t apPassLen = (uint8_t)min((int)strlen(apPass), 64);
+  pkt[len++] = apPassLen;
+  memcpy(&pkt[len], apPass, apPassLen); len += apPassLen;
+
+  pkt[len++] = hasSta ? 1 : 0;
+
+  uint8_t staSsidLen = hasSta ? (uint8_t)min((int)strlen(staSsid), 32) : 0;
+  pkt[len++] = staSsidLen;
+  if (staSsidLen) { memcpy(&pkt[len], staSsid, staSsidLen); len += staSsidLen; }
+
+  uint8_t staPassLen = hasSta ? (uint8_t)min((int)strlen(staPass), 64) : 0;
+  pkt[len++] = staPassLen;
+  if (staPassLen) { memcpy(&pkt[len], staPass, staPassLen); len += staPassLen; }
+
+  _uart->sendFrame(CMD_WIFI_GET_CONFIG, MODULE_ID_SYSTEM, pkt, len);
+}
+
+void ParamController::handleWifiSetApConfig(const UartCommand &cmd) {
+  // Payload: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) — same shape as WIFI_SET_STA
+  if (!_wifiMgr || cmd.dataLen < 2) { _uart->sendError(0x03); return; }
+
+  uint8_t ssidLen = cmd.data[0];
+  if (ssidLen == 0 || cmd.dataLen < (uint16_t)(1 + ssidLen + 1)) { _uart->sendError(0x03); return; }
+
+  char ssid[33] = {};
+  memcpy(ssid, &cmd.data[1], min((int)ssidLen, 32));
+
+  uint8_t passLen = cmd.data[1 + ssidLen];
+  uint16_t offset = 2 + ssidLen;
+  if (cmd.dataLen < offset + passLen) { _uart->sendError(0x03); return; }
+  if (passLen > 0 && passLen < 8) { _uart->sendError(0x03); return; } // WPA2 needs 8+ chars
+
+  char pass[65] = {};
+  memcpy(pass, &cmd.data[offset], min((int)passLen, 64));
+
+  // Persists to NVS and applies immediately if currently in AP mode
+  // (WiFiManager::setAPMode(ssid, pass) overload).
+  _wifiMgr->setAPMode(ssid, pass);
+
+  _uart->sendAck(MODULE_ID_SYSTEM, 0);
+  handleWifiGetConfig(cmd); // push updated config back so the UI refreshes
+}
+
+void ParamController::handleWifiClearSta(const UartCommand &cmd) {
+  if (!_wifiMgr) { _uart->sendError(0x10); return; }
+
+  // WiFiManager::setAPMode() (no args) already does exactly "forget saved
+  // STA network + switch to AP" — it clears NVS STA config and starts AP
+  // with whatever root AP credentials are currently in effect.
+  _wifiMgr->setAPMode();
+  LOG_INFO(TAG, "Saved STA network forgotten");
+
+  _uart->sendAck(MODULE_ID_SYSTEM, 0);
+  handleWifiGetConfig(cmd);
+
+  uint8_t statusBuf[40];
+  uint16_t statusLen = 0;
+  _wifiMgr->buildStatusPayload(statusBuf, statusLen);
+  _uart->sendFrame(CMD_WIFI_GET_STATUS, MODULE_ID_SYSTEM, statusBuf, statusLen);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Battery status report — requires ParamController::_batteryMgr
+// (BatteryMonitor*), see setup note.
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ParamController::setBatteryMonitor(BatteryMonitor* batteryMgr) {
+  _batteryMgr = batteryMgr;
+}
+
+void ParamController::handleGetBatteryStatus(const UartCommand &cmd) {
+  // Payload: present(1) + state(1) + soc(f32) + busVoltage(f32)
+  //        + currentMa(f32) + consumedMah(f32) + totalMah(f32) = 22 bytes
+  uint8_t pkt[22] = {};
+
+  if (!_batteryMgr || !_batteryMgr->isPresent()) {
+    pkt[0] = 0; // present = false — rest left zeroed
+    _uart->sendFrame(CMD_REPORT_BATTERY, MODULE_ID_SYSTEM, pkt, sizeof(pkt));
+    return;
+  }
+
+  const BatteryStatus& bat = _batteryMgr->getStatus();
+  uint8_t stateByte;
+  switch (bat.state) {
+    case BatteryState::WARNING:  stateByte = 1; break;
+    case BatteryState::CRITICAL: stateByte = 2; break;
+    case BatteryState::CHARGING: stateByte = 3; break;
+    default:                     stateByte = 0; break; // NORMAL
+  }
+
+  pkt[0] = 1;
+  pkt[1] = stateByte;
+  packFloat(&pkt[2],  bat.soc);
+  packFloat(&pkt[6],  bat.busVoltage);
+  packFloat(&pkt[10], bat.currentMa);
+  packFloat(&pkt[14], bat.consumedMah);
+  packFloat(&pkt[18], (float)_batteryMgr->getConfig().cellMah);
+
+  _uart->sendFrame(CMD_REPORT_BATTERY, MODULE_ID_SYSTEM, pkt, sizeof(pkt));
 }

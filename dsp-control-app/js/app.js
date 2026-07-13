@@ -12,6 +12,8 @@ import {
     buildGetAllState, buildGetModuleMeter, buildSetLookahead,
     buildSetIsfPreset, buildSetIsfConfig, buildGetIsfState,
     buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
+    buildWifiGetConfig, buildWifiSetApConfig, buildWifiClearSta,
+    buildGetBatteryStatus,
     dbToQ88, dbToQ31, qToQ610,
     leToInt16, leToInt32, leToFloat,
     buildSetIsfBandParams
@@ -77,7 +79,10 @@ let sendDebounce = {};
 let autoScanInterval = null;
 let manualMode = false;
 let isFetchingState = false;
-let isPendingStaReboot = false; // Tracks if we expect a reboot after submitting WiFi config
+let staConnectPollHandle = null;    // polls WIFI_GET_STATUS while waiting to see if the new STA config worked
+let staConnectTimeoutHandle = null; // gives up and shows a failure message if it takes too long
+let awaitingStaReboot = false;      // true from submit until we confirm success/failure/disconnect
+let awaitingStaSsid = '';
 let isProbing = false;       // true while a single port probe is in-flight
 let probeResolver = null;
 let probeAborted = false;    // set true to cancel an in-flight probe immediately
@@ -132,6 +137,8 @@ function onConnected(port) {
     isFetchingState = true;
     sendFrame(buildGetAllState());
     sendFrame(buildWifiGetStatus());
+    sendFrame(buildWifiGetConfig());
+    sendFrame(buildGetBatteryStatus());
     showStatus('Connected — Fetching DSP State...', 'ok');
 }
 
@@ -225,8 +232,10 @@ function onConnectedWS(url) {
     isFetchingState = true;
     sendFrame(buildGetAllState());
     sendFrame(buildWifiGetStatus());
+    sendFrame(buildWifiGetConfig());
+    sendFrame(buildGetBatteryStatus());
     showStatus(`Connected via WiFi (${url}) — Fetching DSP State...`, 'ok');
-    switchLobbyScreen('scan-wifi-connected');
+    switchLobbyScreen('scan-wifi-content');
 }
 
 async function disconnectWebSocket() {
@@ -389,8 +398,8 @@ parser.onFrame((frame) => {
             break;
         case MODULE.COMPANDER:
             if (pIndex === 0) store.updateParam('compander', 'threshold', val);      // dB
-            else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val * 256); // float → Q8.8
-            else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val * 256); // float → Q8.8
+            else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val);
+            else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val);
             else if (pIndex === 3) store.updateParam('compander', 'attackMs', val);
             else if (pIndex === 4) store.updateParam('compander', 'releaseMs', val);
             else if (pIndex === 5) store.updateParam('compander', 'pregain', val * 4096);   // dB → Q4.12
@@ -414,18 +423,24 @@ parser.onFrame((frame) => {
             break;
         case MODULE.DRC: {
             // Firmware sends float32, convert to internal store format
-            if (pIndex === 0x10) {
+            if (pIndex === 0) {
                 store.drc.mode = val;  // enum, keep as int
-            } else if (pIndex === 0x11) {
+                console.log(store.drc.mode);
+            } else if (pIndex === 1) {
                 store.drc.cfType = val;
-            } else if (pIndex === 0x12) {
+                console.log(store.drc.cfType);
+            } else if (pIndex === 2) {
                 store.drc.fc1 = val;
-            } else if (pIndex === 0x13) {
+                console.log(store.drc.fc1);
+            } else if (pIndex === 3) {
                 store.drc.qLp = val;
-            } else if (pIndex === 0x14) {
+                console.log(store.drc.qLp);
+            } else if (pIndex === 4) {
                 store.drc.fc2 = val;
-            } else if (pIndex === 0x15) {
+                console.log(store.drc.fc2);
+            } else if (pIndex === 5) {
                 store.drc.qHp = val;
+                console.log(store.drc.qHp);
             } else if (pIndex >= 0x20 && pIndex <= 0x3F) {
                 const bandIdx = (pIndex - 0x20) >> 3;
                 const param   = (pIndex - 0x20) & 0x07;
@@ -605,6 +620,41 @@ parser.onFrame((frame) => {
         store.wifi.ssid = ssid;
         updateWifiUI();
     }
+    else if (frame.cmd === CMD.WIFI_GET_CONFIG && frame.data.length >= 3) {
+        const d = frame.data;
+        let off = 0;
+        const apSsidLen = d[off]; off += 1;
+        const apSsid = apSsidLen ? new TextDecoder().decode(new Uint8Array(d.slice(off, off + apSsidLen))) : '';
+        off += apSsidLen;
+        const apPassLen = d[off]; off += 1;
+        const apPass = apPassLen ? new TextDecoder().decode(new Uint8Array(d.slice(off, off + apPassLen))) : '';
+        off += apPassLen;
+        const hasSta = d[off] === 1; off += 1;
+        const staSsidLen = d[off] || 0; off += 1;
+        const staSsid = staSsidLen ? new TextDecoder().decode(new Uint8Array(d.slice(off, off + staSsidLen))) : '';
+        off += staSsidLen;
+        const staPassLen = d[off] || 0; off += 1;
+        const staPass = staPassLen ? new TextDecoder().decode(new Uint8Array(d.slice(off, off + staPassLen))) : '';
+
+        store.updateWifiConfig({ apSsid, apPass, hasSavedSta: hasSta, staSsid, staPass });
+        renderWifiConfigPanel();
+    }
+    else if (frame.cmd === CMD.REPORT_BATTERY && frame.data.length >= 22) {
+        const d = frame.data;
+        const present = d[0] === 1;
+        const stateNames = ['normal', 'warning', 'critical', 'charging'];
+        const state = stateNames[d[1]] || 'unknown';
+        store.updateBattery({
+            present,
+            state,
+            soc: leToFloat(d, 2),
+            busVoltage: leToFloat(d, 6),
+            currentMa: leToFloat(d, 10),
+            consumedMah: leToFloat(d, 14),
+            totalMah: leToFloat(d, 18)
+        });
+        updateBatteryUI();
+    }
     else if (frame.cmd === CMD.WIFI_SCAN) {
         if (frame.data.length >= 4) {
             const idx = frame.data[0];
@@ -767,11 +817,11 @@ function buildModuleBody(body, mod) {
                 () => store.compander.threshold,
                 (v) => { store.compander.threshold = v; sendFrame(buildSetParam(MODULE.COMPANDER, 0, v)); },
                 null, 1);
-            addSlider(body, 'Ratio Below', 10, 1000, 10, '',
+            addSlider(body, 'Ratio Below', 10, 1000, 10, ':1',
                 () => store.compander.ratioBelow,
                 (v) => { store.compander.ratioBelow = v; sendFrame(buildSetParam(MODULE.COMPANDER, 1, v)); },
                 null, 0.01);
-            addSlider(body, 'Ratio Above', 10, 1000, 10, '',
+            addSlider(body, 'Ratio Above', 100, 1000, 10, ':1',
                 () => store.compander.ratioAbove,
                 (v) => { store.compander.ratioAbove = v; sendFrame(buildSetParam(MODULE.COMPANDER, 2, v)); },
                 null, 0.01);
@@ -785,8 +835,7 @@ function buildModuleBody(body, mod) {
                 () => store.compander.lookaheadMs,
                 (v) => {
                     store.compander.lookaheadMs = v;
-                    // paramId 6, encoding: ms × 10 → int32
-                    sendFrame(buildSetLookahead(MODULE.COMPANDER, 6, v * 10));
+                    sendFrame(buildSetLookahead(MODULE.COMPANDER, 6, v));
                 }, null, 1);
             break;
 
@@ -986,7 +1035,7 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.DRC:
-            body.appendChild(buildGrMeter({ id: 'drc', label: 'Gain Reduction', multiband: true }));
+            body.appendChild(buildGrMeter({ id: 'drc', label: 'Gain Reduction', multiband: true, isDrc: true }));
             buildDrcPanel(body);
             break;
 
@@ -1072,7 +1121,7 @@ function buildDrcPanel(container) {
     });
     modeSelect.addEventListener('change', () => {
         d.mode = parseInt(modeSelect.value);
-        sendFrame(buildSetParam(MODULE.DRC, 0x10, d.mode));
+        sendFrame(buildSetParam(MODULE.DRC, 0, d.mode));
         updateCrossoverVisibility();
         updateBandTabs();
     });
@@ -1101,7 +1150,7 @@ function buildDrcPanel(container) {
     });
     cfSelect.addEventListener('change', () => {
         d.cfType = parseInt(cfSelect.value);
-        sendFrame(buildSetParam(MODULE.DRC, 0x11, d.cfType));
+        sendFrame(buildSetParam(MODULE.DRC, 1, d.cfType));
         updateCrossoverVisibility();
     });
     cfRow.appendChild(cfLabel);
@@ -1118,7 +1167,7 @@ function buildDrcPanel(container) {
     fc1Inp.addEventListener('change', () => {
         d.fc1 = Math.max(20, Math.min(20000, parseInt(fc1Inp.value) || d.fc1));
         fc1Inp.value = d.fc1;
-        sendFrame(buildSetParam(MODULE.DRC, 0x12, d.fc1));
+        sendFrame(buildSetParam(MODULE.DRC, 2, d.fc1));
     });
     const qLpLabel = document.createElement('span'); qLpLabel.textContent = 'Q(LP)'; qLpLabel.className = 'drc-qlabel';
     const qLpInp = document.createElement('input');
@@ -1126,7 +1175,7 @@ function buildDrcPanel(container) {
     qLpInp.value = (d.qLp / 1024).toFixed(2);
     qLpInp.addEventListener('change', () => {
         d.qLp = Math.round(parseFloat(qLpInp.value) * 1024);
-        sendFrame(buildSetParam(MODULE.DRC, 0x14, d.qLp));
+        sendFrame(buildSetParam(MODULE.DRC, 3, d.qLp));
     });
     cf1Row.appendChild(fc1Inp);
     cf1Row.appendChild(qLpLabel);
@@ -1143,7 +1192,7 @@ function buildDrcPanel(container) {
     fc2Inp.addEventListener('change', () => {
         d.fc2 = Math.max(20, Math.min(20000, parseInt(fc2Inp.value) || d.fc2));
         fc2Inp.value = d.fc2;
-        sendFrame(buildSetParam(MODULE.DRC, 0x13, d.fc2));
+        sendFrame(buildSetParam(MODULE.DRC, 4, d.fc2));
     });
     const qHpLabel = document.createElement('span'); qHpLabel.textContent = 'Q(HP)'; qHpLabel.className = 'drc-qlabel';
     const qHpInp = document.createElement('input');
@@ -1151,7 +1200,7 @@ function buildDrcPanel(container) {
     qHpInp.value = (d.qHp / 1024).toFixed(2);
     qHpInp.addEventListener('change', () => {
         d.qHp = Math.round(parseFloat(qHpInp.value) * 1024);
-        sendFrame(buildSetParam(MODULE.DRC, 0x15, d.qHp));
+        sendFrame(buildSetParam(MODULE.DRC, 5, d.qHp));
     });
     cf2Row.appendChild(fc2Inp);
     cf2Row.appendChild(qHpLabel);
@@ -1214,7 +1263,7 @@ function buildDrcPanel(container) {
                 band.lookaheadMs = v;
                 // pBase + 5: band-specific lookahead, encoding ms × 10 → int32
                 sendFrame(buildSetLookahead(MODULE.DRC, pBase + 5, v));
-            }, null, 0.1);
+            }, null, 1);
     };
 
     const renderTabs = () => {
@@ -1784,22 +1833,24 @@ function buildGrMeter(opts) {
     const wrap = document.createElement('div');
     wrap.className = 'lm-wrap';
 
-    const head = document.createElement('div');
-    head.className = 'lm-head';
-    const lbl = document.createElement('span');
-    lbl.className = 'lm-label';
-    lbl.textContent = opts.label;
-    const val = document.createElement('span');
-    val.className = 'lm-value lm-value-red';
-    val.id = `lm-${opts.id}-gr`;
-    val.textContent = '0.0 dB';
-    head.appendChild(lbl);
-    head.appendChild(val);
-    wrap.appendChild(head);
+    if (!opts.isDrc) {
+        const head = document.createElement('div');
+        head.className = 'lm-head';
+        const lbl = document.createElement('span');
+        lbl.className = 'lm-label';
+        lbl.textContent = opts.label;
+        const val = document.createElement('span');
+        val.className = 'lm-value lm-value-red';
+        val.id = `lm-${opts.id}-gr`;
+        val.textContent = '0.0 dB';
+        head.appendChild(lbl);
+        head.appendChild(val);
+        wrap.appendChild(head);
+    }
 
     if (opts.multiband) {
-        // 4 bars: Low / Mid / High / Full
-        const bandNames = ['Low', 'Mid', 'High', 'Full'];
+        // 4 bars: Full / Low / Mid / High
+        const bandNames = ['Full', 'Low', 'Mid', 'High'];
         const rows = document.createElement('div');
         rows.className = 'lm-gr-rows';
         bandNames.forEach((name, i) => {
@@ -1910,25 +1961,42 @@ function renderCompanderMeter(envLinear, gainDb) {
     valEl.textContent = gainDb <= 0
         ? `${gainDb.toFixed(1)} dB`
         : `+${gainDb.toFixed(1)} dB`;
+        
 }
 
 function renderDrcMeter(gains) {
-    // gains[0..3]: gain reduction dB per band (negative = reduction)
     const grLabel = document.getElementById('lm-drc-gr');
+    const activeBand = store.drc.activeBand ?? 3;
     if (grLabel) grLabel.textContent = `${gains[3].toFixed(1)} dB`;
 
-    gains.forEach((g, i) => {
-        const fill = document.getElementById(`lm-drc-fill-${i}`);
-        const val  = document.getElementById(`lm-drc-val-${i}`);
-        if (!fill) return;
-        const pct  = Math.max(0, Math.min(100, (-g) / 24 * 100));
-        fill.style.width = `${pct}%`;
-        if (val) val.textContent = g.toFixed(1);
-    });
+    // [srcIndexInGains, domBandIndex]
+    const maps = {
+        0: [[0, 0]],                  // Full
+        1: [[1, 1], [2, 3]],          // Low, High
+        2: [[1, 1], [2, 2], [3, 3]],  // Low, Mid, High
+    };
 
-    // Update operating point on the compression curve graph
+    const pairs = maps[store.drc.mode] || [];
+    // domIdx -> srcIdx tra nhanh
+    const activeMap = new Map(pairs.map(([src, dom]) => [dom, src]));
+
+    for (let domIdx = 0; domIdx <= 3; domIdx++) {
+        const fill = document.getElementById(`lm-drc-fill-${domIdx}`);
+        const val = document.getElementById(`lm-drc-val-${domIdx}`);
+        if (!fill) continue;
+
+        if (activeMap.has(domIdx)) {
+            const g = gains[activeMap.get(domIdx)];
+            const pct = Math.max(0, Math.min(100, (-g) / 24 * 100));
+            fill.style.width = `${pct}%`;
+            if (val) val.textContent = g.toFixed(1);
+        } else {
+            fill.style.width = `0%`;
+            if (val) val.textContent = '0.0';
+        }
+    }
+
     if (drcGraph) {
-        const activeBand = store.drc.activeBand ?? 3;
         drcGraph.updateLiveMeter(gains[activeBand]);
     }
 }
@@ -2502,12 +2570,18 @@ function updateStatusUI() {
         if (heapContainer) heapContainer.style.display = 'none';
         if (manualMode) ['port-select', 'btn-refresh', 'btn-connect'].forEach(id => document.getElementById(id).style.display = '');
         document.getElementById('btn-wifi-config').style.display = 'none';
+        const battContainer = document.getElementById('battery-container');
+        if (battContainer) battContainer.style.display = 'none';
+        const wifiBadge = document.getElementById('wifi-status-badge');
+        if (wifiBadge) wifiBadge.style.display = 'none';
     }
 }
 
 // ─── WiFi UI Handlers ────────────────────────────────────────────────
 
 function updateWifiUI() {
+    updateWifiStatusBadge();
+
     const modeEl = document.getElementById('wifi-current-mode');
     if (modeEl) {
         modeEl.textContent = `Current: ${store.wifi.mode} (${store.wifi.ip})`;
@@ -2527,79 +2601,476 @@ function updateWifiUI() {
     }
     
     if (store.wifi.mode === 'STA' && store.wifi.ip && store.wifi.ip !== '0.0.0.0') {
-        if (!document.getElementById('scan-overlay').classList.contains('hidden')) {
-            switchLobbyScreen('scan-wifi-connected');
-            
-            // Show reboot countdown if we just configured it
-            if (isPendingStaReboot) {
-                isPendingStaReboot = false;
-                
-                // Clear any old countdowns
-                const oldMsg = document.getElementById('reboot-countdown');
-                if (oldMsg) oldMsg.remove();
-                
-                const msgEl = document.createElement('div');
-                msgEl.id = 'reboot-countdown';
-                msgEl.style.color = 'var(--accent-red)';
-                msgEl.style.fontWeight = 'bold';
-                msgEl.style.textAlign = 'center';
-                msgEl.style.marginTop = '15px';
-                
-                // Insert before the buttons
-                const btnRow = document.getElementById('scan-wifi-connected').querySelector('div[style*="justify-content: center"]');
-                if (btnRow) {
-                    document.getElementById('scan-wifi-connected').insertBefore(msgEl, btnRow);
-                } else {
-                    document.getElementById('scan-wifi-connected').appendChild(msgEl);
-                }
-                
-                let count = 5;
-                msgEl.innerHTML = `
-                    <div style="background: rgba(255,50,50,0.1); border: 1px solid var(--accent-red); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
-                        <div style="font-size: 16px; margin-bottom: 5px; color: var(--accent-red); font-weight: bold;">WiFi Config Saved!</div>
-                        <div style="font-size: 14px; color: white;">Rebooting in <span style="color:var(--accent-red); font-size:18px;">${count}</span>s...</div>
-                        <div style="margin-top: 10px; font-size: 12px; color: var(--text-dim);">
-                            After reboot, connect your phone to <strong>${store.wifi.ssid}</strong> and access:<br/>
-                            <strong style="color: var(--accent-green); font-size: 14px;">http://esp32-dsp.local</strong>
-                        </div>
-                    </div>
-                `;
-                
-                const intv = setInterval(() => {
-                    count--;
-                    const countSpan = msgEl.querySelector('span');
-                    if (count > 0) {
-                        if (countSpan) countSpan.textContent = count;
-                    } else {
-                        clearInterval(intv);
-                        msgEl.innerHTML = `
-                            <div style="background: var(--accent-green); color: black; padding: 15px; border-radius: 8px; font-weight: bold; text-align: center;">
-                                Rebooting...<br/>Please switch to WiFi: ${store.wifi.ssid}
-                            </div>
-                        `;
-                    }
-                }, 1000);
-            }
-        }
-        
-        document.getElementById('wifi-conn-mode').textContent = store.wifi.mode;
-        document.getElementById('wifi-conn-ssid').textContent = store.wifi.ssid;
-        document.getElementById('wifi-conn-ip').textContent = store.wifi.ip;
-        document.getElementById('wifi-conn-rssi').textContent = `${store.wifi.rssi} dBm`;
-        document.getElementById('wifi-conn-ws').textContent = `ws://${store.wifi.ip}/ws`;
-    } else {
-        // In AP mode or connecting — show config/scan screen instead of info screen
-        if (!document.getElementById('scan-overlay').classList.contains('hidden')) {
-            document.getElementById('scan-wifi-connected').style.display = 'none';
-            // Only show config if not in other lobby screens
-            if (document.getElementById('scan-auto-content').style.display === 'none' &&
-                document.getElementById('scan-manual-content').style.display === 'none' &&
-                document.getElementById('lobby-choice-content').style.display === 'none' &&
-                document.getElementById('lobby-wifi-searching').style.display === 'none') {
-                document.getElementById('scan-wifi-content').style.display = 'block';
-            }
+        // If we were in the middle of a connect attempt, this is success —
+        // stop polling/waiting and clear the "Connecting..." UI. The device
+        // does restart to apply new STA config (see main.cpp), so this
+        // fires once it comes back up and confirms STA+IP.
+        if (awaitingStaReboot || staConnectPollHandle || staConnectTimeoutHandle) {
+            clearStaConnectWait();
+            showStatus(`Connected to ${store.wifi.ssid}`, 'ok');
         }
     }
+
+    renderStaSection();
+}
+
+// ─── Battery UI ─────────────────────────────────────────────────────
+
+let batteryAlertState = null; // edge-triggers the low-battery alert
+
+function initBatteryUI() {
+    if (document.getElementById('battery-container')) return; // already built
+    const cpuContainer = document.getElementById('cpu-container');
+    if (!cpuContainer || !cpuContainer.parentElement) return; // no anchor on this layout
+
+    const container = document.createElement('div');
+    container.id = 'battery-container';
+    container.className = 'battery-container';
+    container.style.display = 'none';
+    container.title = 'Click for battery details';
+
+    const icon = document.createElement('span');
+    icon.id = 'battery-icon';
+    icon.className = 'battery-icon';
+    icon.textContent = '🔋';
+
+    const text = document.createElement('span');
+    text.id = 'battery-value';
+    text.className = 'battery-value';
+    text.textContent = '--%';
+
+    container.appendChild(icon);
+    container.appendChild(text);
+    cpuContainer.parentElement.appendChild(container);
+
+    const detail = document.createElement('div');
+    detail.id = 'battery-detail-panel';
+    detail.className = 'battery-detail-panel hidden'; // .hidden is scoped to this class in style.css
+    detail.innerHTML = `
+        <div id="battery-detail-state" class="bd-title"></div>
+        <div id="battery-detail-mah" class="bd-row"></div>
+        <div id="battery-detail-va" class="bd-row"></div>
+    `;
+    document.body.appendChild(detail);
+
+    container.addEventListener('click', () => {
+        if (!store.battery.present) return; // nothing to show when absent — disabled
+        // Position just under the widget, right-aligned to it
+        const rect = container.getBoundingClientRect();
+        detail.style.top = `${rect.bottom + 6}px`;
+        detail.style.right = `${window.innerWidth - rect.right}px`;
+        detail.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (e) => {
+        if (!detail.classList.contains('hidden') && !detail.contains(e.target) && !container.contains(e.target)) {
+            detail.classList.add('hidden');
+        }
+    });
+}
+
+function updateBatteryUI() {
+    const container = document.getElementById('battery-container');
+    if (!container) return;
+    const bat = store.battery;
+
+    if (!store.system.connected || !bat.checked) {
+        // Not connected, or haven't heard from firmware yet — nothing to show.
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = 'flex';
+
+    const text = document.getElementById('battery-value');
+    text.classList.remove('state-normal', 'state-warning', 'state-critical', 'state-charging', 'state-na');
+
+    if (!bat.present) {
+        // Confirmed: no battery monitor on this device — show disabled state
+        // rather than hiding, so it's clear the feature exists but isn't wired up.
+        container.classList.add('disabled');
+        container.title = 'No battery monitor detected on this device';
+        document.getElementById('battery-icon').textContent = '🔋';
+        text.textContent = 'N/A';
+        text.classList.add('state-na');
+        return;
+    }
+
+    container.classList.remove('disabled');
+    container.title = 'Click for battery details';
+
+    const pct = Math.round(bat.soc * 100);
+    const stateIcons  = { normal: '🔋', warning: '🪫', critical: '🪫', charging: '⚡' };
+    const stateClass  = { normal: 'state-normal', warning: 'state-warning', critical: 'state-critical', charging: 'state-charging' };
+    const stateLabels = { normal: 'Normal', warning: 'Low', critical: 'LOW — Charge now', charging: 'Charging' };
+
+    document.getElementById('battery-icon').textContent = stateIcons[bat.state] || '🔋';
+    text.textContent = `${pct}%`;
+    text.classList.add(stateClass[bat.state] || 'state-normal');
+
+    const detailState = document.getElementById('battery-detail-state');
+    if (detailState) detailState.textContent = `Battery: ${pct}% — ${stateLabels[bat.state] || bat.state}`;
+    const detailMah = document.getElementById('battery-detail-mah');
+    if (detailMah) detailMah.textContent = `Used: ${bat.consumedMah.toFixed(0)} / ${bat.totalMah.toFixed(0)} mAh`;
+    const detailVa = document.getElementById('battery-detail-va');
+    if (detailVa) detailVa.textContent = `${bat.busVoltage.toFixed(2)} V, ${(bat.currentMa / 1000).toFixed(2)} A`;
+
+    // Edge-triggered low-battery alert — fires once per state transition, not every poll
+    if ((bat.state === 'critical' || bat.state === 'warning') && batteryAlertState !== bat.state) {
+        showStatus(bat.state === 'critical' ? 'Battery low — charge now!' : 'Battery getting low', 'error');
+    }
+    batteryAlertState = bat.state;
+}
+
+// ─── WiFi status badge (topbar) — shows whether WiFi is currently on ──
+// Note: firmware's WIFI_GET_STATUS only ever reports AP or STA mode; there's
+// no explicit "radio off" bit on the wire today. So "on" here means "we have
+// a confirmed, current status from the device" (mode !== 'Unknown'); until
+// that first reply arrives (or if it's stale), it reads as "Off/Unknown".
+function initWifiStatusBadge() {
+    if (document.getElementById('wifi-status-badge')) return; // already built
+    const wifiBtn = document.getElementById('btn-wifi-config');
+    if (!wifiBtn || !wifiBtn.parentElement) return; // no anchor on this layout
+
+    const badge = document.createElement('div');
+    badge.id = 'wifi-status-badge';
+    badge.className = 'wifi-status-badge off';
+    badge.style.display = 'none';
+    badge.innerHTML = `<span class="status-dot"></span><span id="wifi-status-badge-text">WiFi: Off</span>`;
+    wifiBtn.parentElement.insertBefore(badge, wifiBtn);
+}
+
+function updateWifiStatusBadge() {
+    const badge = document.getElementById('wifi-status-badge');
+    if (!badge) return;
+
+    if (!store.system.connected) {
+        badge.style.display = 'none';
+        return;
+    }
+    badge.style.display = 'flex';
+
+    const textEl = document.getElementById('wifi-status-badge-text');
+    const isOn = store.wifi.mode === 'AP' || store.wifi.mode === 'STA';
+    badge.classList.toggle('on', isOn);
+    badge.classList.toggle('off', !isOn);
+    if (textEl) {
+        textEl.textContent = store.wifi.mode === 'AP' ? 'WiFi: AP Mode'
+                            : store.wifi.mode === 'STA' ? `WiFi: Connected (${store.wifi.ssid || 'STA'})`
+                            : 'WiFi: Off';
+    }
+}
+
+// ─── WiFi Advanced Settings (view/change AP, forget saved STA) ─────────
+
+function initWifiScanColumns() {
+    const container = document.getElementById('scan-wifi-content');
+    if (!container || container.dataset.restructured) return; // already built
+    container.dataset.restructured = '1';
+
+    // The back button moves out of the scan list and down to the bottom of
+    // the right column instead (see below), so pull it out first.
+    const backBtn = document.getElementById('btn-wifi-back');
+    if (backBtn) backBtn.remove();
+
+    // Move everything else already in this screen (scan list, connect form,
+    // rescan button, etc.) into a left column, untouched.
+    const leftCol = document.createElement('div');
+    leftCol.className = 'wifi-scan-col';
+    while (container.firstChild) {
+        leftCol.appendChild(container.firstChild);
+    }
+
+    // Right column: root AP config, live/saved STA info, then Forget + Back
+    // at the bottom. This replaces both the old separate "⚙️ WiFi Settings"
+    // popup AND the old separate "scan-wifi-connected" read-only screen —
+    // one WiFi screen now, not three.
+    const rightCol = document.createElement('div');
+    rightCol.className = 'wifi-scan-col wifi-scan-col-right';
+    rightCol.innerHTML = `
+        <div id="wifi-adv-status" class="wifi-scan-status"></div>
+
+        <div style="margin-bottom:18px;">
+            <div class="wifi-scan-section-label">Root Access Point (phone connects here)</div>
+            <input id="wifi-adv-ap-ssid" class="wifi-scan-input" placeholder="AP name">
+            <div class="wifi-scan-input-wrap">
+                <input id="wifi-adv-ap-pass" class="wifi-scan-input" type="password" placeholder="AP password (8+ characters)">
+                <button id="wifi-adv-ap-toggle" class="wifi-scan-eye" type="button">👁</button>
+            </div>
+            <button id="wifi-adv-ap-save" class="btn btn-primary btn-sm">Save AP</button>
+        </div>
+
+        <div style="margin-bottom:18px;">
+            <div class="wifi-scan-section-label">WiFi Network (STA)</div>
+            <div id="wifi-scan-sta-status" class="wifi-scan-info-text">No network saved</div>
+        </div>
+
+        <div class="wifi-scan-col-spacer"></div>
+
+        <button id="wifi-adv-sta-forget" class="btn btn-danger btn-sm" style="display:none; width:100%; margin-bottom:8px;">Forget this network</button>
+    `;
+    if (backBtn) rightCol.appendChild(backBtn);
+
+    const row = document.createElement('div');
+    row.className = 'wifi-scan-columns';
+    row.appendChild(leftCol);
+    row.appendChild(rightCol);
+    container.appendChild(row);
+
+    const ssidInp = rightCol.querySelector('#wifi-adv-ap-ssid');
+    const passInp = rightCol.querySelector('#wifi-adv-ap-pass');
+    ssidInp.addEventListener('input', () => { ssidInp.dataset.userEdited = '1'; });
+    passInp.addEventListener('input', () => { passInp.dataset.userEdited = '1'; });
+
+    rightCol.querySelector('#wifi-adv-ap-toggle').addEventListener('click', () => {
+        passInp.type = passInp.type === 'password' ? 'text' : 'password';
+    });
+    rightCol.querySelector('#wifi-adv-ap-save').addEventListener('click', () => {
+        if (!store.wifi.configLoaded) return; // disabled state — ignore stray clicks
+        const ssid = ssidInp.value.trim();
+        const pass = passInp.value;
+        if (!ssid) { alert('Please enter an AP name'); return; }
+        if (pass && pass.length < 8) { alert('AP password must be at least 8 characters (or leave blank for an open network)'); return; }
+        sendFrame(buildWifiSetApConfig(ssid, pass));
+        showStatus('New AP config sent', 'ok');
+    });
+    rightCol.querySelector('#wifi-adv-sta-forget').addEventListener('click', () => {
+        if (!store.wifi.configLoaded) return; // disabled state — ignore stray clicks
+        if (!confirm(`Forget network "${store.wifi.staSsid}"? The device will switch back to AP mode.`)) return;
+        sendFrame(buildWifiClearSta());
+        showStatus('Saved WiFi network forgotten', 'ok');
+    });
+
+    setWifiConfigButtonsEnabled(false); // until the first WIFI_GET_CONFIG reply arrives
+    renderStaSection();
+}
+
+/** Renders the combined "WiFi Network (STA)" info box: live connection
+ *  details (from WIFI_GET_STATUS) if currently joined, else the saved
+ *  credentials (from WIFI_GET_CONFIG) if one exists, else a placeholder.
+ *  Also toggles the "Forget this network" button. Called whenever either
+ *  status or config data updates, so it's correct regardless of which
+ *  arrives first. */
+function renderStaSection() {
+    const el = document.getElementById('wifi-scan-sta-status');
+    const forgetBtn = document.getElementById('wifi-adv-sta-forget');
+    if (!el) return;
+
+    const w = store.wifi;
+    const liveConnected = w.mode === 'STA' && w.ip && w.ip !== '0.0.0.0';
+
+    if (liveConnected) {
+        el.innerHTML = `
+            <div>SSID: <strong style="color:white;">${w.ssid}</strong></div>
+            <div>IP: ${w.ip}</div>
+            <div>RSSI: ${w.rssi} dBm</div>
+            <div>mDNS: esp32-dsp.local</div>
+        `;
+    } else if (w.hasSavedSta) {
+        el.innerHTML = `
+            <div>SSID: ${w.staSsid} <span style="color:#94a3b8;">(saved, not connected)</span></div>
+            <div>Password: ${w.staPass}</div>
+        `;
+    } else {
+        el.textContent = 'No network saved';
+    }
+
+    if (forgetBtn) forgetBtn.style.display = w.hasSavedSta ? 'block' : 'none';
+}
+
+/** Requests the AP/STA config and shows a loading/unavailable state until it arrives. Call whenever the WiFi screen is opened. */
+function requestWifiConfig() {
+    setWifiConfigButtonsEnabled(false);
+    const statusEl = document.getElementById('wifi-adv-status');
+    if (statusEl) {
+        statusEl.className = 'wifi-scan-status loading';
+        statusEl.textContent = 'Loading configuration...';
+    }
+
+    sendFrame(buildWifiGetConfig());
+
+    clearTimeout(wifiConfigTimeoutHandle);
+    wifiConfigTimeoutHandle = setTimeout(() => {
+        if (!store.wifi.configLoaded && statusEl) {
+            statusEl.className = 'wifi-scan-status unavailable';
+            statusEl.textContent = 'WiFi config not available on this device/firmware.';
+        }
+    }, 3000);
+}
+
+let wifiConfigTimeoutHandle = null;
+
+function setWifiConfigButtonsEnabled(enabled) {
+    const saveBtn = document.getElementById('wifi-adv-ap-save');
+    const forgetBtn = document.getElementById('wifi-adv-sta-forget');
+    [saveBtn, forgetBtn].forEach(btn => {
+        if (!btn) return;
+        btn.disabled = !enabled;
+        btn.style.opacity = enabled ? '1' : '0.5';
+        btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+    });
+}
+
+function renderWifiConfigPanel() {
+    clearTimeout(wifiConfigTimeoutHandle);
+    const statusEl = document.getElementById('wifi-adv-status');
+    if (statusEl) statusEl.className = 'wifi-scan-status';
+    setWifiConfigButtonsEnabled(true);
+
+    const ssidInp = document.getElementById('wifi-adv-ap-ssid');
+    const passInp = document.getElementById('wifi-adv-ap-pass');
+    if (ssidInp && !ssidInp.dataset.userEdited) {
+        ssidInp.value = store.wifi.apSsid || '';
+        ssidInp.placeholder = store.wifi.apSsid ? '' : '(firmware default)';
+    }
+    if (passInp && !passInp.dataset.userEdited) {
+        passInp.value = store.wifi.apPass || '';
+        passInp.placeholder = store.wifi.apPass ? '' : '(firmware default)';
+    }
+
+    renderStaSection();
+}
+
+// ─── STA connect flow: real "connecting..." feedback + failure detection ──
+// Firmware has no push notification for "STA connect failed" — it silently
+// falls back to AP mode after WIFI_STA_TIMEOUT_MS (10s) internally. So we
+// poll WIFI_GET_STATUS while waiting and time out client-side if it doesn't
+// confirm STA+IP in time.
+
+function ensureWifiConnectStatusEl() {
+    let el = document.getElementById('wifi-connect-status');
+    if (el) return el;
+    const box = document.getElementById('wifi-connect-box');
+    if (!box) return null;
+    el = document.createElement('div');
+    el.id = 'wifi-connect-status';
+    el.style.display = 'none';
+    el.style.textAlign = 'center';
+    el.style.padding = '14px 4px 4px';
+    box.appendChild(el);
+    return el;
+}
+
+function setWifiConnectFormVisible(visible) {
+    ['wifi-pass', 'btn-wifi-connect-submit', 'wifi-pass-eye-toggle'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = visible ? '' : 'none';
+    });
+    const statusEl = document.getElementById('wifi-connect-status');
+    if (statusEl && visible) statusEl.style.display = 'none';
+}
+
+function startStaConnectWait(ssid) {
+    setWifiConnectFormVisible(false);
+    awaitingStaReboot = true;
+    awaitingStaSsid = ssid;
+
+    const statusEl = ensureWifiConnectStatusEl();
+    if (statusEl) {
+        statusEl.innerHTML = `
+            <div class="scan-spinner" style="width:30px; height:30px; margin:0 auto 10px;"></div>
+            <div style="font-weight:600;">Saving config — restarting to join "${ssid}"...</div>
+            <div class="scan-subtitle" style="margin:4px 0 0; font-size:12px;">The device restarts to apply new WiFi settings — this can take up to 15 seconds.</div>
+        `;
+        statusEl.style.display = 'block';
+    }
+    showStatus(`Restarting to join ${ssid}...`, 'info');
+
+    clearInterval(staConnectPollHandle);
+    clearTimeout(staConnectTimeoutHandle);
+
+    // Over Serial the COM port typically stays enumerated through the
+    // restart, so keep polling — it'll just go quiet for a few seconds
+    // while the board boots. Over WebSocket there's nothing to poll: the
+    // device's own AP/IP disappears the moment it restarts into STA mode,
+    // so we rely on the onDisconnected hook (see wsAPI.onDisconnected below)
+    // instead of polling a socket that's about to die.
+    if (store.system.transport === 'serial') {
+        staConnectPollHandle = setInterval(() => sendFrame(buildWifiGetStatus()), 2000);
+    }
+
+    // Reboot (~2-3s) + firmware's own 10s STA connect timeout + margin.
+    staConnectTimeoutHandle = setTimeout(() => {
+        if (awaitingStaReboot) showStaConnectFailed(ssid);
+    }, 20000);
+}
+
+function showStaConnectFailed(ssid) {
+    clearInterval(staConnectPollHandle);
+    staConnectPollHandle = null;
+    staConnectTimeoutHandle = null;
+    awaitingStaReboot = false;
+
+    const statusEl = ensureWifiConnectStatusEl();
+    if (statusEl) {
+        statusEl.innerHTML = `
+            <div style="color:var(--accent-red); font-weight:700; margin-bottom:8px;">Couldn't connect to "${ssid}"</div>
+            <div class="scan-subtitle" style="font-size:13px; margin-bottom:14px;">
+                Double-check the password, or move closer to the router and try again.
+            </div>
+            <button id="wifi-connect-retry" class="btn btn-primary btn-sm">Try Again</button>
+        `;
+        statusEl.style.display = 'block';
+        document.getElementById('wifi-connect-retry')?.addEventListener('click', () => {
+            setWifiConnectFormVisible(true);
+            const passInp = document.getElementById('wifi-pass');
+            if (passInp) { passInp.value = ''; passInp.focus(); }
+        });
+    }
+    showStatus(`Couldn't connect to ${ssid}`, 'error');
+}
+
+/** Shown when the WebSocket connection drops right after submitting new STA
+ *  credentials — expected, since the device's own AP disappears once it
+ *  restarts and joins the new network. We can't poll a dead socket, so this
+ *  is the best guidance available: tell the user where to look next. */
+function showStaRebootReconnectMessage(ssid) {
+    awaitingStaReboot = false;
+    clearInterval(staConnectPollHandle);
+    clearTimeout(staConnectTimeoutHandle);
+    staConnectPollHandle = null;
+    staConnectTimeoutHandle = null;
+
+    const statusEl = ensureWifiConnectStatusEl();
+    if (statusEl) {
+        statusEl.innerHTML = `
+            <div style="font-weight:700; margin-bottom:8px;">Device is restarting</div>
+            <div class="scan-subtitle" style="font-size:13px; line-height:1.6;">
+                It's switching to join <strong style="color:white;">${ssid}</strong>.
+                Reconnect this device to that WiFi network, then open:<br/>
+                <strong style="color: var(--accent-green);">http://esp32-dsp.local</strong>
+            </div>
+        `;
+        statusEl.style.display = 'block';
+    }
+    showStatus('Device restarting — reconnect to your WiFi network', 'info');
+}
+
+function clearStaConnectWait() {
+    clearInterval(staConnectPollHandle);
+    clearTimeout(staConnectTimeoutHandle);
+    staConnectPollHandle = null;
+    staConnectTimeoutHandle = null;
+    awaitingStaReboot = false;
+}
+
+/** Adds a 👁 show/hide toggle next to a password input, without assuming its layout. */
+function addPasswordEyeToggle(inputId) {
+    const input = document.getElementById(inputId);
+    if (!input || input.dataset.eyeAdded) return;
+    input.dataset.eyeAdded = '1';
+
+    const eyeBtn = document.createElement('button');
+    eyeBtn.type = 'button';
+    eyeBtn.id = inputId + '-eye-toggle';
+    eyeBtn.className = 'btn btn-outline btn-sm';
+    eyeBtn.textContent = '👁';
+    eyeBtn.title = 'Show/hide password';
+    eyeBtn.style.marginLeft = '6px';
+
+    input.insertAdjacentElement('afterend', eyeBtn);
+
+    eyeBtn.addEventListener('click', () => {
+        input.type = input.type === 'password' ? 'text' : 'password';
+    });
 }
 
 function renderWifiList() {
@@ -2623,6 +3094,8 @@ function renderWifiList() {
         li.innerHTML = `<span>${net.ssid}</span> <span style="color:var(--text-dim); font-size:12px;">${net.rssi} dBm ${net.encrypted ? '🔒' : ''}</span>`;
         
         li.addEventListener('click', () => {
+            clearStaConnectWait();
+            setWifiConnectFormVisible(true);
             document.getElementById('wifi-connect-box').style.display = 'block';
             document.getElementById('wifi-selected-ssid-label').textContent = `Connect to ${net.ssid}`;
             document.getElementById('wifi-selected-ssid').value = net.ssid;
@@ -2663,12 +3136,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('btn-wifi-config').addEventListener('click', () => {
         document.getElementById('scan-overlay').classList.remove('hidden');
-        document.getElementById('scan-auto-content').style.display = 'none';
-        document.getElementById('scan-manual-content').style.display = 'none';
-        document.getElementById('scan-wifi-content').style.display = 'block';
+        switchLobbyScreen('scan-wifi-content');
         document.getElementById('wifi-network-list').innerHTML = '';
         
         sendFrame(buildWifiGetStatus());
+        requestWifiConfig();
         
         if (store.wifi.mode === 'STA' && store.wifi.ip !== '0.0.0.0') {
             document.getElementById('wifi-scanning-text').style.display = 'none';
@@ -2818,7 +3290,15 @@ document.addEventListener('DOMContentLoaded', () => {
     window.serialAPI.onDisconnected(() => {
         if (store.system.transport !== 'serial') return; // Ignore if we switched transports
         store.setConnected(false); updateStatusUI();
-        showStatus('Serial Disconnected', 'error');
+        if (awaitingStaReboot) {
+            // Expected — device is restarting to apply the new WiFi config.
+            // Keep the "Saving config..." UI up; startAutoScan() below will
+            // pick it back up once the COM port re-enumerates, and the
+            // connect-wait timeout/poll (already running) takes it from there.
+            showStatus('Device restarting...', 'info');
+        } else {
+            showStatus('Serial Disconnected', 'error');
+        }
         manualMode = false; startAutoScan();
     });
 
@@ -2828,6 +3308,16 @@ document.addEventListener('DOMContentLoaded', () => {
         window.wsAPI.onDisconnected(() => {
             if (store.system.transport !== 'websocket') return;
             store.setConnected(false); updateStatusUI();
+
+            if (awaitingStaReboot) {
+                // Expected — the device's own AP just disappeared because it
+                // restarted into STA mode. There's no old address left to
+                // reconnect to, so don't auto-reconnect; tell the user where
+                // to look instead.
+                showStaRebootReconnectMessage(awaitingStaSsid);
+                return;
+            }
+
             showStatus('WiFi Disconnected', 'error');
             
             if (isBrowser) {
@@ -2858,6 +3348,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('btn-wifi-back')?.addEventListener('click', () => {
+        clearStaConnectWait();
         if (store.system.connected) {
             document.getElementById('scan-overlay').classList.add('hidden');
         } else {
@@ -2865,23 +3356,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('btn-wifi-config')?.addEventListener('click', () => {
-        document.getElementById('scan-overlay').classList.remove('hidden');
-        
-        // Pre-check state to avoid flicker
-        if (store.wifi.mode === 'STA' && store.wifi.ip && store.wifi.ip !== '0.0.0.0') {
-            switchLobbyScreen('scan-wifi-connected');
-        } else {
-            switchLobbyScreen('scan-wifi-content');
-        }
-
-        document.getElementById('wifi-network-list').innerHTML = '';
-        document.getElementById('wifi-scanning-text').style.display = 'block';
-        sendFrame(buildWifiGetStatus());
-        sendFrame(buildWifiScan());
-    });
-
     document.getElementById('btn-wifi-connect-cancel')?.addEventListener('click', () => {
+        clearStaConnectWait();
+        setWifiConnectFormVisible(true);
         document.getElementById('wifi-connect-box').style.display = 'none';
     });
 
@@ -2889,16 +3366,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const ssid = document.getElementById('wifi-selected-ssid').value;
         const pass = document.getElementById('wifi-pass').value;
         sendFrame(buildWifiSetSTA(ssid, pass));
-        isPendingStaReboot = true;
-        document.getElementById('wifi-connect-box').style.display = 'none';
-        showStatus('Sending WiFi credentials...', 'info');
+        startStaConnectWait(ssid);
     });
 
-    document.getElementById('btn-wifi-set-ap')?.addEventListener('click', () => {
-        if(confirm("Switch back to AP Mode?")) {
-            sendFrame(buildWifiSetAP());
-        }
-    });
+    // "Switch to AP mode" buttons removed — forgetting the saved network
+    // (Advanced WiFi Settings → "Forget this network") already does this,
+    // and is clearer about what it actually does.
+    document.getElementById('btn-wifi-set-ap')?.remove();
+    document.getElementById('btn-wifi-connected-ap')?.remove();
+
+    addPasswordEyeToggle('wifi-pass');
 
     document.getElementById('btn-wifi-ws-connect')?.addEventListener('click', () => {
         if (store.wifi.ip && store.wifi.ip !== '0.0.0.0') {
@@ -2911,12 +3388,6 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('scan-overlay').classList.add('hidden');
         } else {
             showConnectionLobby();
-        }
-    });
-
-    document.getElementById('btn-wifi-connected-ap')?.addEventListener('click', () => {
-        if(confirm("Switch back to AP Mode?")) {
-            sendFrame(buildWifiSetAP());
         }
     });
 
@@ -3018,10 +3489,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    initBatteryUI();
+    initWifiStatusBadge();
+    initWifiScanColumns();
+
     setInterval(() => {
         if (!store.system.connected) return;
         sendFrame(buildFrame(CMD.GET_REPORT_CPU_USAGE, MODULE.SYSTEM));
     }, 2000);
+
+    setInterval(() => {
+        if (!store.system.connected) return;
+        sendFrame(buildGetBatteryStatus());
+    }, 3000);
 
     setInterval(() => {
         if (!store.system.connected) return;
@@ -3044,7 +3524,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isOpen = document.querySelector(`.accordion[data-module-id="${domId}"].open`);
             if (isOpen) sendFrame(buildGetModuleMeter(moduleId));
         });
-    }, 300);
+    }, 10);
 
     if (isBrowser) {
         // Running in mobile browser, connect directly via WebSocket

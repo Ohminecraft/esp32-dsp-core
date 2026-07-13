@@ -39,22 +39,28 @@
 #ifndef PIN_CONFIG_H
 #define PIN_CONFIG_H
 
+#include "config.h"
+
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
 // ============================================================================
 // Target: ESP32-S3 DevKitC-1 (44-pin)
 // ============================================================================
 
 // I2S Input/Output Full
-#define I2S_IN_OUT_BCK_PIN         10      // BCK
-#define I2S_IN_OUT_WS_PIN          11      // WS 
-#define I2S_IN_OUT_DATA_OUT_PIN    13      // DOUT
-#define I2S_IN_OUT_DATA_IN_PIN     12      // DIN
+#define I2S_IN_OUT_BCK_PIN         4      // BCK
+#define I2S_IN_OUT_WS_PIN          5     // WS 
+#define I2S_IN_OUT_DATA_OUT_PIN    6      // DOUT
+#define I2S_IN_OUT_DATA_IN_PIN     7      // DIN
 
 // I2S Output Subwoffer (WIP)
 #define I2S_SUB_BCK_PIN            I2S_IN_OUT_BCK_PIN      // BCK same as in/out full 
 #define I2S_SUB_WS_PIN             I2S_IN_OUT_WS_PIN       // WS same as in/out full
 #define I2S_SUB_DATA_OUT_PIN       -1                      // DOUT
 #define I2S_SUB_DATA_IN_PIN        I2S_IN_OUT_DATA_IN_PIN  // DIN
+
+#if defined(USE_MASTER_MODE)
+#define I2S_IN_OUT_MCLK_PIN -1
+#endif
 
 // UART Control (Serial2)
 // GPIO19/20 = USB-JTAG → cannot use. GPIO16/17 = I2S → shifted to GPIO1/2

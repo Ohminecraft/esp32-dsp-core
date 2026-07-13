@@ -78,7 +78,7 @@ void DRC::reset() {
     }
     // Zero sub-band buffers if mapped
     if (_subBandPtr[0]) {
-        for (int b = 0; b < DRC_MAX_BANDS; b++) {
+        for (int b = 0; b < 3; b++) {
             if (_subBandPtr[b]) memset(_subBandPtr[b], 0, DSP_FRAME_SAMPLES * sizeof(float));
         }
     }
@@ -348,8 +348,8 @@ void IRAM_ATTR DRC::process(float* __restrict samples, size_t numSamples) {
     }
 
     // ── Per-band compression ──────────────────────────────────────────
-    for (int b = 1; b < numBands + 1; b++) {
-        applyBandDRC(_bands[b], _subBandPtr[b - 1], numSamples);
+    for (int b = 0; b < numBands; b++) {
+        applyBandDRC(_bands[b + 1], _subBandPtr[b], numSamples);
     }
 
     // ── Sum all sub-bands back to output ──────────────────────────────
@@ -398,12 +398,14 @@ void DRC::setCrossoverQ(uint8_t idx, int32_t q_q610) {
 // ============================================================================
 void DRC::setThreshold(uint8_t band, float db) {
     if (band >= MAX_BANDS) return;
+    if (_mode == DRC_MODE_FULLBAND) band = 0;
     _bands[band].thresholdDb = db;
     recalcBand(band);
 }
 
 void DRC::setRatio(uint8_t band, int32_t ratio_x100) {
     if (band >= MAX_BANDS) return;
+    if (_mode == DRC_MODE_FULLBAND) band = 0;
     if (ratio_x100 < 100) ratio_x100 = 100;
     _bands[band].ratioX100 = ratio_x100;
     recalcBand(band);
@@ -411,6 +413,7 @@ void DRC::setRatio(uint8_t band, int32_t ratio_x100) {
 
 void DRC::setAttackTime(uint8_t band, int32_t ms) {
     if (band >= MAX_BANDS) return;
+    if (_mode == DRC_MODE_FULLBAND) band = 0;
     if (ms < 1) ms = 1;
     _bands[band].attackMs = ms;
     recalcBand(band);
@@ -418,6 +421,7 @@ void DRC::setAttackTime(uint8_t band, int32_t ms) {
 
 void DRC::setReleaseTime(uint8_t band, int32_t ms) {
     if (band >= MAX_BANDS) return;
+    if (_mode == DRC_MODE_FULLBAND) band = 0;
     if (ms < 1) ms = 1;
     _bands[band].releaseMs = ms;
     recalcBand(band);
@@ -425,12 +429,14 @@ void DRC::setReleaseTime(uint8_t band, int32_t ms) {
 
 void DRC::setPregain(uint8_t band, float gain_db) {
     if (band >= MAX_BANDS) return;
-    _bands[band].pregain = gain_db;
+    if (_mode == DRC_MODE_FULLBAND) band = 0;
+    _bands[band].pregain = db_to_linear_gain(gain_db); // dB -> linear
     recalcBand(band);
 }
 
 void DRC::setLookahead(uint8_t band, float ms) {
     if (band >= MAX_BANDS) return;
+    if (_mode == DRC_MODE_FULLBAND) band = 0;
     DRCBand& b = _bands[band];
     b.lookaheadMs = (ms < 0.0f) ? 0.0f : ms;
     recalcBand(band);

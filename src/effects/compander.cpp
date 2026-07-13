@@ -187,7 +187,7 @@ void Compander::recalcCoeffs() {
 }
 
 void Compander::setThreshold(float db)     { _thresholdDb = db; recalcCoeffs(); }
-void Compander::setRatioBelow(int32_t ratio_q88) { _ratioBelowQ88 = (ratio_q88 < 10) ? 100 : ratio_q88; recalcCoeffs(); }
+void Compander::setRatioBelow(int32_t ratio_q88) { _ratioBelowQ88 = (ratio_q88 < 10) ? 10 : ratio_q88; recalcCoeffs(); }
 void Compander::setRatioAbove(int32_t ratio_q88) { _ratioAboveQ88 = (ratio_q88 < 100) ? 100 : ratio_q88; recalcCoeffs(); }
 void Compander::setAttackTime(int32_t ms)        { _attackMs = (ms < 1) ? 1 : ms; recalcCoeffs(); }
 void Compander::setReleaseTime(int32_t ms)       { _releaseMs = (ms < 1) ? 1 : ms; recalcCoeffs(); }
