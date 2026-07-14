@@ -288,8 +288,8 @@ void PresetManager::saveDefault(uint8_t slot) {
     memset(&pd, 0, sizeof(PresetData));
     pd.valid = true;
 
-    // Chain: [0]=preGain enabled, [1]=preEq enable, [12]=postGain enabled
-    pd.en_mask    = (1u << 0) | (1u << 1) | (1u << 12);
+    // Chain: [0]=mainmenuParamGain enable, [1]=preEq enable,[2]=preGain enabled, [13]=postGain enabled
+    pd.en_mask    = (1u << 0) | (1u << 2) | (1u << 1) | (1u << 13);
     pd.vol_db     = 0;
     pd.pre_vol_db = 0;
     pd.vol_mono   = 0;

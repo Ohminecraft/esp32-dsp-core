@@ -58,7 +58,7 @@
 // DSP Pipeline — Module Count
 // ============================================================================
 
-#define DSP_MODULE_COUNT        13      // Total modules in pipeline
+#define DSP_MODULE_COUNT        14      // Total modules in pipeline
 
 // Module IDs (UART protocol)
 #define MODULE_ID_PRE_GAIN      0x01
@@ -74,6 +74,7 @@
 #define MODULE_ID_ISF_1         0x0B
 #define MODULE_ID_ISF_2         0x0C
 #define MODULE_ID_PRE_EQ        0x0D  // Pre EQ (3-band tone control: Bass/Mid/Treble)
+#define MODULE_ID_MMPARAM_GAIN  0x0E
 #define MODULE_ID_SYSTEM        0xF0
 
 // ============================================================================

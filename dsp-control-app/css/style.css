@@ -1374,7 +1374,7 @@ body {
 .drc-num:focus { border-color: var(--accent); }
 
 .drc-q {
-    width: 52px;
+    width: 72px;
 }
 
 .drc-qlabel {

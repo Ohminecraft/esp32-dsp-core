@@ -451,8 +451,8 @@ void Display::setPipeline(DspPipeline* pipeline, PresetManager* presetMgr) {
     _mmparam.mid = constrain(_mmparam.mid, 0, 100);
     _mmparam.treble = constrain(_mmparam.treble, 0, 100);
     if (_pipeline) {
-        VolumeControl& pre = _pipeline->getPreGain();
-        float db = -32.0f + _mmparam.vol * 32.0f / 32.0f;
+        VolumeControl& pre = _pipeline->getMMParamGain();
+        float db = -64.0f + _mmparam.vol * 64.0f / 32.0f;
         pre.setGainDb(FLOAT_TO_DB_Q8(db));
         pre.setMute(_mmparam.vol <= 0);
         ParametricEQ& preEq = _pipeline->getPreEq();
@@ -871,25 +871,11 @@ void Display::handleEncoder(EncoderEvent enc) {
                     // TODO: declare in display.h: std::function<void()> onBtKick;
                     if (onBtKick) onBtKick();
                 } else if (_focusIdx == 2) {
-                    editDelta(+1);       // + button
+                    // TODO: Bluetooth Vol +
                 } else if (_focusIdx == 3) {
-                    // Mute/unmute toggle
-                    if (_pipeline) {
-                        VolumeControl& pre = _pipeline->getPreGain();
-                        if (_mmparam.vol <= 0) {
-                            _mmparam.vol = 16;
-                            float db = -32.0f + _mmparam.vol * 32.0f / 32.0f;
-                            pre.setGainDb(FLOAT_TO_DB_Q8(db));
-                            pre.setMute(false);
-                        } else {
-                            pre.setMute(true);
-                            _mmparam.vol = 0;
-                        }
-                        _mainMenuLastEditMs = millis();
-                        _mainMenuAutosaveArmed = true;
-                    }
+                    // TODO: Bluetooth Play/Pause
                 } else if (_focusIdx == 4) {
-                    editDelta(-1);       // − button
+                    // TODO: Bluetooth Vol -
                 }
             }
             _dirty = true; return;
@@ -924,8 +910,8 @@ void Display::handleEncoder(EncoderEvent enc) {
                     _presetTargetSlot = _focusIdx;
                     _presetMgr->loadPreset(_presetTargetSlot, *_pipeline);
                     _presetMgr->saveCurrentSlotIndex(_presetTargetSlot);
-                    VolumeControl& pre = _pipeline->getPreGain();
-                    float db = -32.0f + _mmparam.vol * 32.0f / 32.0f;
+                    VolumeControl& pre = _pipeline->getMMParamGain();
+                    float db = -64.0f + _mmparam.vol * 64.0f / 32.0f;
                     pre.setGainDb(FLOAT_TO_DB_Q8(db));
                     pre.setMute(_mmparam.vol <= 0);
                     ParametricEQ& preEq = _pipeline->getPreEq();
@@ -1247,7 +1233,7 @@ void Display::editDelta(int8_t dir) {
 
         float oldValue = 0.0f, newValue = 0.0f;
         if (p == 0) {
-            VolumeControl& pre = _pipeline->getPreGain();
+            VolumeControl& pre = _pipeline->getMMParamGain();
             oldValue = (float)_mmparam.vol;
             _mmparam.vol = constrain(_mmparam.vol + dir, 0, 32);
             newValue = (float)_mmparam.vol;

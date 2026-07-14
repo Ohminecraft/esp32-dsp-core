@@ -481,7 +481,7 @@ void ParamController::handleGetAllState(const UartCommand& cmd) {
         sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 1, (float)drc._bands[p].ratioX100 / 100.0f);
         sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 2, (float)drc._bands[p].attackMs);
         sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 3, (float)drc._bands[p].releaseMs);
-        sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 4, (float)drc._bands[p].pregain);
+        sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 4, (float)drc._bands[p].pregainIn);
         sendParamF32(MODULE_ID_DRC, idxbandBase[p] + 5, drc._bands[p].lookaheadMs);
     }
     // --- EQ bands (float32 format) ---

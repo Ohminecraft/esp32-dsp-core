@@ -429,17 +429,17 @@ parser.onFrame((frame) => {
             break;
         case MODULE.DRC: {
             // Firmware sends float32, convert to internal store format
-            if (pIndex === 0x10) {
+            if (pIndex === 0) {
                 store.drc.mode = val;  // enum, keep as int
-            } else if (pIndex === 0x11) {
+            } else if (pIndex === 1) {
                 store.drc.cfType = val;
-            } else if (pIndex === 0x12) {
+            } else if (pIndex === 2) {
                 store.drc.fc1 = val;
-            } else if (pIndex === 0x13) {
+            } else if (pIndex === 3) {
                 store.drc.qLp = val;
-            } else if (pIndex === 0x14) {
+            } else if (pIndex === 4) {
                 store.drc.fc2 = val;
-            } else if (pIndex === 0x15) {
+            } else if (pIndex === 5) {
                 store.drc.qHp = val;
             } else if (pIndex >= 0x20 && pIndex <= 0x3F) {
                 const bandIdx = (pIndex - 0x20) >> 3;
@@ -450,7 +450,7 @@ parser.onFrame((frame) => {
                     else if (param === 1) drcBand.ratio = val;
                     else if (param === 2) drcBand.attackMs = val;
                     else if (param === 3) drcBand.releaseMs = val;
-                    else if (param === 4) drcBand.pregain = val;
+                    else if (param === 4) {drcBand.pregain = val;}
                     else if (param === 5) drcBand.lookaheadMs = val;     // already ms
                 }
             }
@@ -1171,11 +1171,11 @@ function buildDrcPanel(container) {
     });
     const qLpLabel = document.createElement('span'); qLpLabel.textContent = 'Q(LP)'; qLpLabel.className = 'drc-qlabel';
     const qLpInp = document.createElement('input');
-    qLpInp.type = 'number'; qLpInp.className = 'drc-num drc-q'; qLpInp.min = 0.1; qLpInp.max = 4; qLpInp.step = 0.01;
-    qLpInp.value = (d.qLp / 1024).toFixed(2);
+    qLpInp.type = 'number'; qLpInp.className = 'drc-num drc-q'; qLpInp.min = 0.01; qLpInp.max = 4; qLpInp.step = 0.001;
+    qLpInp.value = (d.qLp / 1024).toFixed(3);
     qLpInp.addEventListener('change', () => {
-        d.qLp = Math.round(parseFloat(qLpInp.value) * 1024);
-        sendFrame(buildSetParam(MODULE.DRC, 4, d.qLp));
+        d.qLp = parseFloat(qLpInp.value);
+        sendFrame(buildSetParam(MODULE.DRC, 4, d.qLp + 0.001));
     });
     cf1Row.appendChild(fc1Inp);
     cf1Row.appendChild(qLpLabel);
@@ -1196,11 +1196,11 @@ function buildDrcPanel(container) {
     });
     const qHpLabel = document.createElement('span'); qHpLabel.textContent = 'Q(HP)'; qHpLabel.className = 'drc-qlabel';
     const qHpInp = document.createElement('input');
-    qHpInp.type = 'number'; qHpInp.className = 'drc-num drc-q'; qHpInp.min = 0.1; qHpInp.max = 4; qHpInp.step = 0.01;
-    qHpInp.value = (d.qHp / 1024).toFixed(2);
+    qHpInp.type = 'number'; qHpInp.className = 'drc-num drc-q'; qHpInp.min = 0.1; qHpInp.max = 4; qHpInp.step = 0.001;
+    qHpInp.value = (d.qHp / 1024).toFixed(3);
     qHpInp.addEventListener('change', () => {
-        d.qHp = Math.round(parseFloat(qHpInp.value) * 1024);
-        sendFrame(buildSetParam(MODULE.DRC, 5, d.qHp));
+        d.qHp = parseFloat(qHpInp.value);
+        sendFrame(buildSetParam(MODULE.DRC, 5, d.qHp + 0.001));
     });
     cf2Row.appendChild(fc2Inp);
     cf2Row.appendChild(qHpLabel);
@@ -3555,7 +3555,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isOpen = document.querySelector(`.accordion[data-module-id="${domId}"].open`);
             if (isOpen) sendFrame(buildGetModuleMeter(moduleId));
         });
-    }, 300);
+    }, 100);
 
     if (isBrowser) {
         // Running in mobile browser, connect directly via WebSocket
