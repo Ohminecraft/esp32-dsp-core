@@ -263,6 +263,12 @@ function switchLobbyScreen(screenId) {
         const el = document.getElementById(id);
         if (el) el.style.display = (id === screenId) ? 'block' : 'none';
     });
+
+    // The shared .scan-card is sized for the simple single-column lobby
+    // screens (400px) — the WiFi config screen needs real room for its
+    // two-column layout.
+    const el = document.getElementById(screenId);
+    el?.closest('.scan-card')?.classList.toggle('scan-card-wide', screenId === 'scan-wifi-content');
 }
 
 function showConnectionLobby() {
@@ -399,7 +405,7 @@ parser.onFrame((frame) => {
         case MODULE.COMPANDER:
             if (pIndex === 0) store.updateParam('compander', 'threshold', val);      // dB
             else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val);
-            else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val);
+            else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val); 
             else if (pIndex === 3) store.updateParam('compander', 'attackMs', val);
             else if (pIndex === 4) store.updateParam('compander', 'releaseMs', val);
             else if (pIndex === 5) store.updateParam('compander', 'pregain', val * 4096);   // dB → Q4.12
@@ -423,24 +429,18 @@ parser.onFrame((frame) => {
             break;
         case MODULE.DRC: {
             // Firmware sends float32, convert to internal store format
-            if (pIndex === 0) {
+            if (pIndex === 0x10) {
                 store.drc.mode = val;  // enum, keep as int
-                console.log(store.drc.mode);
-            } else if (pIndex === 1) {
+            } else if (pIndex === 0x11) {
                 store.drc.cfType = val;
-                console.log(store.drc.cfType);
-            } else if (pIndex === 2) {
+            } else if (pIndex === 0x12) {
                 store.drc.fc1 = val;
-                console.log(store.drc.fc1);
-            } else if (pIndex === 3) {
+            } else if (pIndex === 0x13) {
                 store.drc.qLp = val;
-                console.log(store.drc.qLp);
-            } else if (pIndex === 4) {
+            } else if (pIndex === 0x14) {
                 store.drc.fc2 = val;
-                console.log(store.drc.fc2);
-            } else if (pIndex === 5) {
+            } else if (pIndex === 0x15) {
                 store.drc.qHp = val;
-                console.log(store.drc.qHp);
             } else if (pIndex >= 0x20 && pIndex <= 0x3F) {
                 const bandIdx = (pIndex - 0x20) >> 3;
                 const param   = (pIndex - 0x20) & 0x07;
@@ -1175,7 +1175,7 @@ function buildDrcPanel(container) {
     qLpInp.value = (d.qLp / 1024).toFixed(2);
     qLpInp.addEventListener('change', () => {
         d.qLp = Math.round(parseFloat(qLpInp.value) * 1024);
-        sendFrame(buildSetParam(MODULE.DRC, 3, d.qLp));
+        sendFrame(buildSetParam(MODULE.DRC, 4, d.qLp));
     });
     cf1Row.appendChild(fc1Inp);
     cf1Row.appendChild(qLpLabel);
@@ -1192,7 +1192,7 @@ function buildDrcPanel(container) {
     fc2Inp.addEventListener('change', () => {
         d.fc2 = Math.max(20, Math.min(20000, parseInt(fc2Inp.value) || d.fc2));
         fc2Inp.value = d.fc2;
-        sendFrame(buildSetParam(MODULE.DRC, 4, d.fc2));
+        sendFrame(buildSetParam(MODULE.DRC, 3, d.fc2));
     });
     const qHpLabel = document.createElement('span'); qHpLabel.textContent = 'Q(HP)'; qHpLabel.className = 'drc-qlabel';
     const qHpInp = document.createElement('input');
@@ -1961,7 +1961,6 @@ function renderCompanderMeter(envLinear, gainDb) {
     valEl.textContent = gainDb <= 0
         ? `${gainDb.toFixed(1)} dB`
         : `+${gainDb.toFixed(1)} dB`;
-        
 }
 
 function renderDrcMeter(gains) {
@@ -2602,13 +2601,18 @@ function updateWifiUI() {
     
     if (store.wifi.mode === 'STA' && store.wifi.ip && store.wifi.ip !== '0.0.0.0') {
         // If we were in the middle of a connect attempt, this is success —
-        // stop polling/waiting and clear the "Connecting..." UI. The device
-        // does restart to apply new STA config (see main.cpp), so this
-        // fires once it comes back up and confirms STA+IP.
+        // stop polling/waiting and clear the "Connecting..." UI. Firmware
+        // pushes this unsolicited once WiFiManager resolves the async
+        // WiFi.begin() (see ParamController::pollWifiStatus in firmware).
         if (awaitingStaReboot || staConnectPollHandle || staConnectTimeoutHandle) {
             clearStaConnectWait();
             showStatus(`Connected to ${store.wifi.ssid}`, 'ok');
         }
+    } else if (store.wifi.mode === 'AP' && awaitingStaReboot) {
+        // Firmware fell back to AP after its own STA connect timeout —
+        // that's a definitive failure, no need to wait for our client-side
+        // 20s timeout to fire.
+        showStaConnectFailed(awaitingStaSsid);
     }
 
     renderStaSection();
@@ -2930,10 +2934,12 @@ function renderWifiConfigPanel() {
 }
 
 // ─── STA connect flow: real "connecting..." feedback + failure detection ──
-// Firmware has no push notification for "STA connect failed" — it silently
-// falls back to AP mode after WIFI_STA_TIMEOUT_MS (10s) internally. So we
-// poll WIFI_GET_STATUS while waiting and time out client-side if it doesn't
-// confirm STA+IP in time.
+// Firmware now pushes an unsolicited CMD_WIFI_GET_STATUS frame the moment
+// the async STA connect attempt actually resolves (success, or timed-out
+// and fell back to AP — see ParamController::pollWifiStatus() in firmware),
+// so updateWifiUI() picks the result up as soon as it arrives. The polling
+// below (serial transport only) and the 20s timeout are just a safety net
+// in case that push is ever missed/delayed.
 
 function ensureWifiConnectStatusEl() {
     let el = document.getElementById('wifi-connect-status');
@@ -3052,21 +3058,27 @@ function clearStaConnectWait() {
     awaitingStaReboot = false;
 }
 
-/** Adds a 👁 show/hide toggle next to a password input, without assuming its layout. */
+/** Wraps a password input so a 👁 toggle sits inside it, matching the AP
+ *  password field's style (rather than a separate button off to the side). */
 function addPasswordEyeToggle(inputId) {
     const input = document.getElementById(inputId);
     if (!input || input.dataset.eyeAdded) return;
     input.dataset.eyeAdded = '1';
 
+    const wrap = document.createElement('div');
+    wrap.className = 'wifi-scan-input-wrap';
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+    // Leave room so typed text doesn't run under the eye button.
+    input.style.paddingRight = '34px';
+
     const eyeBtn = document.createElement('button');
     eyeBtn.type = 'button';
     eyeBtn.id = inputId + '-eye-toggle';
-    eyeBtn.className = 'btn btn-outline btn-sm';
+    eyeBtn.className = 'wifi-scan-eye';
     eyeBtn.textContent = '👁';
     eyeBtn.title = 'Show/hide password';
-    eyeBtn.style.marginLeft = '6px';
-
-    input.insertAdjacentElement('afterend', eyeBtn);
+    wrap.appendChild(eyeBtn);
 
     eyeBtn.addEventListener('click', () => {
         input.type = input.type === 'password' ? 'text' : 'password';
@@ -3138,7 +3150,18 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('scan-overlay').classList.remove('hidden');
         switchLobbyScreen('scan-wifi-content');
         document.getElementById('wifi-network-list').innerHTML = '';
-        
+
+        // Clear any stale "Connecting.../Couldn't connect" UI left over from
+        // a previous attempt — without this, reopening the screen after a
+        // connect had already succeeded (or failed) elsewhere kept showing
+        // the old state forever, since nothing here used to reset it.
+        clearStaConnectWait();
+        setWifiConnectFormVisible(true);
+        const connectBox = document.getElementById('wifi-connect-box');
+        if (connectBox) connectBox.style.display = 'none';
+        const connectStatusEl = document.getElementById('wifi-connect-status');
+        if (connectStatusEl) connectStatusEl.style.display = 'none';
+
         sendFrame(buildWifiGetStatus());
         requestWifiConfig();
         
@@ -3337,6 +3360,14 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('scan-wifi-content').style.display = 'block';
         document.getElementById('wifi-network-list').innerHTML = '';
         document.getElementById('wifi-scanning-text').style.display = 'block';
+
+        clearStaConnectWait();
+        setWifiConnectFormVisible(true);
+        const connectBox = document.getElementById('wifi-connect-box');
+        if (connectBox) connectBox.style.display = 'none';
+        const connectStatusEl = document.getElementById('wifi-connect-status');
+        if (connectStatusEl) connectStatusEl.style.display = 'none';
+
         sendFrame(buildWifiGetStatus());
         sendFrame(buildWifiScan());
     });
@@ -3524,7 +3555,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isOpen = document.querySelector(`.accordion[data-module-id="${domId}"].open`);
             if (isOpen) sendFrame(buildGetModuleMeter(moduleId));
         });
-    }, 10);
+    }, 300);
 
     if (isBrowser) {
         // Running in mobile browser, connect directly via WebSocket

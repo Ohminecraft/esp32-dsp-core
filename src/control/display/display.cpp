@@ -896,6 +896,7 @@ void Display::handleEncoder(EncoderEvent enc) {
         }
         if (s == ScreenID::SETTINGS) {
             const uint8_t backIdx = getItemCount() - 1;
+            const uint8_t resetIdx = backIdx - 1;
             if (_focusIdx == backIdx) {
                 popScreen(); _dirty = true; return;
             }
@@ -905,15 +906,13 @@ void Display::handleEncoder(EncoderEvent enc) {
                 if (_settingsMgr) _settingsMgr->setWifiEnabled(_settingsWifi);
                 wifiOnOffTriggered = true;
                 _dirty = true; return;
-            }
-            // WiFi Info nav button — only present (at index 1) once WiFi is enabled.
-            // Condition must stay identical to getItemCount()/drawSettings().
-            if (_wifiMgr && _settingsWifi && _focusIdx == 1) {
+            } else if (_wifiMgr && _settingsWifi && _focusIdx == 1) {
                 pushScreen(ScreenID::WIFI_INFO);
-                _dirty = true; return;
+            } else if (_battery && _battery->isPresent() && _focusIdx == resetIdx) {
+                _battery->resetCoulombCounter();
+            } else {
+                toggleEditMode();
             }
-            // Brightness and battery items - toggle edit mode with sweep animation
-            toggleEditMode();
             _dirty = true; return;
         }
         if (s == ScreenID::DSP_LIST) {
@@ -1064,18 +1063,9 @@ void Display::onConfirm() {
     switch (s) {
     case ScreenID::SETTINGS: {
         const uint8_t backIdx = getItemCount() - 1;
-        const bool wifiInfoAvailable = (_wifiMgr != nullptr) && _settingsWifi;
-        const uint8_t resetIdx = backIdx - 1; // last battery item, only meaningful when battery present
 
         if (_focusIdx == backIdx) {
             popScreen();
-        } else if (wifiInfoAvailable && _focusIdx == 1) {
-            pushScreen(ScreenID::WIFI_INFO);
-        } else if (_battery && _battery->isPresent() && _focusIdx == resetIdx) {
-            // Reset coulomb counter (triggered by hold via SW_HOLD handler)
-            _battery->resetCoulombCounter();
-        } else {
-            toggleEditMode();
         }
         break;
     }
@@ -1261,7 +1251,7 @@ void Display::editDelta(int8_t dir) {
             oldValue = (float)_mmparam.vol;
             _mmparam.vol = constrain(_mmparam.vol + dir, 0, 32);
             newValue = (float)_mmparam.vol;
-            float db = -32.0f + _mmparam.vol * 32.0f / 32.0f;
+            float db = -64.0f + _mmparam.vol * 64.0f / 32.0f;
             pre.setGainDb(FLOAT_TO_DB_Q8(db)); pre.setMute(_mmparam.vol <= 0);
         } else if (p == 1) {
             ParametricEQ& pre = _pipeline->getPreEq();
@@ -1314,7 +1304,8 @@ void Display::editDelta(int8_t dir) {
         int8_t col = _kb.cursorCol, row = _kb.cursorRow;
         if (dir > 0) { col++; if (row < KB_NUM_ROWS) { if (col >= KB_COLS) { col = 0; row++; } } else { if (col >= KB_ACT_COLS) { col = 0; row = 0; } } }
         else { col--; if (col < 0) { if (row > 0) { row--; col = (row < KB_NUM_ROWS) ? KB_COLS - 1 : KB_ACT_COLS - 1; } else { row = KB_NUM_ROWS; col = KB_ACT_COLS - 1; } } }
-        if (row < 0) row = KB_NUM_ROWS; if (row > KB_NUM_ROWS) row = 0;
+        if (row < 0) row = KB_NUM_ROWS;
+        if (row > KB_NUM_ROWS) row = 0;
         _kb.cursorCol = col; _kb.cursorRow = row; _dirty = true; return;
     }
     if (s == ScreenID::EQ_BAND_EDIT) {
@@ -1457,9 +1448,9 @@ void Display::editDelta(int8_t dir) {
         if (s == ScreenID::DRC_BAND_PARAMS && _pipeline) {
             if (_focusIdx >= 6) return;
             uint8_t pi = _focusIdx; DRC& drc = _pipeline->getDrc(); uint8_t band = _drcActiveBand;
-            const UiParam drcParams[] = { { "Pregain","dB",-72,18,1,0 },{ "Threshold","dB",-60,0,0.5f,1 },{ "Ratio",":1",1,100,1,0 },{ "Attack","ms",1,2000,10,0 },{ "Release","ms",1,2000,10,0 },{ "Lookahead","ms",0,10,1,0 } };
+            const UiParam drcParams[] = { { "Pregain","dB",-72,18,1.0f,0 },{ "Threshold","dB",-90,0,0.5f,1 },{ "Ratio",":1",1,100,1,0 },{ "Attack","ms",1,2000,10,0 },{ "Release","ms",1,2000,10,0 },{ "Lookahead","ms",0,10,1,0 } };
             float cur = 0;
-            if (pi == 0) cur = (drc._bands[band].pregain);
+            if (pi == 0) cur = drc._bands[band].pregainIn;
             else if (pi == 1) cur = (drc._bands[band].thresholdDb);
             else if (pi == 2) cur = (float)drc._bands[band].ratioX100/100;
             else if (pi == 3) cur = (float)drc._bands[band].attackMs;
@@ -2000,13 +1991,13 @@ void Display::drawMainMenu() {
             DRC& drcomp = _pipeline->getDrc();
             if (drcomp.isEnabled()) {
                 // Collapse to ONE row: chỉ hiện band đang bị nén nhiều nhất (worst-case GR).
-                // Băng nào "sống" phụ vào _mode — bands[] cố định 0=Low,1=Mid,2=High,3=Full,
+                // Băng nào "sống" phụ vào _mode — bands[] cố định 0=Full,1=Low,2=Mid,3=High,
                 // Fullband chỉ dùng slot 3, 2-Band bỏ qua Mid(1), 3-Band dùng đủ 0/1/2.
                 uint8_t activeIdx[3]; uint8_t activeCount;
                 switch (drcomp._mode) {
-                    case DRC_MODE_2BAND: activeIdx[0] = 0; activeIdx[1] = 2; activeCount = 2; break;
-                    case DRC_MODE_3BAND: activeIdx[0] = 0; activeIdx[1] = 1; activeIdx[2] = 2; activeCount = 3; break;
-                    default:              activeIdx[0] = 3; activeCount = 1; break; // Fullband
+                    case DRC_MODE_2BAND: activeIdx[0] = 1; activeIdx[1] = 2; activeCount = 2; break;
+                    case DRC_MODE_3BAND: activeIdx[0] = 1; activeIdx[1] = 2; activeIdx[2] = 3; activeCount = 3; break;
+                    default:              activeIdx[0] = 0; activeCount = 1; break; // Fullband
                 }
                 float worstGr = 0.0f;
                 for (uint8_t i = 0; i < activeCount; i++)
@@ -2157,6 +2148,7 @@ void Display::drawSettings() {
 
     if (_battery && _battery->isPresent()) {
         const BatteryConfig& cfg = _battery->getConfig();
+        const BatteryStatus& battsta = _battery->getStatus();
 
         // Cell count selector (1S–6S)
         {
@@ -2204,6 +2196,13 @@ void Display::drawSettings() {
             snprintf(mBuf, sizeof(mBuf), "%lumAh", (unsigned long)cfg.cellMah);
             d.setTextDatum(MR_DATUM);
             d.drawString(mBuf, CONTENT_X + CONTENT_W - 6, y + (ROW_H - 2) / 2);
+
+            char healthBuf[16];
+            snprintf(healthBuf, sizeof(healthBuf), "Health:%d%%",
+                        (int)battsta.stateOfHealthPct);
+            d.setTextColor(Color::TEXT_DIM, bg);
+            d.setTextDatum(MC_DATUM);
+            d.drawString(healthBuf, CONTENT_X + CONTENT_W / 2, y + (ROW_H - 2) / 2);
         }
         y += ROW_H;
 
@@ -2232,7 +2231,7 @@ void Display::drawSettings() {
                              ? (float)(millis() - _focusHoldStartMs) / 2000.0f
                              : 0.0f;
             drawNavButton(CONTENT_X, y, CONTENT_W, ROW_H - 2,
-                          "Reset Coulomb Counter (hold)",
+                          "Reset Coulomb Counter",
                           _focusIdx == resetIdx,
                           _holdTracking && _focusIdx == resetIdx, holdFrac);
         }
@@ -3223,7 +3222,7 @@ void Display::drawDrcBandParams() {
     if (_pipeline) {
         DRC& drc = _pipeline->getDrc();
         uint8_t band = _drcActiveBand;
-        bpVals[0] = drc._bands[band].pregain;
+        bpVals[0] = drc._bands[band].pregainIn;
         bpVals[1] = drc._bands[band].thresholdDb;
         bpVals[2] = (float)drc._bands[band].ratioX100 / 100;
         bpVals[3] = (float)drc._bands[band].attackMs;
@@ -3631,7 +3630,8 @@ static float biquadMagnitudeDb(uint8_t type,float freq,float f0,float Q,float ga
     float numReal=b0+b1*cosW+b2*cos2W, numImag=-(b1*sinW+b2*sin2W);
     float denReal=1+a1*cosW+a2*cos2W, denImag=-(a1*sinW+a2*sin2W);
     float numMagSq=numReal*numReal+numImag*numImag, denMagSq=denReal*denReal+denImag*denImag;
-    if(denMagSq<1e-20f)return 0; return 10*log10f(numMagSq/denMagSq);
+    if (denMagSq<1e-20f) return 0;
+    return 10*log10f(numMagSq/denMagSq);
 }
 
 void Display::drawEqCurve(const EqBandDesc* bands, uint8_t nBands,

@@ -863,7 +863,11 @@ void ParamController::handleWifiSetSTA(const UartCommand &cmd) {
   LOG_INFO(TAG, "WiFi STA requested — SSID: %s", ssid);
   _wifiMgr->setSTAMode(ssid, pass, staticIP);
 
-  // After reconnect, send new status so app gets updated IP
+  // NOTE: setSTAMode() only *starts* an async WiFi.begin() — it has not
+  // actually connected yet at this point, so this reply is just an
+  // immediate best-effort ack (still shows the OLD mode/IP). The real
+  // outcome (connected, or timed-out-and-fell-back-to-AP) arrives later
+  // via pollWifiStatus() below, once WiFiManager::loop() resolves it.
   uint8_t statusBuf[40];
   uint16_t statusLen = 0;
   _wifiMgr->buildStatusPayload(statusBuf, statusLen);
@@ -896,6 +900,24 @@ void ParamController::handleWifiGetStatus(const UartCommand &cmd) {
   _wifiMgr->buildStatusPayload(statusBuf, statusLen);
   _uart->sendFrame(CMD_WIFI_GET_STATUS, MODULE_ID_SYSTEM, statusBuf, statusLen);
   LOG_INFO(TAG, "WiFi status sent — mode=%s IP=%s",
+           _wifiMgr->isAPMode() ? "AP" : "STA",
+           _wifiMgr->getIP().toString().c_str());
+}
+
+// Call once per main loop() (alongside _wifiMgr->loop()). Pushes an
+// unsolicited CMD_WIFI_GET_STATUS frame the moment a pending STA connect
+// attempt actually resolves (connected, or timed-out-and-fell-back-to-AP),
+// instead of leaving the app waiting on a stale reply forever — this is
+// what was missing, causing the UI to never learn the real connect result.
+void ParamController::pollWifiStatus() {
+  if (!_wifiMgr) return;
+  if (!_wifiMgr->consumeStatusChanged()) return;
+
+  uint8_t statusBuf[40];
+  uint16_t statusLen = 0;
+  _wifiMgr->buildStatusPayload(statusBuf, statusLen);
+  _uart->sendFrame(CMD_WIFI_GET_STATUS, MODULE_ID_SYSTEM, statusBuf, statusLen);
+  LOG_INFO(TAG, "WiFi status changed — pushed update — mode=%s IP=%s",
            _wifiMgr->isAPMode() ? "AP" : "STA",
            _wifiMgr->getIP().toString().c_str());
 }

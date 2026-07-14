@@ -152,8 +152,10 @@
 #endif
 
 // ============================================================================
-// Battery I2C Pin (INA226)
+// Battery I2C Pin & Battery Charging Check Pin (INA226)
 // ============================================================================
+
+#define BATT_CHARGING 40
 
 #define BATT_SCL 42
 #define BATT_SDA 41

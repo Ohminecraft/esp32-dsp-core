@@ -218,6 +218,7 @@ void WiFiManager::loop() {
             _apMode = false;
             _ready  = true;
             _isConnectingSTA = false;
+            _statusChanged = true; // real outcome known now — let the caller push it
             WiFi.setTxPower(WIFI_POWER_20dBm); // Max power for best range/reception
             LOG_INFO(TAG, "STA connected — IP: %s or (esp32-dsp.local)  RSSI: %d dBm",
                      WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
@@ -230,6 +231,7 @@ void WiFiManager::loop() {
             WiFi.disconnect(true);
             _isConnectingSTA = false;
             _startAP();
+            _statusChanged = true; // real outcome known now (failed) — let the caller push it
         }
     }
 }

@@ -153,11 +153,28 @@ public:
     /** Saved STA SSID/password — empty strings if hasStaCredentials() is false. */
     void getStaCredentials(char* ssidOut, size_t ssidLen, char* passOut, size_t passLen) const;
 
+    // ── Async status-change notification ──────────────────────────────────────
+    // setSTAMode() only *starts* an async WiFi.begin() — the actual outcome
+    // (connected, or timed-out-and-fell-back-to-AP) is only known later,
+    // inside loop(). Callers (ParamController/main.cpp) should poll this
+    // once per loop() and push a fresh CMD_WIFI_GET_STATUS frame whenever it
+    // returns true, so the app finds out the *real* result instead of only
+    // ever seeing the stale status sent right after the SET_STA request.
+
+    /** True exactly once, right after an STA connect attempt resolves
+     *  (success or timeout->AP fallback). Clears itself on read. */
+    bool consumeStatusChanged() {
+        bool v = _statusChanged;
+        _statusChanged = false;
+        return v;
+    }
+
 private:
     bool        _ready   = false;
     bool        _apMode  = true;
     bool        _isConnectingSTA = false;
     bool        _isNewlyConfiguredSTA = false;
+    bool        _statusChanged = false;
     uint32_t    _staConnectStartTime = 0;
     Preferences _prefs;
 

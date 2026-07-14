@@ -91,6 +91,8 @@ void DRC::recalcBand(uint8_t band) {
     if (band >= MAX_BANDS) return;
     DRCBand& b = _bands[band];
 
+    b.pregain = db_to_linear_gain(b.pregainIn);
+
     b.slopeAbove  = DynamicsProcessor::ratioToSlope(b.ratioX100);
     b.attackCoeff  = DynamicsProcessor::calcCoeff(_sampleRate, b.attackMs);
     b.releaseCoeff = DynamicsProcessor::calcCoeff(_sampleRate, b.releaseMs);
@@ -430,7 +432,7 @@ void DRC::setReleaseTime(uint8_t band, int32_t ms) {
 void DRC::setPregain(uint8_t band, float gain_db) {
     if (band >= MAX_BANDS) return;
     if (_mode == DRC_MODE_FULLBAND) band = 0;
-    _bands[band].pregain = db_to_linear_gain(gain_db); // dB -> linear
+    _bands[band].pregainIn = gain_db;
     recalcBand(band);
 }
 

@@ -16,6 +16,7 @@
 
 #include "battery_monitor.h"
 #include "../../utils/debug_log.h"
+#include "pin_config.h"
 #include <Wire.h>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -81,6 +82,9 @@ bool BatteryMonitor::begin(uint8_t sdaPin, uint8_t sclPin) {
     _sdaPin = sdaPin;
     _sclPin = sclPin;
 
+    #if defined(BATT_CHARGING) && BATT_CHARGING > 0
+        pinMode(BATT_CHARGING, INPUT);
+    #endif
     Wire.begin(sdaPin, sclPin);
 
     // _ina.begin() only checks whether the address ACKs on the bus.
@@ -110,6 +114,31 @@ bool BatteryMonitor::begin(uint8_t sdaPin, uint8_t sclPin) {
                 _consumedMah = 0.0f;
         }
         nvs_close(nvs);
+    }
+
+    // Clamp against the *current* config in case cellMah was edited between
+    // the last save and this boot (e.g. user changed pack capacity) — without
+    // this, a restored _consumedMah larger than the new totalMah would make
+    // updateSoC()'s ccSoc clamp to 0 forever until the pack hits LIION_CELL_MAX_V.
+    float totalMahAtBoot = (float)_cfg.cellMah;
+    if (_consumedMah > totalMahAtBoot) _consumedMah = totalMahAtBoot;
+
+    // Restore learned (measured) full-cycle capacity, used for SOH%.
+    // Defaults to the nominal cellMah until at least one full charge→empty
+    // cycle has completed with no interruption (see updateSoC()).
+    if (nvs_open(NVS_BAT_NS, NVS_READONLY, &nvs) == ESP_OK) {
+        uint32_t rawBits = 0;
+        if (nvs_get_u32(nvs, NVS_KEY_LEARN_CAP, &rawBits) == ESP_OK) {
+            std::memcpy(&_learnedCapacityMah, &rawBits, sizeof(_learnedCapacityMah));
+        }
+        nvs_close(nvs);
+    }
+    if (!std::isfinite(_learnedCapacityMah) ||
+        _learnedCapacityMah < 0.2f * totalMahAtBoot ||
+        _learnedCapacityMah > 1.5f * totalMahAtBoot) {
+        // No sane learned value yet (first boot, or cellMah changed a lot) —
+        // seed with the nominal capacity so SOH starts at 100% instead of 0%.
+        _learnedCapacityMah = totalMahAtBoot;
     }
 
     _lastUpdateMs  = millis();
@@ -142,9 +171,15 @@ void BatteryMonitor::update() {
 
     // ── Coulomb counter (only track discharge; positive current = discharging) ─
     if (_status.currentMa > 0.0f) {
-        _consumedMah += _status.currentMa * dtS / 3600.0f;
+        float dischargedMah = _status.currentMa * dtS / 3600.0f;
+        _consumedMah += dischargedMah;
         float totalMah = (float)(_cfg.cellMah);
         if (_consumedMah > totalMah) _consumedMah = totalMah;
+
+        // Runs alongside _consumedMah but is never clamped to totalMah —
+        // it's only meaningful once a full cycle completes (see updateSoC()),
+        // at which point its raw value IS the measured capacity for that cycle.
+        if (_cycleArmed) _cycleAccumMah += dischargedMah;
     }
 
     // ── SoC ──────────────────────────────────────────────────────────────────
@@ -157,7 +192,7 @@ void BatteryMonitor::update() {
     float packWarnV = LIION_CELL_WARN_V * _cfg.cellS;
 
     BatteryState newState;
-    if (_status.currentMa < 0.0f) {          // >0.0 mA flowing in = charging
+    if (_status.currentMa < 0.0f || digitalRead(BATT_CHARGING)) {          // >0.0 mA flowing in = charging
         newState = BatteryState::CHARGING;
     } else if (_status.busVoltage < packMinV) {
         newState = BatteryState::CRITICAL;
@@ -168,6 +203,15 @@ void BatteryMonitor::update() {
     }
 
     _status.state = newState;
+
+    // Any charge activity — even a partial charge that never reaches
+    // LIION_CELL_MAX_V — invalidates the in-progress full-cycle capacity
+    // measurement, because charge current bypasses the shunt and can't be
+    // subtracted back out. Disarm here; updateSoC() re-arms cleanly the
+    // next time the pack actually reaches full.
+    if (newState == BatteryState::CHARGING) {
+        _cycleArmed = false;
+    }
 
     // Fire shutdown callback once on CRITICAL
     if (newState == BatteryState::CRITICAL && !_criticalFired) {
@@ -224,11 +268,40 @@ void BatteryMonitor::updateSoC() {
     if (cellV >= LIION_CELL_MAX_V) {
         _consumedMah = 0.0f;
         _status.soc  = 1.0f;
+        _status.remainingMah = totalMah;
+
+        // Confirmed full charge — safe to start (or restart) a full-cycle
+        // capacity measurement from here.
+        _cycleArmed    = true;
+        _cycleAccumMah = 0.0f;
+
+        _status.learnedCapacityMah = _learnedCapacityMah;
+        _status.stateOfHealthPct   = (totalMah > 0.0f) ? (_learnedCapacityMah / totalMah) * 100.0f : 0.0f;
         return;
     }
     if (cellV <= LIION_CELL_MIN_V) {
         _consumedMah = totalMah;
         _status.soc  = 0.0f;
+        _status.remainingMah = 0.0f;
+
+        // If we made it here on an uninterrupted discharge from a confirmed
+        // full charge, _cycleAccumMah is a real measurement of this cycle's
+        // capacity. Fold it into the learned estimate with an EMA so a
+        // single noisy cycle (voltage sag under a current spike right at
+        // the threshold, etc.) can't swing SOH wildly.
+        if (_cycleArmed &&
+            _cycleAccumMah > 0.2f * totalMah &&
+            _cycleAccumMah < 1.5f * totalMah) {
+            constexpr float LEARN_ALPHA = 0.2f; // weight given to each new full cycle
+            _learnedCapacityMah = (_learnedCapacityMah <= 0.0f)
+                ? _cycleAccumMah
+                : LEARN_ALPHA * _cycleAccumMah + (1.0f - LEARN_ALPHA) * _learnedCapacityMah;
+            persistLearnedCapacity();
+        }
+        _cycleArmed = false;
+
+        _status.learnedCapacityMah = _learnedCapacityMah;
+        _status.stateOfHealthPct   = (totalMah > 0.0f) ? (_learnedCapacityMah / totalMah) * 100.0f : 0.0f;
         return;
     }
 
@@ -242,9 +315,27 @@ void BatteryMonitor::updateSoC() {
 
     // When at rest (|I| < 50 mA), OCV is reliable → weight it heavily.
     // Under load, trust coulomb counter more.
-    float loadFactor = std::min(1.0f, fabsf(_status.currentMa) / 500.0f);
+    //
+    // Only *discharge* current should pull the estimate toward ccSoc.
+    // _consumedMah is not decremented while charging (see topology note
+    // in the header — charge current bypasses the shunt), so during a
+    // charge cycle ccSoc is a stale, frozen number. Weighting it by
+    // fabsf(currentMa) — which is large while charging too — used to
+    // make the blended SoC sit near that frozen value and barely move
+    // until the pack hit LIION_CELL_MAX_V. Clamping current to >=0 here
+    // means charging relies on the rising OCV instead, which actually
+    // tracks progress.
+    float loadFactor = std::min(1.0f, std::max(0.0f, _status.currentMa) / 500.0f);
     _status.soc = ocvSoc * (1.0f - loadFactor) + ccSoc * loadFactor;
     _status.soc = std::max(0.0f, std::min(1.0f, _status.soc));
+
+    // Remaining capacity derived from the blended SoC rather than a plain
+    // totalMah - _consumedMah subtraction, so it inherits the same OCV
+    // correction (and won't drift the way a pure coulomb count would).
+    _status.remainingMah = totalMah * _status.soc;
+
+    _status.learnedCapacityMah = _learnedCapacityMah;
+    _status.stateOfHealthPct   = (totalMah > 0.0f) ? (_learnedCapacityMah / totalMah) * 100.0f : 0.0f;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -283,7 +374,28 @@ void BatteryMonitor::saveConfig() {
     nvs_close(nvs);
 }
 
+void BatteryMonitor::persistLearnedCapacity() {
+    // Called only on a completed full cycle (rare — normal usage is a
+    // handful of full charge/discharge cycles a day at most), so writing
+    // immediately instead of batching with the 30 s periodic save is fine
+    // and doesn't add meaningful flash wear.
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_BAT_NS, NVS_READWRITE, &nvs) != ESP_OK) return;
+    uint32_t rawBits;
+    std::memcpy(&rawBits, &_learnedCapacityMah, sizeof(rawBits));
+    nvs_set_u32(nvs, NVS_KEY_LEARN_CAP, rawBits);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
 void BatteryMonitor::applyConfig() {
+    // If the user just lowered cellMah, an already-restored _consumedMah
+    // from the old (larger) capacity could exceed the new totalMah, which
+    // would pin ccSoc at 0 inside updateSoC() until the next full-charge
+    // re-anchor. Clamp here too, same reasoning as in begin().
+    float totalMah = (float)_cfg.cellMah;
+    if (_consumedMah > totalMah) _consumedMah = totalMah;
+
     if (!configure()) {
         LOG_ERROR("BATT", "Ina226 re-calibration failed");
     }

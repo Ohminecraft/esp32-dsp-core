@@ -37,6 +37,7 @@ static constexpr const char* NVS_KEY_CELL_S     = "cell_s";      // uint8
 static constexpr const char* NVS_KEY_CELL_MAH   = "cell_mah";    // uint32
 static constexpr const char* NVS_KEY_SHUNT_MOHM = "shunt_mohm";  // uint32 (mΩ)
 static constexpr const char* NVS_KEY_COULOMBS   = "coulombs";    // float (mAh consumed)
+static constexpr const char* NVS_KEY_LEARN_CAP  = "learn_cap";   // float (learned full-cycle capacity, mAh)
 
 // ── Config struct (persisted to NVS) ─────────────────────────────────────────
 struct BatteryConfig {
@@ -60,6 +61,9 @@ struct BatteryStatus {
     float        powerMw       = 0.0f;  // mW
     float        soc           = 0.0f;  // 0.0–1.0
     float        consumedMah   = 0.0f;  // mAh discharged since last full
+    float        remainingMah  = 0.0f;  // mAh left = cellMah × soc (blended OCV+CC, not a raw subtraction)
+    float        learnedCapacityMah = 0.0f; // measured full-cycle capacity (EMA over completed cycles)
+    float        stateOfHealthPct   = 0.0f; // learnedCapacityMah / cellMah × 100, 0 until a full cycle completes
     BatteryState state         = BatteryState::UNKNOWN;
     bool         inaPresent    = false;
 };
@@ -110,6 +114,7 @@ private:
     bool  configure();             // sets AVG/CT + calibration via INA226 lib
     void  updateSoC();              // OCV-based SoC estimate blended with coulomb counter
     float ocvToSoc(float cellV) const; // Li-Ion OCV → SoC lookup
+    void  persistLearnedCapacity(); // saves _learnedCapacityMah to NVS (called on each completed full cycle)
 
     INA226         _ina;            // RobTillaart/INA226 driver instance
 
@@ -120,6 +125,13 @@ private:
     uint32_t       _lastUpdateMs  = 0;
     uint32_t       _lastNvsSaveMs = 0;
     bool           _criticalFired = false;
+
+    // Full-cycle capacity learning (SOH). _cycleArmed is only true while the
+    // current discharge run started from a confirmed full charge (top OCV
+    // anchor) with no charging activity since — see update()/updateSoC().
+    float          _learnedCapacityMah = 0.0f;
+    float          _cycleAccumMah      = 0.0f;
+    bool           _cycleArmed         = false;
 
     uint8_t        _sdaPin = 21;
     uint8_t        _sclPin = 22;

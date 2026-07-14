@@ -30,6 +30,8 @@ public:
 
     void handleCommand(const UartCommand& cmd);
 
+    void pollWifiStatus();
+
 private:
     DspPipeline*   _pipeline;
     UartProtocol*  _uart;

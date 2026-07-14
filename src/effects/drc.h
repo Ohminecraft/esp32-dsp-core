@@ -26,6 +26,7 @@ static constexpr int DRC_DECIM         = 8;  // decimate dB/gain every N samples
 
 struct DRCBand {
     // ── Raw params ──────────────────────────────────────────────────
+    float pregainIn;  
     int32_t ratioX100;      // 0.01 steps, e.g. 400 = 4.00:1
     int32_t attackMs;
     int32_t releaseMs;

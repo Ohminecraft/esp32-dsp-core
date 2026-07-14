@@ -312,7 +312,7 @@ void PresetManager::saveDefault(uint8_t slot) {
     // Dynamic Bass defaults
     pd.db_cutoffFreq          = 60;
     pd.db_gainBoost           = 600;
-    pd.db_clipattack          = 600;
+    pd.db_clipattack          = 5;
     pd.db_cliprelease         = 200;
     pd.db_clipfullthreshold   = -800;
     pd.db_lookaheadMs10       = 0;
@@ -448,7 +448,7 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
         pd.drc_ratio[b]       = pipeline.getDrc()._bands[b].ratioX100;
         pd.drc_attackMs[b]    = pipeline.getDrc()._bands[b].attackMs;
         pd.drc_releaseMs[b]   = pipeline.getDrc()._bands[b].releaseMs;
-        pd.drc_pregain[b] = pipeline.getDrc()._bands[b].pregain * 100.0f;
+        pd.drc_pregain[b] = pipeline.getDrc()._bands[b].pregainIn * 100.0f;
         pd.drc_lookaheadMs[b] = (int32_t)(pipeline.getDrc()._bands[b].lookaheadMs + 0.5f);
     }
 
@@ -612,7 +612,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
         pipeline.getDrc()._bands[i].ratioX100 = pd.drc_ratio[i];
         pipeline.getDrc()._bands[i].attackMs = pd.drc_attackMs[i];
         pipeline.getDrc()._bands[i].releaseMs = pd.drc_releaseMs[i];
-        pipeline.getDrc()._bands[i].pregain = (float)pd.drc_pregain[i] / 100.0f;
+        pipeline.getDrc()._bands[i].pregainIn = (float)pd.drc_pregain[i] / 100.0f;
         pipeline.getDrc()._bands[i].lookaheadMs= pd.drc_lookaheadMs[i];
     }
 

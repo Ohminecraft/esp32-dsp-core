@@ -349,6 +349,7 @@ void IRAM_ATTR controlTask(void* param) {
             // Web server housekeeping
             g_webServer.loop();
             g_wifiMgr.loop();
+            g_paramCtrl.pollWifiStatus();
         }
 
         // Push WiFi status if connection state changes (e.g., STA connected or fell back to AP)
@@ -369,7 +370,7 @@ void IRAM_ATTR controlTask(void* param) {
                 if (!g_wifiMgr.isAPMode() && g_wifiMgr.isNewlyConfiguredSTA()) {
                     g_wifiMgr.clearNewlyConfiguredSTA();
                     LOG_INFO("SYS", "New STA configured. Saving Preset 0...");
-                    g_presetMgr.savePreset(0, g_pipeline);
+                    g_presetMgr.savePreset(g_presetMgr.getCurrentPresetIndex(), g_pipeline);
                     pendingReboot = true;
                     rebootStartTime = millis();
                 }
