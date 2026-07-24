@@ -64,8 +64,8 @@
 
 // UART Control (Serial2)
 // GPIO19/20 = USB-JTAG → cannot use. GPIO16/17 = I2S → shifted to GPIO1/2
-#define UART_CONTROL_TX_PIN     1       // Serial2 TX → controller RX
-#define UART_CONTROL_RX_PIN     2       // Serial2 RX ← controller TX
+#define UART_CONTROL_TX_PIN     -1       // Serial2 TX → controller RX
+#define UART_CONTROL_RX_PIN     -1       // Serial2 RX ← controller TX
 
 // RGB LED Pin (Built-In LED)
 #define RGB_LED_PIN 48
@@ -124,7 +124,7 @@
 #define POWER_PIN_OUT -1
 #define POWER_PIN_OFF -1
 
-#define MUTE_PIN -1
+#define MUTE_PIN 18
 
 // ============================================================================
 // TFT Display & Encoder

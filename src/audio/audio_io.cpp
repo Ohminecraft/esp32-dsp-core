@@ -127,7 +127,7 @@ void AudioIO::initI2S() {
     
     // Pass both handles → IDF allocates a full-duplex pair on the same port
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &_txHandle, &_rxHandle));
-    #ifdef USING_SUB_OUT
+    #if defined(USING_SUB_OUT)
     ESP_ERROR_CHECK(i2s_new_channel(&sub_chan_cfg, &_txSubHandle, nullptr)); // RX-only sub-channel for simultaneous read/write on the same port (see readFrame/writeFrame)
     #endif
 
@@ -219,11 +219,13 @@ void AudioIO::initI2S() {
 
 #if defined(USE_MASTER_MODE)
     LOG_INFO(TAG, "Init: full-duplex master on I2S_NUM_0, %ld Hz", (long)_sampleRate);
+    LOG_INFO(TAG, "  BCLK=GPIO%d  WS=GPIO%d  MCLK=GPIO%d  DIN=GPIO%d  DOUT=GPIO%d",
+             I2S_IN_OUT_BCK_PIN, I2S_IN_OUT_WS_PIN, I2S_IN_OUT_MCLK_PIN, I2S_IN_OUT_DATA_IN_PIN, I2S_IN_OUT_DATA_OUT_PIN);
 #else
     LOG_INFO(TAG, "Init: full-duplex slave on I2S_NUM_0, %ld Hz", (long)_sampleRate);
-#endif
     LOG_INFO(TAG, "  BCLK=GPIO%d  WS=GPIO%d  DIN=GPIO%d  DOUT=GPIO%d",
              I2S_IN_OUT_BCK_PIN, I2S_IN_OUT_WS_PIN, I2S_IN_OUT_DATA_IN_PIN, I2S_IN_OUT_DATA_OUT_PIN);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -240,7 +242,7 @@ size_t IRAM_ATTR AudioIO::readFrame(float* __restrict buffer, size_t numSamples)
         _rxHandle, s_rxBuf,
         totalSamples * sizeof(int32_t),
         &bytesRead,
-        pdMS_TO_TICKS(45)  // 1.25× frame budget @ 48kHz/768
+        pdMS_TO_TICKS(15)  // 1.25× frame budget @ 48kHz/768
     );
     
    //esp_err_t err = i2s_read(I2S_INPUT_OUTPUT_FULL_PORT, s_rxBuf, totalSamples * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(100));
@@ -269,7 +271,7 @@ size_t IRAM_ATTR AudioIO::writeFrame(const float* __restrict buffer, size_t numS
     if (totalSamples > DSP_FRAME_SAMPLES) return 0;
 
     for (size_t i = 0; i < totalSamples; i++) {
-        s_txBuf[i] = audioIO_floatToI32Sat(buffer[i]);
+        s_txBuf[i] = (int32_t)(fmin(fmax(buffer[i], -0.9999999f), 0.9999999f) * 2147483648.0f);
     }
 
     size_t bytesWritten = 0;
@@ -277,7 +279,7 @@ size_t IRAM_ATTR AudioIO::writeFrame(const float* __restrict buffer, size_t numS
         _txHandle, s_txBuf,
         totalSamples * sizeof(int32_t),
         &bytesWritten,
-        pdMS_TO_TICKS(45)   // 1.25× frame budget @ 48kHz/768
+        pdMS_TO_TICKS(15)   // 1.25× frame budget @ 48kHz/768
     );
 
     //esp_err_t err = i2s_write(I2S_INPUT_OUTPUT_FULL_PORT, s_txBuf, totalSamples * sizeof(int32_t), &bytesWritten, pdMS_TO_TICKS(100));

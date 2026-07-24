@@ -31,7 +31,7 @@
 #if defined(CONFIG_IDF_TARGET_ESP32) // ESP32 can handle max 256 frame size because out of heap
 #define DSP_FRAME_SIZE          256     // Samples per frame per channel
 #else 
-#define DSP_FRAME_SIZE          256 
+#define DSP_FRAME_SIZE          384 
 #endif
 #define DSP_FRAME_SAMPLES       (DSP_FRAME_SIZE * DSP_NUM_CHANNELS)
 

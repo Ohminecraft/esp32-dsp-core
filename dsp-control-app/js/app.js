@@ -3501,7 +3501,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
 
-    for (let btnIdx = 0; btnIdx < 3; btnIdx++) {
+    for (let btnIdx = 0; btnIdx < 5; btnIdx++) {
         const btn = document.getElementById(`preset-${btnIdx}`);
         btn.addEventListener('click', () => { buildPresetLoad(btnIdx); });
         btn.addEventListener('contextmenu', (e) => { buildPresetSave(e, btnIdx); });
@@ -3514,7 +3514,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     store.on('preset:active-changed', (idx) => {
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < 5; i++) {
             const btn = document.getElementById(`preset-${i}`);
             if (btn) btn.classList.toggle('active', i === idx);
         }

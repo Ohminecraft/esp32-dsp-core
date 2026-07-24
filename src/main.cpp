@@ -127,9 +127,9 @@ static void stopAutoShutdownTimer() {
 
 static void reinitPipeline(uint32_t newRateHz) {
     g_pipelineReady = false;
-    vTaskDelay(pdMS_TO_TICKS(105));
+    vTaskDelay(pdMS_TO_TICKS(20));
 
-    if (g_audioTaskHandle) {
+    if (g_audioTaskHandle && !g_isclockabsent) {
         vTaskSuspend(g_audioTaskHandle);
     }
 
@@ -232,8 +232,6 @@ volatile uint32_t s_fs = 0;
 
 void IRAM_ATTR controlTask(void* param) {
     LOG_INFO("CTRL", "Control task started on core %d", xPortGetCoreID());
-    LOG_INFO("INIT", "System Ready, CPU: %lu MHz, Free Heap: %lu bytes",
-             (unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFreeHeap());
 
     uint32_t lastPerfMonitorMs = millis();
     uint32_t lastStatusMs = millis();
@@ -383,7 +381,7 @@ void IRAM_ATTR controlTask(void* param) {
             ESP.restart();
         }
 
-        if (g_userShutdownRequest && g_softLatchPinIsAvailable) {
+        if (g_userShutdownRequest) {
             if (MUTE_PIN != -1) {
                 digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
                 LOG_INFO("SYS", "Mute pin set.");
@@ -407,8 +405,10 @@ void IRAM_ATTR controlTask(void* param) {
             LOG_INFO("SYS", "Status LED turned off.");
             delay(300);
             LOG_INFO("SYS", "System halted.");
-            pinMode(POWER_PIN_OUT, OUTPUT);
-            digitalWrite(POWER_PIN_OUT, LOW); // Shutdown system
+            if (g_softLatchPinIsAvailable) {             
+                pinMode(POWER_PIN_OUT, OUTPUT);
+                digitalWrite(POWER_PIN_OUT, LOW); // Shutdown system
+            }
             vTaskDelete(NULL); // Ensure task is deleted preventing auto restart
         }
 
@@ -642,6 +642,9 @@ void setup() {
 
     // 9. Set POWER_PIN_OUT to high 
     if (g_softLatchPinIsAvailable) digitalWrite(POWER_PIN_OUT, HIGH);
+
+    LOG_INFO("INIT", "System Ready, CPU: %lu MHz, Free Heap: %lu bytes",
+             (unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFreeHeap());
 }
 
 // ============================================================================

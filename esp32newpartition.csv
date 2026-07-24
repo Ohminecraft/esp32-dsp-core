@@ -1,5 +1,0 @@
-# ESP32 4MB — NVS 28KB + LittleFS 1MB
-# Name,   Type, SubType, Offset,  Size,    Flags
-nvs,      data, nvs,     0x9000,  0x7000,
-factory,  app,  factory, 0x10000, 0x2F0000,
-spiffs,   data, spiffs,  0x300000,0x100000,

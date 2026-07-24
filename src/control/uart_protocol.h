@@ -20,7 +20,7 @@ class AsyncWebSocketClient;
 #ifdef USE_BUILTIN_SERIAL
 #define UART Serial
 #else
-#define UART Serial2
+#define UART Serial0
 #endif
 
 // Maximum data payload
