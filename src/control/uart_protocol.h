@@ -39,6 +39,7 @@ class UartProtocol {
 public:
   /**
    * Initialize UART2 for control communication.
+   * @param baud Baud rate (default UART_CONTROL_BAUD = 115200)
    */
   void init(uint32_t baud = UART_CONTROL_BAUD);
 
@@ -51,6 +52,7 @@ public:
 
   /**
    * Get the last received command.
+   * @return Reference to the last received UartCommand
    */
   const UartCommand &getCommand() const { return _cmd; }
 
@@ -66,6 +68,7 @@ public:
 
   /**
    * Send an error response.
+   * @param errorCode Error code to send
    */
   void sendError(uint8_t errorCode);
 
@@ -73,6 +76,10 @@ public:
    * Send arbitrary frame upstream.
    * If a WebSocket has been registered via setWebSocket(), the frame is
    * broadcast to all WS clients in addition to Serial2.
+   * @param cmd Command ID
+   * @param moduleId Module ID
+   * @param data Pointer to data buffer (can be nullptr if dataLen=0)
+   * @param dataLen Length of data buffer (max UART_MAX_DATA_LEN)
    */
   void sendFrame(uint8_t cmd, uint8_t moduleId, const uint8_t *data,
                  uint16_t dataLen);
@@ -96,6 +103,7 @@ public:
 
   /**
    * Check if the UART is connected to a host (i.e., if any commands have been received).
+   * @return true if UART is connected, false otherwise
    */
   bool isSerialConnected() const { return appConnected; }
 

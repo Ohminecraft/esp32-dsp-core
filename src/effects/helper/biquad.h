@@ -104,7 +104,6 @@ static inline float IRAM_ATTR dsps_biquad_sample_arp4(float x, const float* coef
     #define dsps_biquad_f32_sample  dsps_biquad_sample_ae32
 
 #else
-    // ANSI C fallback — mọi chip khác (ESP32-S2, C3, C6...)
     static inline float IRAM_ATTR dsps_biquad_sample_ansi(float x, const float* c, float* w)
     {
         float d0 = x - c[3] * w[0] - c[4] * w[1];
@@ -125,41 +124,20 @@ public:
 
     /**
      * Design coefficients from standard filter parameters.
+     * @param type Filter type (EQFilterType)
+     * @param f0 Center frequency in Hz
+     * @param Q Q factor (dimensionless)
+     * @param gain_dB Gain in dB (for peaking and shelving filters)
+     * @param fs Sample rate in Hz
      */
     void design(EQFilterType type, float f0, float Q, float gain_dB, float fs);
 
     /**
      * Design coefficients from MVSilicon parameter structure.
+     * @param params EQFilterParams structure containing filter parameters
+     * @param sampleRate Sample rate in Hz
      */
     void designFromParams(const EQFilterParams& params, int32_t sampleRate);
-
-    /**
-     * Process a block of stereo interleaved samples.
-     * @param samples Pointer to L,R,L,R... buffer
-     * @param numFrames Number of frames (L/R pairs)
-     */
-    __attribute__((deprecated("Use processPlanar or processPlanarChannel instead"))) inline void IRAM_ATTR process(float* __restrict samples, size_t numFrames) {
-        // Fallback for interleaved samples (standard C++)
-        const float b0 = _coeffs[0], b1 = _coeffs[1], b2 = _coeffs[2];
-        const float a1 = _coeffs[3], a2 = _coeffs[4];
-        float *sL = &_state[0], *sR = &_state[2];
-
-        for (size_t i = 0; i < numFrames; i++) {
-            const size_t idx = i * 2;
-
-            float inL  = samples[idx];
-            float outL = b0 * inL + sL[0];
-            sL[0]      = b1 * inL - a1 * outL + sL[1];
-            sL[1]      = b2 * inL - a2 * outL;
-            samples[idx] = outL;
-
-            float inR  = samples[idx + 1];
-            float outR = b0 * inR + sR[0];
-            sR[0]      = b1 * inR - a1 * outR + sR[1];
-            sR[1]      = b2 * inR - a2 * outR;
-            samples[idx + 1] = outR;
-        }
-    }
 
     /**
      * Process two planar arrays (L and R separated) using ESP-DSP SIMD.
@@ -220,6 +198,8 @@ public:
 
     /**
      * Process a single sample for a specific channel.
+     * @param in Input sample
+     * @param channel 0 for Left state, 1 for Right state
      */
     __attribute__((always_inline)) inline float IRAM_ATTR processSample(float in, int channel) {
         #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -257,6 +237,8 @@ public:
      * @param inOutL Left channel buffer (in-place)
      * @param inOutR Right channel buffer (in-place)
      * @param numFrames Number of samples per channel
+     * @param coeffs Coefficient array (b0, b1, b2, a1, a2)
+     * @param state State array (w1L, w2L, w1R, w2R)
      */
     inline void IRAM_ATTR processPlanar(float* __restrict inOutL, float* __restrict inOutR, size_t numFrames, const float* coeffs, float* state) {
         #if defined(CONFIG_IDF_TARGET_ESP32) // ESP32 not have SIMD-optimized biquad, so use interleaved processing as fallback
@@ -290,6 +272,8 @@ public:
      * Process a single planar array (e.g. just Left or just Right).
      * @param inOut Buffer to process
      * @param numFrames Number of samples
+     * @param coeffs Coefficient array (b0, b1, b2, a1, a2)
+     * @param state State array (w1, w2)
      * @param channel 0 for Left state, 1 for Right state
      */
     inline void IRAM_ATTR processPlanarChannel(float* __restrict inOut, size_t numFrames, const float* coeffs, float* state,  int channel) {
@@ -311,6 +295,10 @@ public:
 
     /**
      * Process a single sample for a specific channel.
+     * @param in Input sample
+     * @param coeffs Coefficient array (b0, b1, b2, a1, a2)
+     * @param state State array (w1, w2)
+     * @param channel 0 for Left state, 1 for Right state
      */
     __attribute__((always_inline)) inline float IRAM_ATTR processSample(float in, const float* coeffs, float* state, int channel) {
         #if defined(CONFIG_IDF_TARGET_ESP32)

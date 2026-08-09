@@ -607,7 +607,7 @@ void setup() {
         AUDIO_TASK_CORE
     );
  
-    // 7.1. Init AudioSync — starts PCNT clock monitor on Core    //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)
+    // 7.1. Init AudioSync — starts PCNT clock monitor on Core 0, Priority 5
     #if defined(USE_MASTER_MODE)
     g_pipelineReady = true; // Start audio task immediately for testing without AudioSync 
     #else

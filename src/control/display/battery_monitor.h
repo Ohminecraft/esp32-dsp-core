@@ -108,6 +108,7 @@ public:
     /** Reset coulomb counter to full (call after charging). */
     void resetCoulombCounter();
 
+    /** Check if the battery monitor is present (INA226 detected). */
     bool isPresent() const { return _status.inaPresent; }
 
 private:

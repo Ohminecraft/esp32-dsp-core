@@ -23,11 +23,13 @@ public:
               UartProtocol* uart, PresetManager* presetMgr,
               WiFiManager* wifiMgr = nullptr);
 
+    /** Wire up the WiFi manager instance so CMD_WIFI_* commands can be handled. */
     void setWifiManager(WiFiManager* wifiMgr);
 
     /** Wire up the battery monitor instance so CMD_GET_BATTERY_STATUS can report on it. */
     void setBatteryMonitor(BatteryMonitor* batteryMgr);
 
+    /** Call from the control task loop to poll for UART commands. */
     void handleCommand(const UartCommand& cmd);
 
     void pollWifiStatus();
