@@ -47,12 +47,6 @@ pio project init --ide vscode
 **platformio.ini** controls build settings:
 
 ```ini
-[env:esp32-devkit]
-platform = espressif32
-board = esp32-devkit-v1
-framework = arduino
-monitor_speed = 115200
-
 build_flags =
     -DCORE_DEBUG_LEVEL=0    # Change to 1-5 for debug output
     -O3
@@ -234,19 +228,33 @@ Heap Left: < 20 KB    → Warning (fragmentation possible)
 src/
 ├── main.cpp              # Entry point, task creation
 ├── audio/
-│   ├── audio_input.cpp   # I2S input implementation
-│   └── audio_output.cpp  # I2S output implementation
+│   ├── audio_io.cpp      # I2S input/output
+│   └── audio_sync.cpp    # Sync clock with Master I2S Bluetooth Clock by using PCNT
 ├── effects/
+│   ├── helper/
+│   │   └── biquad.cpp # Contain Biquad function
 │   ├── dsp_pipeline.cpp  # Pipeline orchestrator
 │   ├── dsp_module.h      # Base class definition
 │   ├── eq.cpp            # Effect File
 │   ├── exciter.cpp
 │   └── ...
 ├── control/
-│   ├── uart_protocol.cpp # UART handler
-│   ├── param_controller.cpp
-│   └── preset_manager.cpp
+│   ├── display/
+│   │   ├── battery_monitor.cpp # Battery monitor
+│   │   ├── display.cpp # Display
+│   │   └── encoder.cpp # Encoder handle
+│   ├── param/
+│   |   ├── param_controller.cpp # Param command handle
+│   │   ├── preset_manager.cpp # Store all param data
+│   │   └── settings_manager.cpp # Store all firmware settings like Wifi, etc..
+│   ├── wifi/
+│   │   ├── web_server.cpp # WebServer handler
+│   │   └── wifi_manager.cpp # Wifi handler
+│   └── uart_protocol.cpp # UART handler
 └── utils/
+    ├── dynanmics_processor.h # Some envelope processing
+    ├── status_led.h      # Neopixel led for some board have built-in led
+    ├── psram.h           # Some PSRAM function
     ├── debug_log.h       # Debug macros
     └── fixed_math.h      # Math utilities
 ```
@@ -466,19 +474,37 @@ void YourModule::process(...) {
 
 ```
 src/
-├── main.cpp              # Điểm vào
+├── main.cpp              # Nơi Khởi tạo, chạy toàn bộ firmware
 ├── audio/
-│   ├── audio_input.cpp   # Đầu vào âm thanh
-│   └── audio_output.cpp  # Đầu ra âm thanh
+│   ├── audio_io.cpp      # Đầu vào/ra của I2S
+│   └── audio_sync.cpp    # Sync clock với clock của mạch Bluetooth 
 ├── effects/
-│   ├── dsp_pipeline.cpp  # Pipeline của module, chạy theo chain
-│   └── [các module]
+│   ├── helper/
+│   │   └── biquad.cpp    # Chứa những hàm xử lý thuật toán Biquad
+│   ├── dsp_pipeline.cpp  # Pipeline của module
+│   ├── dsp_module.h      # Định nghĩa chung cho các hàm effects
+│   ├── eq.cpp            # Những file effects
+│   ├── exciter.cpp
+│   └── ...
 ├── control/
-│   ├── uart_protocol.cpp  # Giao tiếp với APP
-│   └── [các bộ điều khiển]
+│   ├── display/
+│   │   ├── battery_monitor.cpp # Kiểm tra Pin
+│   │   ├── display.cpp # Màn Hình
+│   │   └── encoder.cpp # Xử lý encoder
+│   ├── param/
+│   |   ├── param_controller.cpp # Xử lý command từ app/ws về fw
+│   │   ├── preset_manager.cpp # Chứa những cài đặt của effects/param
+│   │   └── settings_manager.cpp # Chứa những cài đặt như bật tắt Wifi, v.v..
+│   ├── wifi/
+│   │   ├── web_server.cpp # Khởi tạo/Vận Hành Web Server
+│   │   └── wifi_manager.cpp # Khởi tạo/Vận Hành Wifi
+│   └── uart_protocol.cpp # Giao tiếp với app thông qua UART
 └── utils/
-    ├── debug_log.h        # Debug Code
-    └── fixed_math.h       # Hàm Toán Fixed
+    ├── dynanmics_processor.h # Những hàm về Envelope
+    ├── status_led.h      # Led trạng thái cho những board nào có hỗ trợ Neopixel Led
+    ├── psram.h           # các hàm helper cho PSRAM
+    ├── debug_log.h       # Debug
+    └── fixed_math.h      # Các hàm toán cho effects
 ```
 
 #### Include

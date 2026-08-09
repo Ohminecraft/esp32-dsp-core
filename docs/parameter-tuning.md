@@ -147,25 +147,33 @@ Same parameters as EQ1. Typically used for room and speaker acoustics compensati
 
 **How it works**:
 1. Continuously measures input RMS energy (configurable window)
-2. Maps energy level → target preset index (closest threshold match)
-3. Smoothly slews slewIndex toward target at constant rate (configurable time)
-4. Blends output between adjacent presets (floor and ceil of slewIndex)
+2. Maps energy level → target preset index (highest threshold ≤ level)
+3. Smoothly slews `slewIndex` toward target at a constant per-sample step
+4. Blends output between adjacent presets (floor and ceil of `slewIndex`)
 5. Per-sample blend & pregain ramp eliminates frame-boundary clicks during transitions
+
+**Key constants (from include/config.h / isf.h)**
+
+- `ISF_MAX_PRESETS` = 10 (maximum presets per ISF instance)
+- `ISF_DEFAULT_RMS_MS` = 300 ms (default RMS averaging window)
+- `ISF_DEFAULT_SLEW_MS` = 500 ms (default time to slew one index step)
+- Lookahead buffer: up to 10 ms at 96 kHz (`ISF_LOOKAHEAD_MAX = 960` samples)
 
 **Global Configuration**
 
 | Parameter | Range | Default | Unit | Notes |
 |-----------|-------|---------|------|-------|
-| Num Presets | 1 to 5 | 5 | - | Number of presets loaded |
-| RMS Window | 10 to 5000 | 100 | ms | Energy averaging window; longer = slower response |
-| Slew Time | 10 to 5000 | 400 | ms | Time to smoothly transition between presets |
-| Level Override | -60 to 0, or auto | auto | dB | Manual level for testing; `-9999` = auto RMS |
+| Num Presets | 1 to 10 | (module default) 1 if none loaded | - | Maximum is `ISF_MAX_PRESETS` (10). Module will initialize a single flat preset if no presets are provided by the controller |
+| RMS Window | 10 to 5000 | 300 | ms | Energy averaging window; longer = slower response |
+| Slew Time | 10 to 5000 | 500 | ms | Time to smoothly transition between adjacent preset indices |
+| Lookahead | 0 to 10 | 0 | ms | Feed-forward delay for RMS detector; helps anticipate transients |
+| Level Override | -60 to 0, or auto | auto | dB | Manual level for testing; `-9999` = use RMS detection (constant `ISF_OVERRIDE_AUTO`)
 
 **Per-Preset Parameters**
 
 Each preset contains:
-- **Threshold** (-60 to 0 dB): Activation level. Presets must be sorted by threshold (ascending order).
-- **Pregain** (-72 to 18 dB): Volume adjustment applied before filtering (ramp per-sample during transition).
+- **Threshold** (-96 to 0 dB): Activation level stored Q8.8 in firmware (e.g. -30 * 256). Presets must be sorted by threshold (ascending order).
+- **Pregain** (-72 to 18 dB): Volume adjustment applied before filtering (ramped per-sample during transition).
 - **Filter Bank** (up to 10 bands): Each band is an independent biquad filter.
   - Enabled (on/off)
   - Type (Peaking, Low-shelf, High-shelf, Low-pass, High-pass, Notch)
@@ -173,52 +181,44 @@ Each preset contains:
   - Gain (-12 to 12 dB)
   - Q (0.1 to 10.0)
 
-**Example preset arrangement** (sorted by threshold, ascending):
-```
-Preset 0: threshold = -60 dB → Main bass boost curve
-Preset 1: threshold = -40 dB → Balanced curve (kicks in at moderate levels)
-Preset 2: threshold = -20 dB → Treble-heavy curve (bright at high levels)
-Preset 3: threshold = -6 dB  → Protection curve (reduces gain at peaks)
-```
-
-When input level = -25 dB → target preset = 1 (highest threshold ≤ -25).  
-When input level = -5 dB → target preset = 2 (highest threshold ≤ -5).
+**Default initialization behavior**
+- If the ISF instance has zero presets when initialized, firmware creates a single flat preset with `threshold = -96 dB` and `pregain = 0` and sets `_numPresets = 1` so the module is safe by default.
 
 **Smooth Crossfading Algorithm**:
 ```
 // Per frame:
-slewIndex moves toward target at: (1 step / slewMs) per sample
-indexA = floor(slewIndex)
-indexB = ceil(slewIndex)
-blend = fractional part of slewIndex  (0.0..1.0)
+// slewIndex moves toward target at: (1 step / slewMs) per sample
+// indexA = floor(slewIndex)
+// indexB = ceil(slewIndex)
+// blend = fractional part of slewIndex  (0.0..1.0)
 
 // Per sample within frame:
-t = sample_index / numSamples           // 0..1 across frame
-blend_i = blendStart + t * (blendEnd - blendStart)  // ramped blend
-pgLin_i = pgLinA_start + t * (pgLinA_end - pgLinA)  // ramped pregain
-output[i] = (1 - blend_i) * pgLin_i * filterA(input[i])
-          + blend_i * pgLinB_i * filterB(input[i])
+// t = sample_index / numSamples           // 0..1 across frame
+// blend_i = blendStart + t * (blendEnd - blendStart)  // ramped blend
+// pgLin_i = pgLinA_start + t * (pgLinA_end - pgLinA)  // ramped pregain
+// output[i] = (1 - blend_i) * pgLin_i * filterA(input[i])
+//           + blend_i * pgLinB_i * filterB(input[i])
 ```
 
 **Why ISF avoids clicks during level-based switching**:
-1. **Per-sample blend ramp** (not per-frame constant): Eliminates amplitude step at frame boundaries
+1. **Per-sample blend ramp** (not per-frame constant): Eliminates amplitude steps at frame boundaries
 2. **Per-sample pregain interpolation**: Smooth level transitions, no amplitude jump
 3. **Always-warm filter state**: Both filterA and filterB continuously process, preventing stale transients when blend increases
-4. **Smart state promotion**: When slewIndex crosses integer boundary, stateB (which was pre-computing the next preset) is promoted to stateA, maintaining signal continuity
-5. **Zero-init new states**: When a new preset enters (from cold), its state starts at zero and warms up during the blending window when blend is still small
+4. **Smart state promotion**: When `slewIndex` crosses an integer boundary, stateB (preparing the next preset) may be promoted to stateA to preserve continuity
+5. **Zero-init new states**: Newly entered presets start with zero state and warm up while their blend contribution is small
 
 **Use Cases**:
-1. **Loudness Compensation**: Low preset boost bass (+8dB @ 80Hz), high preset lift treble (+6dB @ 8kHz) to match Fletcher-Munson curves
-2. **Adaptive Tone Shaping**: Different EQ curves for speech (narrow bandwidths, centered) vs music (wider, more aggressive)
-3. **Speaker Protection**: ISF ramps down all gains at high levels (e.g., preset 3 applies -18dB to bass) to prevent clipping
+1. **Loudness Compensation**: Low preset boost bass (+8dB @ 80Hz), high preset lift treble (+6dB @ 8kHz) to match loudness curves
+2. **Adaptive Tone Shaping**: Different EQ curves for speech (narrow bandwidths) vs music (wider, more aggressive)
+3. **Speaker Protection**: ISF ramps down all gains at high levels (e.g., a protection preset that reduces bass by -18dB)
 4. **Parallel Makeup**: ISF before main EQ for level-aware bass, then main EQ handles general tone shaping
-5. **Macro Control**: Tie ISF level override to a physical volume knob for manual preset selection
+5. **Macro Control**: Bind ISF level override to a physical volume knob for manual preset selection
 
 **Implementation Notes**:
-- ISF instances are **fully independent**: Each has its own RMS detector, slew state, and filter banks.
-- **Preset atomicity**: Loading a new preset (band parameter change) doesn't interrupt audio processing — coefficients are recomputed and applied smoothly.
-- **CPU cost**: Only active during transitions (when blend != 0 or 1). In steady state (blend at 0 or 1), ISF runs a single filter chain.
-- **State handoff robustness**: Handles edge cases like rapid level changes, backwards slewing, or manual level overrides.
+- ISF instances are **fully independent**: each has its own RMS detector, slew state, lookahead buffer, and filter banks.
+- **Preset atomicity**: Loading or updating presets is atomic from the audio thread's perspective; coefficients are recomputed and applied without audio interrupts.
+- **CPU cost**: Both filter banks run during transitions. In steady state (blend == 0 or 1) ISF runs only one preset processing path.
+- **Reporting & Commands**: The firmware exposes ISF-related commands and reporting opcodes (see `docs/protocol.md`) for remote configuration and telemetry.
 
 ---
 
@@ -309,79 +309,78 @@ Tham chiếu đầy đủ cho 11 module DSP.
 
 ### [11] Index Selectable Filter (ISF)
 
-**Mục đích**: Tự động chuyển đổi đường cong EQ dựa vào mức tín hiệu với crossfade mượt mà. Hai instance độc lập cho phép routing phức tạp (ví dụ: ISF trước Master EQ, ISF chạy song song).
+**Mục đích**: Tự động chuyển đổi đường cong EQ dựa trên mức tín hiệu vào, kèm crossfade mượt mà giữa các preset. Hai instance hoàn toàn độc lập cho phép các cấu hình routing phức tạp (ví dụ ISF trước Master EQ hoặc chạy song song).
 
-**Cách hoạt động**:
-1. Liên tục đo năng lượng RMS của input (cửa sổ configurable)
-2. Ánh xạ mức năng lượng → chỉ số preset target (khớp threshold gần nhất)
-3. Mượt mà "slew" slewIndex về target với tốc độ cố định (configurable)
-4. Blend output giữa 2 preset kế cận (floor và ceil của slewIndex)
-5. Per-sample blend & pregain ramp loại bỏ click tại frame boundary trong transition
+**Cách hoạt động (tóm tắt)**:
+1. Liên tục đo năng lượng RMS của tín hiệu vào (cửa sổ có thể cấu hình)
+2. Ánh xạ mức năng lượng → chỉ số preset mục tiêu (chọn chỉ số có threshold lớn nhất ≤ level)
+3. `slewIndex` mượt mà tiến về mục tiêu với một bước cố định trên mỗi sample
+4. Blend đầu ra giữa hai preset kề nhau (floor/ceil của `slewIndex`)
+5. Per-sample blend và per-sample pregain ramp loại bỏ click khi chuyển đổi
 
-**Cấu Hình Toàn Cục**
+**Các hằng số chính (từ include/config.h / isf.h)**
 
-| Tham Số | Phạm Vi | Mặc Định | Đơn Vị | Ghi Chú |
+- `ISF_MAX_PRESETS` = 10 (số preset tối đa cho mỗi ISF)
+- `ISF_DEFAULT_RMS_MS` = 300 ms (mặc định cửa sổ trung bình RMS)
+- `ISF_DEFAULT_SLEW_MS` = 500 ms (mặc định thời gian để chuyển 1 bước index)
+- Lookahead: tối đa ~10 ms ở 96 kHz (`ISF_LOOKAHEAD_MAX = 960` samples)
+
+**Cấu hình toàn cục**
+
+| Tham số | Phạm vi | Mặc định | Đơn vị | Ghi chú |
 |---------|---------|----------|--------|--------|
-| Số Presets | 1 đến 16 | 4 | - | Số lượng preset được load |
-| RMS Window | 10 đến 5000 | 100 | ms | Cửa sổ lấy trung bình năng lượng; càng dài → đáp ứng càng chậm |
-| Slew Time | 10 đến 5000 | 400 | ms | Thời gian chuyển tiếp mượt mà giữa các preset |
-| Level Override | -60 đến 0, hoặc auto | auto | dB | Mức thủ công để test; `-9999` = dùng RMS |
+| Số Presets | 1 → 10 | (mặc định module) 1 nếu không có preset | - | Giới hạn bởi `ISF_MAX_PRESETS` (10). Nếu không có preset, firmware tạo 1 preset flat mặc định để an toàn |
+| RMS Window | 10 → 5000 | 300 | ms | Cửa sổ trung bình năng lượng; càng dài → phản hồi càng chậm |
+| Slew Time | 10 → 5000 | 500 | ms | Thời gian chuyển mượt giữa hai chỉ số kế tiếp |
+| Lookahead | 0 → 10 | 0 | ms | Độ trễ feed-forward cho detector, giúp phát hiện sớm các transient |
+| Level Override | -96 → 0, hoặc auto | auto | dB | Ghi chú: firmware dùng hằng số `ISF_OVERRIDE_AUTO` = -9999 để biểu thị chế độ tự động (dùng RMS)
 
-**Tham Số Từng Preset**
+**Tham số mỗi preset**
 
-Mỗi preset chứa:
-- **Threshold** (-60 đến 0 dB): Mức kích hoạt. Presets phải được sắp xếp theo threshold (tăng dần).
-- **Pregain** (-72 đến 18 dB): Điều chỉnh âm lượng trước lọc (ramp per-sample trong transition).
-- **Filter Bank** (tối đa 10 dải): Mỗi dải là một biquad lọc độc lập.
+Mỗi preset gồm:
+- **Threshold** (định dạng Q8.8, tương đương -96 → 0 dB): Mức kích hoạt; preset phải được sắp xếp theo threshold tăng dần.
+- **Pregain** (-72 → 18 dB): Điều chỉnh trước khi lọc; được nội suy per-sample trong chuyển tiếp.
+- **Filter Bank** (tối đa 10 dải): mỗi dải là một biquad.
   - Enabled (bật/tắt)
   - Type (Peaking, Low-shelf, High-shelf, Low-pass, High-pass, Notch)
-  - Frequency (20 - 20000 Hz)
-  - Gain (-12 đến 12 dB)
-  - Q (0.1 đến 10.0)
+  - Frequency (20 → 20000 Hz)
+  - Gain (-12 → 12 dB)
+  - Q (0.1 → 10.0)
 
-**Ví dụ sắp xếp preset** (theo threshold tăng dần):
-```
-Preset 0: threshold = -60 dB → Đường cong bass boost chính
-Preset 1: threshold = -40 dB → Đường cong cân bằng (kích hoạt ở mức trung bình)
-Preset 2: threshold = -20 dB → Đường cong treble nặng (sáng ở mức cao)
-Preset 3: threshold = -6 dB  → Đường cong bảo vệ (giảm gain ở đỉnh)
-```
+**Hành vi khởi tạo mặc định**
+- Nếu ISF được khởi tạo mà không có preset nào (_numPresets == 0), firmware tự tạo một preset flat mặc định với `threshold = -96 dB` và `pregain = 0`, và đặt `_numPresets = 1` để module an toàn theo mặc định.
 
-Khi mức input = -25 dB → preset target = 1 (threshold cao nhất ≤ -25).  
-Khi mức input = -5 dB → preset target = 2 (threshold cao nhất ≤ -5).
-
-**Thuật Toán Crossfade Mượt Mà**:
+**Thuật toán crossfade (tóm tắt)**
 ```
 // Mỗi frame:
-slewIndex di chuyển về target: (1 step / slewMs) mỗi sample
-indexA = floor(slewIndex)
-indexB = ceil(slewIndex)
-blend = phần lẻ của slewIndex  (0.0..1.0)
+// slewIndex tiến về target với tốc độ: (1 step / slewMs) trên mỗi sample
+// indexA = floor(slewIndex)
+// indexB = ceil(slewIndex)
+// blend = phần thập phân của slewIndex (0.0 .. 1.0)
 
 // Mỗi sample trong frame:
-t = sample_index / numSamples           // 0..1 qua frame
-blend_i = blendStart + t * (blendEnd - blendStart)  // blend được ramp
-pgLin_i = pgLinA_start + t * (pgLinA_end - pgLinA)  // pregain được ramp
-output[i] = (1 - blend_i) * pgLin_i * filterA(input[i])
-          + blend_i * pgLinB_i * filterB(input[i])
+// t = sample_index / numSamples
+// blend_i = blendStart + t * (blendEnd - blendStart)   // blend được ramp per-sample
+// pgLin_i  = pgLinA_start + t * (pgLinA_end - pgLinA) // pregain nội suy per-sample
+// output[i] = (1 - blend_i) * pgLin_i * filterA(x[i]) + blend_i * pgLinB_i * filterB(x[i])
 ```
 
-**Tại sao ISF tránh được click khi chuyển đổi theo mức**:
-1. **Per-sample blend ramp** (không phải per-frame hằng số): Loại bỏ bước nhảy biên độ tại ranh giới frame
-2. **Per-sample pregain interpolation**: Chuyển tiếp mứcmượt mà, không bất ngờ
-3. **Filter state luôn "warm"**: Cả filterA và filterB liên tục xử lý, tránh transient cũ khi blend tăng
-4. **Smart state promotion**: Khi slewIndex vượt số nguyên, stateB (đang pre-compute preset tiếp theo) được promote lên stateA, giữ liên tục tín hiệu
-5. **Zero-init state mới**: Khi preset mới vào (cold start), state bắt đầu từ zero và warm up trong cửa sổ blend khi blend còn nhỏ
+**Tại sao ISF tránh được click**
+1. Nội suy blend per-sample (không phải hằng số per-frame) → loại bỏ bước nhảy biên độ giữa các frame.
+2. Nội suy pregain per-sample → không có nhảy về mức âm lượng.
+3. Cả hai bộ lọc (A và B) luôn xử lý trong giai đoạn chuyển tiếp để giữ state "warm".
+4. Khi vượt ranh số nguyên, firmware có cơ chế promote state để giữ continuity giữa preset.
+5. Preset mới bắt đầu bằng state = 0 và sẽ warm up khi blend còn nhỏ, tránh transient lớn.
 
-**Tình Huống Sử Dụng**:
-1. **Loudness Compensation**: Preset thấp boost bass (+8dB @ 80Hz), preset cao lift treble (+6dB @ 8kHz) để match Fletcher-Munson curve
-2. **Adaptive Tone Shaping**: Đường cong EQ khác nhau cho speech (hẹp, chặt) vs nhạc (rộng, mạnh mẽ)
-3. **Bảo vệ Loa**: ISF ramp xuống all gains ở mức cao (ví dụ preset 3 áp -18dB bass) để tránh clipping
-4. **Parallel Makeup**: ISF trước main EQ cho bass theo mức, sau đó main EQ xử lý tone chung
-5. **Macro Control**: Gắn ISF level override với nút volume vật lý để chọn preset thủ công
+**Tình huống sử dụng**
+- Loudness compensation: preset thấp boost bass, preset cao lift treble để phù hợp cảm nhận âm lượng.
+- Adaptive tone: dùng preset khác cho speech vs music.
+- Bảo vệ loa: preset bảo vệ giảm gain tại mức cao.
+- Routing song song: ISF trước main EQ để xử lý bass theo mức.
+- Điều khiển macro: gắn level-override với núm volume vật lý để chọn preset thủ công.
 
-**Ghi Chú Kỹ Thuật**:
-- **ISF instances hoàn toàn độc lập**: Mỗi cái có RMS detector, slew state, và filter bank riêng.
-- **Preset atomicity**: Load preset mới (thay band parameter) không gián đoạn xử lý âm thanh — hệ số được tính lại và áp dụng mượt mà.
-- **Chi phí CPU**: Chỉ active trong transition (blend ≠ 0 hoặc 1). Ở trạng thái ổn định (blend = 0 hoặc 1), ISF chạy single filter chain.
-- **State handoff robust**: Xử lý đúng các trường hợp biên (level change nhanh, slew lùi, override thủ công).
+**Ghi chú triển khai**
+- ISF là module độc lập: mỗi instance có detector, slew state, lookahead buffer và filter banks riêng.
+- Tải/ cập nhật preset là nguyên tử từ góc nhìn audio thread — hệ số được tính trước rồi copy vào cấu trúc preset.
+- Về CPU: cả hai filter banks chỉ chạy đồng thời khi đang chuyển tiếp; ở trạng thái ổn định chỉ chạy một path.
+- Firmware cung cấp các lệnh cấu hình và báo cáo ISF (xem `docs/protocol.md`) để điều khiển từ xa và thu thập telemetry.
