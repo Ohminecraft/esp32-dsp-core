@@ -184,7 +184,7 @@ void BatteryMonitor::update() {
 
     // ── SoC ──────────────────────────────────────────────────────────────────
     // (may re-anchor _consumedMah at the OCV table's top/bottom — see below)
-    updateSoC();
+    updateSoC(dtS);
     _status.consumedMah = _consumedMah;
 
     // ── State machine ─────────────────────────────────────────────────────────
@@ -252,7 +252,7 @@ float BatteryMonitor::ocvToSoc(float cellV) const {
     return 1.0f;
 }
 
-void BatteryMonitor::updateSoC() {
+void BatteryMonitor::updateSoC(float dtS) {
     float cellV    = _status.busVoltage / (float)_cfg.cellS;
     float totalMah = (float)_cfg.cellMah;
 
@@ -265,10 +265,16 @@ void BatteryMonitor::updateSoC() {
     // so we re-anchor the coulomb counter instead of blending — otherwise
     // SoC could drift below 100% (or above 0%) forever, since _consumedMah
     // only ever moves one direction without an explicit reset.
+    //
+    // These branches compare *raw* cellV, not the filtered one below —
+    // a genuine full/empty needs to be detected and acted on immediately
+    // (charger cutoff, shutdown), not lagged behind a smoothing filter.
     if (cellV >= LIION_CELL_MAX_V) {
         _consumedMah = 0.0f;
         _status.soc  = 1.0f;
         _status.remainingMah = totalMah;
+        _dispSoc = 1.0f;          // real, unambiguous anchor — snap the display too
+        _socFilterInit = true;
 
         // Confirmed full charge — safe to start (or restart) a full-cycle
         // capacity measurement from here.
@@ -283,6 +289,8 @@ void BatteryMonitor::updateSoC() {
         _consumedMah = totalMah;
         _status.soc  = 0.0f;
         _status.remainingMah = 0.0f;
+        _dispSoc = 0.0f;          // real, unambiguous anchor — snap the display too
+        _socFilterInit = true;
 
         // If we made it here on an uninterrupted discharge from a confirmed
         // full charge, _cycleAccumMah is a real measurement of this cycle's
@@ -305,7 +313,24 @@ void BatteryMonitor::updateSoC() {
         return;
     }
 
-    float ocvSoc = ocvToSoc(cellV);
+    // ── Low-pass filter voltage & current before they feed the estimator ───
+    // A current spike sags cellV (pulling ocvSoc down) *and* pushes
+    // loadFactor up (pulling the blend toward ccSoc) at the same instant;
+    // when the load lets go, both effects reverse together. That combined,
+    // instantaneous swing is the "SoC bounces up and down with the load"
+    // symptom. Filtering the inputs first — rather than only smoothing the
+    // final number — fixes it where it originates instead of just hiding it.
+    constexpr float FILT_TAU_S = 6.0f; // time constant, seconds
+    float filtAlpha = 1.0f - std::exp(-std::max(dtS, 0.001f) / FILT_TAU_S);
+    if (!_socFilterInit) {
+        _filtCellV     = cellV;
+        _filtCurrentMa = _status.currentMa;
+    } else {
+        _filtCellV     += filtAlpha * (cellV - _filtCellV);
+        _filtCurrentMa += filtAlpha * (_status.currentMa - _filtCurrentMa);
+    }
+
+    float ocvSoc = ocvToSoc(_filtCellV);
 
     // Coulomb counter SoC
     float ccSoc = (totalMah > 0.0f)
@@ -325,14 +350,41 @@ void BatteryMonitor::updateSoC() {
     // until the pack hit LIION_CELL_MAX_V. Clamping current to >=0 here
     // means charging relies on the rising OCV instead, which actually
     // tracks progress.
-    float loadFactor = std::min(1.0f, std::max(0.0f, _status.currentMa) / 500.0f);
-    _status.soc = ocvSoc * (1.0f - loadFactor) + ccSoc * loadFactor;
-    _status.soc = std::max(0.0f, std::min(1.0f, _status.soc));
+    float loadFactor = std::min(1.0f, std::max(0.0f, _filtCurrentMa) / 500.0f);
+    float rawSoc = ocvSoc * (1.0f - loadFactor) + ccSoc * loadFactor;
+    rawSoc = std::max(0.0f, std::min(1.0f, rawSoc));
 
-    // Remaining capacity derived from the blended SoC rather than a plain
+    // ── Slew-rate limit the *displayed* SoC ─────────────────────────────────
+    // Even filtered, the blend can still make small legitimate corrections
+    // tick-for-tick. Capping how fast the shown number may move — and, while
+    // discharging, effectively forbidding it from rising — is what makes a
+    // phone or Bluetooth speaker's battery icon read as calm and monotonic
+    // even though the underlying fuel-gauge estimate underneath isn't.
+    constexpr float MAX_FALL_FRAC_PER_S       = 0.005f;  // 0.5 %/s
+    constexpr float MAX_RISE_FRAC_PER_S_DISCH = 0.0002f; // 0.02 %/s — slow drift-correction only
+    constexpr float MAX_RISE_FRAC_PER_S_CHG   = 0.01f;   // 1 %/s — track charging progress normally
+
+    if (!_socFilterInit) {
+        _dispSoc = rawSoc;
+        _socFilterInit = true;
+    } else {
+        bool  charging = _status.currentMa < 0.0f;
+        float maxRise  = (charging ? MAX_RISE_FRAC_PER_S_CHG : MAX_RISE_FRAC_PER_S_DISCH) * dtS;
+        float maxFall  = MAX_FALL_FRAC_PER_S * dtS;
+        float delta    = rawSoc - _dispSoc;
+        if (delta > maxRise)       _dispSoc += maxRise;
+        else if (delta < -maxFall) _dispSoc -= maxFall;
+        else                       _dispSoc = rawSoc; // small correction — apply directly
+    }
+    _dispSoc = std::max(0.0f, std::min(1.0f, _dispSoc));
+
+    _status.soc = _dispSoc;
+
+    // Remaining capacity derived from the displayed SoC rather than a plain
     // totalMah - _consumedMah subtraction, so it inherits the same OCV
-    // correction (and won't drift the way a pure coulomb count would).
-    _status.remainingMah = totalMah * _status.soc;
+    // correction and smoothing (and won't drift the way a pure coulomb
+    // count would, or jitter the way the raw blend would).
+    _status.remainingMah = totalMah * _dispSoc;
 
     _status.learnedCapacityMah = _learnedCapacityMah;
     _status.stateOfHealthPct   = (totalMah > 0.0f) ? (_learnedCapacityMah / totalMah) * 100.0f : 0.0f;

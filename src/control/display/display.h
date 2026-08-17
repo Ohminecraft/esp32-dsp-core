@@ -368,6 +368,12 @@ private:
 
     KeyboardState _kb;
 
+    // ── Trigger states ────────────────────────────────────────────────────────
+
+    bool triggerActive = false;
+    uint32_t triggerEndTime = 0;
+    uint8_t  triggerPin = 0;
+
     // ── Preset slot UI state ──────────────────────────────────────────────────
     bool      _presetSaveMode = false;   // false = load slots, true = save slots
     uint8_t   _presetTargetSlot = 0;

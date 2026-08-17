@@ -25,9 +25,9 @@
 static constexpr uint8_t INA226_ADDR = 0x40;
 
 // ── Li-Ion cell limits ───────────────────────────────────────────────────────
-static constexpr float LIION_CELL_MIN_V  = 3.4f;   // hard cutoff → shutdown
+static constexpr float LIION_CELL_MIN_V  = 3.6f;   // hard cutoff → shutdown
 static constexpr float LIION_CELL_MAX_V  = 4.2f;
-static constexpr float LIION_CELL_WARN_V = 3.5f;   // warning threshold — must stay above LIION_CELL_MIN_V,
+static constexpr float LIION_CELL_WARN_V = 3.7f;   // warning threshold — must stay above LIION_CELL_MIN_V,
                                                     // otherwise the WARNING state in the update() state
                                                     // machine is unreachable (CRITICAL always fires first)
 
@@ -59,7 +59,7 @@ struct BatteryStatus {
     float        busVoltage    = 0.0f;  // V  — pack voltage
     float        currentMa     = 0.0f;  // mA — discharge positive, charge negative
     float        powerMw       = 0.0f;  // mW
-    float        soc           = 0.0f;  // 0.0–1.0
+    float        soc           = 0.0f;  // 0.0–1.0, filtered + slew-limited for stable display
     float        consumedMah   = 0.0f;  // mAh discharged since last full
     float        remainingMah  = 0.0f;  // mAh left = cellMah × soc (blended OCV+CC, not a raw subtraction)
     float        learnedCapacityMah = 0.0f; // measured full-cycle capacity (EMA over completed cycles)
@@ -113,7 +113,8 @@ public:
 
 private:
     bool  configure();             // sets AVG/CT + calibration via INA226 lib
-    void  updateSoC();              // OCV-based SoC estimate blended with coulomb counter
+    void  updateSoC(float dtS);     // OCV-based SoC estimate blended with coulomb counter,
+                                     // then low-pass filtered + slew-rate limited for display
     float ocvToSoc(float cellV) const; // Li-Ion OCV → SoC lookup
     void  persistLearnedCapacity(); // saves _learnedCapacityMah to NVS (called on each completed full cycle)
 
@@ -126,6 +127,16 @@ private:
     uint32_t       _lastUpdateMs  = 0;
     uint32_t       _lastNvsSaveMs = 0;
     bool           _criticalFired = false;
+
+    // SoC display smoothing — see updateSoC(). _filtCellV/_filtCurrentMa are
+    // low-pass filtered inputs to the OCV/CC blend (removes most of the
+    // load-sag jitter at the source); _dispSoc is the slew-rate limited
+    // value actually shown in _status.soc (removes the rest, and keeps the
+    // percentage from visibly ticking back up while discharging).
+    float          _filtCellV      = 0.0f;
+    float          _filtCurrentMa  = 0.0f;
+    float          _dispSoc        = 0.0f;
+    bool           _socFilterInit  = false;
 
     // Full-cycle capacity learning (SOH). _cycleArmed is only true while the
     // current discharge run started from a confirmed full charge (top OCV

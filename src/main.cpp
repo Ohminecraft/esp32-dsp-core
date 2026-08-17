@@ -382,10 +382,10 @@ void IRAM_ATTR controlTask(void* param) {
         }
 
         if (g_userShutdownRequest) {
-            if (MUTE_PIN != -1) {
+            #if defined(MUTE_PIN) && MUTE_PIN != 1
                 digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
                 LOG_INFO("SYS", "Mute pin set.");
-            }
+            #endif
             LOG_INFO("SYS", "Initiating shutdown sequence...");
             g_audioIO.deinit();
             LOG_INFO("SYS", "Audio interfaces deinitialized.");
@@ -508,7 +508,7 @@ void setup() {
         esp_timer_create(&shutdown_timer_args, &g_autoShutdownTimerHandle);
     }
 
-    delay(100); // Allow time for power to stabilize before initializing components
+    //delay(100); // Allow time for power to stabilize before initializing components
     DBG_INIT(115200);
     DBG_PRINTLN();
     DBG_PRINTLN("=================================");
@@ -569,7 +569,9 @@ void setup() {
     #ifdef USING_BATTERY_MON
         g_battery.begin(BATT_SDA, BATT_SCL);
         g_paramCtrl.setBatteryMonitor(&g_battery);
+        #ifndef USING_DISPLAY // display task will handle onCritical callback if USING_DISPLAY is defined
         g_battery.onCritical([]{ g_userShutdownRequest = true; });
+        #endif
     #endif
 
     // 5.1 Load Main Menu Param
@@ -643,6 +645,7 @@ void setup() {
     // 9. Set POWER_PIN_OUT to high 
     if (g_softLatchPinIsAvailable) digitalWrite(POWER_PIN_OUT, HIGH);
 
+    vTaskDelay(pdMS_TO_TICKS(100)); // Allow time for power to stabilize before initializing components
     LOG_INFO("INIT", "System Ready, CPU: %lu MHz, Free Heap: %lu bytes",
              (unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFreeHeap());
 }

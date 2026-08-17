@@ -444,14 +444,14 @@ void IRAM_ATTR IndexSelectableFilter::process(
                 reset();
                 l = r = 0.0f;
             }
-            samples[i * 2]     = l >  1.0f ?  1.0f : (l < -1.0f ? -1.0f : l);
-            samples[i * 2 + 1] = r >  1.0f ?  1.0f : (r < -1.0f ? -1.0f : r);
+            samples[i * 2]     = sat_float(l);
+            samples[i * 2 + 1] = sat_float(r);
         }
     } else {
         for (size_t i = 0; i < numSamples; i++) {
             float v = bufL[i];
             if (!isfinite(v)) { reset(); v = 0.0f; }
-            samples[i] = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+            samples[i] = sat_float(v);
         }
     }
 }

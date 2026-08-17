@@ -47,9 +47,9 @@
 // ============================================================================
 
 // I2S Input/Output Full
-#define I2S_IN_OUT_BCK_PIN         4      // BCK
-#define I2S_IN_OUT_WS_PIN          5     // WS 
-#define I2S_IN_OUT_DATA_OUT_PIN    6      // DOUT
+#define I2S_IN_OUT_BCK_PIN         6      // BCK
+#define I2S_IN_OUT_WS_PIN          4     // WS 
+#define I2S_IN_OUT_DATA_OUT_PIN    5      // DOUT
 #define I2S_IN_OUT_DATA_IN_PIN     7      // DIN
 
 // I2S Output Subwoffer (WIP)
@@ -124,7 +124,7 @@
 #define POWER_PIN_OUT -1
 #define POWER_PIN_OFF -1
 
-#define MUTE_PIN 18
+#define MUTE_PIN 8
 
 // ============================================================================
 // TFT Display & Encoder
@@ -161,11 +161,11 @@
 #define BATT_SDA 41
 
 // ============================================================================
-// Trigger GPIO Settings (Single / Triple Click)
+// Trigger GPIO Settings
 // ============================================================================
-#define TRIGGER_BT_KICK_GPIO_PIN            -1      // Target GPIO to trigger
-#define TRIGGER_VOL_UP_GPIO_PIN             -1      // Target GPIO to trigger
-#define TRIGGER_VOL_DOWN_GPIO_PIN           -1      // Target GPIO to trigger
-#define TRIGGER_PAUSE_GPIO_PIN              -1      // Target GPIO to trigger
+#define TRIGGER_BT_KICK_GPIO_PIN            45      // Target GPIO to trigger
+#define TRIGGER_VOL_UP_GPIO_PIN             21      // Target GPIO to trigger
+#define TRIGGER_VOL_DOWN_GPIO_PIN           47      // Target GPIO to trigger
+#define TRIGGER_PAUSE_GPIO_PIN              45      // Target GPIO to trigger
 
 #endif // PIN_CONFIG_H

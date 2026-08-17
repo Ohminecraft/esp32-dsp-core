@@ -420,6 +420,17 @@ void Display::init() {
         ledcWrite(TFT_BACKLIGHT_PIN, 255);        // Full brightness on init
     #endif
 
+    pinMode(TRIGGER_BT_KICK_GPIO_PIN, OUTPUT);
+    pinMode(TRIGGER_VOL_UP_GPIO_PIN, OUTPUT);
+    pinMode(TRIGGER_VOL_DOWN_GPIO_PIN, OUTPUT);
+    pinMode(TRIGGER_PAUSE_GPIO_PIN, OUTPUT);
+    
+    digitalWrite(TRIGGER_BT_KICK_GPIO_PIN, LOW);
+    digitalWrite(TRIGGER_VOL_UP_GPIO_PIN, LOW);
+    digitalWrite(TRIGGER_VOL_DOWN_GPIO_PIN, LOW);
+    digitalWrite(TRIGGER_PAUSE_GPIO_PIN, LOW);
+    
+
     #ifdef CONFIG_SPIRAM
         _spr.setColorDepth(16);
     #else
@@ -542,7 +553,7 @@ void Display::update(EncoderEvent enc) {
         return; 
     }
 
-    // Hold power-off screen for 5 s then set shutdown flag
+    // Hold power-off screen for 5s then set shutdown flag
     if (_powerOffScreenActive) {
         if (millis() - _powerOffStartMs >= 5000) {
             g_userShutdownRequest = true;
@@ -563,7 +574,7 @@ void Display::update(EncoderEvent enc) {
         }
     }
 
-    // ── Live meter polling (10 Hz for main menu and DSP list) ──
+    // ── Live meter polling (25 Hz for main menu and DSP list) ──
     if ((currentScreen() == ScreenID::MAIN_MENU || currentScreen() == ScreenID::DSP_LIST) && _pipeline) {
         uint32_t now = millis();
         if (now - _lastMeterUpdate >= METER_UPDATE_INTERVAL_MS) {
@@ -649,6 +660,13 @@ void Display::update(EncoderEvent enc) {
                 _screenFadeOutValue = _screenFadeOutValue - 5;
             }
         }
+    }
+
+    // ── GPIO trigger auto-deactivate ─────────────────────────────────────────
+    if (triggerActive && millis() >= triggerEndTime) {
+        LOG_INFO(TAG, "Trigger duration expired, deactivating GPIO pin %d", triggerPin);
+        digitalWrite(triggerPin, !TRIGGER_GPIO_ACTIVE_LEVEL);
+        triggerActive = false;
     }
 
     if (_dirty) { draw(); _dirty = false; }
@@ -866,16 +884,31 @@ void Display::handleEncoder(EncoderEvent enc) {
                 }
             } else {
                 // CTRL tab: SW activates the focused button
-                if (_focusIdx == 1) {
+                if (_focusIdx == 1 && !triggerActive) { // prevent re-trigger if already active
                     // BT Kick
-                    // TODO: declare in display.h: std::function<void()> onBtKick;
-                    if (onBtKick) onBtKick();
-                } else if (_focusIdx == 2) {
-                    // TODO: Bluetooth Vol +
-                } else if (_focusIdx == 3) {
-                    // TODO: Bluetooth Play/Pause
-                } else if (_focusIdx == 4) {
-                    // TODO: Bluetooth Vol -
+                    LOG_INFO(TAG, "Triggering BT Kick GPIO pin");
+                    triggerPin = TRIGGER_BT_KICK_GPIO_PIN;
+                    digitalWrite(triggerPin, TRIGGER_GPIO_ACTIVE_LEVEL);
+                    triggerActive = true;
+                    triggerEndTime = millis() + TRIGGER_BT_KICK_DURATION_MS;
+                } else if (_focusIdx == 2 && !triggerActive) {
+                    LOG_INFO(TAG, "Triggering Volume Up GPIO pin");
+                    triggerPin = TRIGGER_VOL_UP_GPIO_PIN;
+                    digitalWrite(triggerPin, TRIGGER_GPIO_ACTIVE_LEVEL);
+                    triggerActive = true;
+                    triggerEndTime = millis() + TRIGGER_VOL_UP_DURATION_MS;
+                } else if (_focusIdx == 3 && !triggerActive) {
+                    LOG_INFO(TAG, "Triggering Pause GPIO pin");
+                    triggerPin = TRIGGER_PAUSE_GPIO_PIN;
+                    digitalWrite(triggerPin, TRIGGER_GPIO_ACTIVE_LEVEL);
+                    triggerActive = true;
+                    triggerEndTime = millis() + TRIGGER_PAUSE_DURATION_MS;
+                } else if (_focusIdx == 4 && !triggerActive) {
+                    LOG_INFO(TAG, "Triggering Volume Down GPIO pin");
+                    triggerPin = TRIGGER_VOL_DOWN_GPIO_PIN;
+                    digitalWrite(triggerPin, TRIGGER_GPIO_ACTIVE_LEVEL);
+                    triggerActive = true;
+                    triggerEndTime = millis() + TRIGGER_VOL_DOWN_DURATION_MS;
                 }
             }
             _dirty = true; return;
@@ -1726,11 +1759,11 @@ void Display::drawPowerOffScreen() {
 //      2 = Bass selector
 //      3 = Mid selector
 //      4 = Treble selector
-//    CTRL tab (mainMenuTab == 1):
+//    CTRL tab (fake button) (mainMenuTab == 1):
 //      1 = BT Kick
-//      2 = + (increment active param)
+//      2 = + Volume
 //      3 = pause / mute
-//      4 = − (decrement active param)
+//      4 = − Volume
 
 // ─────────────────────────────────────────────────────────────────────────────
 // drawMainMenu — new layout (sketch 2025)
