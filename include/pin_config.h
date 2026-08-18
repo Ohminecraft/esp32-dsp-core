@@ -121,8 +121,8 @@
 // Misc Pin 
 // ============================================================================
 
-#define POWER_PIN_OUT -1
-#define POWER_PIN_OFF -1
+#define POWER_PIN_OUT 39
+#define POWER_PIN_OFF 38
 
 #define MUTE_PIN 8
 

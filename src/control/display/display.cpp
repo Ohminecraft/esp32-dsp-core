@@ -621,6 +621,40 @@ void Display::update(EncoderEvent enc) {
         }
     }
 
+    // ── Dedicated power-button poll (runs every tick, independent of encoder) ──
+    // POWER_PIN_OFF is a separate physical pin from the rotary encoder switch.
+    // Polling it here — unconditionally, every update() call — means the 5 s
+    // hold is timed correctly even if the user never touches the encoder.
+    // (Previously this lived inside handleEncoder(), which update() only
+    // calls when enc != EncoderEvent::NONE, so a plain power-button hold with
+    // no encoder activity never advanced the countdown.)
+    if (g_softLatchPinIsAvailable) {
+        bool btnIsPressed = (digitalRead(POWER_PIN_OFF) == LOW); // LOW = pressed
+        if (btnIsPressed) {
+            if (!g_shutdownButtonIsHolding) {
+                g_shutdownButtonIsHolding = true;
+                g_shutdownCountdown = millis();
+            }
+            // NOTE: intentionally does NOT touch _globalHoldArmed. That flag
+            // belongs to the encoder SELECT switch hold (armed in
+            // handleEncoder() on SW_PRESS) — this poll runs every tick
+            // regardless of which physical input is active, so writing to a
+            // shared flag here would stomp on a SELECT hold in progress.
+            // g_shutdownButtonIsHolding is this poll's own, independent
+            // "armed" signal; drawMainMenu() reads both separately.
+            _dirty = true; // keep redrawing every tick so the bar animates
+            if (!_powerOffScreenActive && millis() - g_shutdownCountdown >= 5000) {
+                _powerOffUserRequest = true;
+                _powerOffScreenActive = true;
+                _powerOffStartMs = millis();
+            }
+        } else {
+            if (g_shutdownButtonIsHolding) _dirty = true; // clear bar on release
+            g_shutdownButtonIsHolding = false;
+            g_shutdownCountdown = 0;
+        }
+    }
+
     updateAnimations();
 
     // ── Main menu tab-return hold poll ────────────────────────────────────────
@@ -696,27 +730,6 @@ void Display::handleEncoder(EncoderEvent enc) {
         if (s == ScreenID::MAIN_MENU && _focusIdx > 0) {
             _mmTabReturnArmed   = true;
             _mmTabReturnStartMs = millis();
-        }
-        return; // SW_PRESS is an arm signal only — no further action here
-    } else if (g_softLatchPinIsAvailable) {
-        bool btnIsPressed = (digitalRead(POWER_PIN_OFF) == LOW); // LOW = pressed
-        if (btnIsPressed) {
-            _globalHoldArmed    = true;
-            _globalHoldStartMs  = millis();
-            if (!g_shutdownButtonIsHolding) {
-                g_shutdownButtonIsHolding = true;
-                g_shutdownCountdown = millis();
-            } else if (millis() - g_shutdownCountdown >= 5000) {
-                _powerOffUserRequest = true;
-                _powerOffScreenActive = true;
-                _powerOffStartMs = millis();
-                _dirty = true;
-            }
-        }
-        else {
-            _globalHoldArmed = false;
-            g_shutdownButtonIsHolding = false;
-            g_shutdownCountdown = 0;
         }
         return; // SW_PRESS is an arm signal only — no further action here
     }
@@ -1871,11 +1884,24 @@ void Display::drawMainMenu() {
     }
 
     // ── Hold-progress indicator: fill a thin bar at the bottom of the tab bar ──
-    // Visible while the user is holding SW inside a tab (tab-return hold).
-    if (_globalHoldArmed) {
-        uint32_t elapsed = millis() - _globalHoldStartMs;
+    // Two independent sources, each with its own "armed" flag so neither
+    // clobbers the other: _globalHoldArmed (encoder SELECT switch, armed in
+    // handleEncoder() on SW_PRESS) and g_shutdownButtonIsHolding (dedicated
+    // power pin, set in update()'s poll). At most one is true at a time in
+    // normal use, but they're read independently rather than sharing state.
+    bool selectHeld = _globalHoldArmed;
+    bool powerPinHeld = g_shutdownButtonIsHolding;
+    if (selectHeld || powerPinHeld) {
+        uint32_t startMs = powerPinHeld ? g_shutdownCountdown : _globalHoldStartMs;
+        uint32_t elapsed = millis() - startMs;
         float frac = constrain((float)elapsed / 5000.0f, 0.0f, 1.0f);
-        uint16_t color = (elapsed < 3000) ? Color::GREEN : Color::RED;
+        // Power pin hold is always blue — green/red phase colouring is reserved
+        // for the encoder SELECT switch (green = 3s Settings zone, red = 5s
+        // Shutdown zone). The power pin only has one action at 5s, so it gets
+        // its own colour instead of borrowing the SELECT button's phases.
+        uint16_t color = powerPinHeld
+                            ? Color::BLUE
+                            : ((elapsed < 3000) ? Color::GREEN : Color::RED);
         
         int16_t barY = TAB_Y + TAB_H - 3;
         int16_t barW = (int16_t)(frac * MAIN_MENU_CONTENT_W);

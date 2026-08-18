@@ -60,6 +60,7 @@ namespace Color {
     static constexpr uint16_t GREEN       = 0x07E0;
     static constexpr uint16_t RED         = 0xF800;
     static constexpr uint16_t YELLOW      = 0xFFE0;
+    static constexpr uint16_t BLUE        = 0x1C9F; // dodger blue — power-pin hold indicator
     static constexpr uint16_t SLIDER_BG   = 0x2945;
     static constexpr uint16_t SLIDER_FILL = 0x07FF;
 }

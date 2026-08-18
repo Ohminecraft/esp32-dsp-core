@@ -105,8 +105,8 @@ static void autoShutdownTimerCallback(void* arg) {
 
 static void startAutoShutdownTimer() {
     if (g_autoShutdownTimerHandle && !esp_timer_is_active(g_autoShutdownTimerHandle) && g_softLatchPinIsAvailable) {
-        esp_timer_start_once(g_autoShutdownTimerHandle, (uint64_t)AUTO_SHUTDONW_TIMER_MS * 1000ULL);
-        LOG_INFO("SYS", "Auto shutdown timer started (%lu ms)", (unsigned long)AUTO_SHUTDONW_TIMER_MS);
+        esp_timer_start_once(g_autoShutdownTimerHandle, (uint64_t)AUTO_SHUTDOWN_TIMER_MS * 1000ULL);
+        LOG_INFO("SYS", "Auto shutdown timer started (%lu ms)", (unsigned long)AUTO_SHUTDOWN_TIMER_MS);
     } else if (!g_softLatchPinIsAvailable) {
         LOG_WARN("SYS", "Auto shutdown timer not started: soft latch pins not available");
     }
@@ -387,13 +387,13 @@ void IRAM_ATTR controlTask(void* param) {
                 LOG_INFO("SYS", "Mute pin set.");
             #endif
             LOG_INFO("SYS", "Initiating shutdown sequence...");
-            g_audioIO.deinit();
-            LOG_INFO("SYS", "Audio interfaces deinitialized.");
             vTaskDelete(g_audioTaskHandle);
             LOG_INFO("SYS", "Audio task stopped.");
             vTaskDelete(g_syncTaskHandle);
             g_audioSync.clearHandle();
             LOG_INFO("SYS", "Audio synchronization stopped.");
+            //g_audioIO.deinit(); // Some bug sometimes cause can't deinit ifself -> frozen here -> can't shutdown
+            //LOG_INFO("SYS", "Audio interfaces deinitialized.");
             if (!g_usingWifi) {
                 WiFi.status() == WL_CONNECTED ? WiFi.disconnect(true) : WiFi.softAPdisconnect(true);
                 WiFi.mode(WIFI_OFF);
@@ -508,7 +508,7 @@ void setup() {
         esp_timer_create(&shutdown_timer_args, &g_autoShutdownTimerHandle);
     }
 
-    //delay(100); // Allow time for power to stabilize before initializing components
+    vTaskDelay(pdMS_TO_TICKS(100)); // Allow time for power to stabilize before initializing components
     DBG_INIT(115200);
     DBG_PRINTLN();
     DBG_PRINTLN("=================================");
@@ -645,7 +645,6 @@ void setup() {
     // 9. Set POWER_PIN_OUT to high 
     if (g_softLatchPinIsAvailable) digitalWrite(POWER_PIN_OUT, HIGH);
 
-    vTaskDelay(pdMS_TO_TICKS(100)); // Allow time for power to stabilize before initializing components
     LOG_INFO("INIT", "System Ready, CPU: %lu MHz, Free Heap: %lu bytes",
              (unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFreeHeap());
 }

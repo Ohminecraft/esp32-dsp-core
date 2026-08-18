@@ -255,7 +255,6 @@ size_t IRAM_ATTR AudioIO::readFrame(float* __restrict buffer, size_t numSamples)
 
     const size_t samplesRead = bytesRead / sizeof(int32_t);
     for (size_t i = 0; i < samplesRead; i++) {
-        // QCC5125: 24-bit MSB in 32-bit frame — direct cast, no shift needed.
         buffer[i] = (float)s_rxBuf[i] * (1.0f / 2147483648.0f);
     }
 
