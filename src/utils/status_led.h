@@ -11,7 +11,7 @@
 #include <Arduino.h>
 #include "pin_config.h"
 
-extern volatile bool g_wifiShutdownActive;
+extern volatile bool g_usingWifi;
 
 class StatusLED {
 public:
@@ -25,7 +25,7 @@ public:
      */
     void update(float cpuUsage, uint8_t heapPct, uint32_t sampleRate, bool is_absent) {
         // 1. WiFi Shutdown state check
-        if (g_wifiShutdownActive && is_absent) {
+        if (!g_usingWifi && is_absent) {
             // WiFi is OFF: Breathing Purple/Magenta
             phase = sin(millis() * 0.002f);
             r = (uint8_t)(40 + 40 * phase);

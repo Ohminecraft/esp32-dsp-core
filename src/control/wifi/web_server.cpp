@@ -4,7 +4,7 @@
  */
 
 #include "web_server.h"
-#include "../utils/debug_log.h"
+#include "../../utils/debug_log.h"
 #include <ArduinoJson.h>
 #include <embedded_ui.h>  // Auto-generated gzip HTML blob (sync_web_ui.py)
 

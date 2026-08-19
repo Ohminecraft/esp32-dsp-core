@@ -22,10 +22,14 @@
 #include "audio/audio_sync.h"
 #include "effects/dsp_pipeline.h"
 #include "control/uart_protocol.h"
-#include "control/param_controller.h"
-#include "control/preset_manager.h"
-#include "control/wifi_manager.h"
-#include "control/web_server.h"
+#include "control/param/param_controller.h"
+#include "control/param/preset_manager.h"
+#include "control/param/settings_manager.h"
+#include "control/wifi/wifi_manager.h"
+#include "control/wifi/web_server.h"
+#include "control/display/display.h"
+#include "control/display/encoder.h"
+#include "control/display/battery_monitor.h"
 #include "utils/status_led.h"
 #include "utils/debug_log.h"
 
@@ -39,9 +43,13 @@ static AudioSync       g_audioSync;
 static UartProtocol    g_uart;
 static ParamController g_paramCtrl;
 static PresetManager   g_presetMgr;
+static SettingsManager g_settingsMgr;
 static WiFiManager     g_wifiMgr;
 static DspWebServer    g_webServer;
 static StatusLED       g_statusLED;
+static Display         g_display;
+static Encoder         g_encoder;
+static BatteryMonitor  g_battery;
 
 // Audio processing buffer (16-byte aligned for SIMD)
 static float __attribute__((aligned(16))) g_audioBuf[DSP_FRAME_SAMPLES];
@@ -50,6 +58,7 @@ static float __attribute__((aligned(16))) g_audioBuf[DSP_FRAME_SAMPLES];
 static TaskHandle_t g_audioTaskHandle   = NULL;
 static TaskHandle_t g_controlTaskHandle = NULL;
 static TaskHandle_t g_syncTaskHandle    = NULL;
+static TaskHandle_t g_displayTaskHandle = NULL;
 
 // Current sample rate — updated by AudioSync callback, read by controlTask
 static volatile uint32_t g_currentSampleRate = DSP_SAMPLE_RATE_DEFAULT;
@@ -60,6 +69,9 @@ static volatile uint32_t g_lastReinitSampleRate = 0;
 // priority inversion between the high-priority audio task and the sync callback.
 static volatile bool g_pipelineReady = false;
 
+// Check User execute save parameter
+volatile bool g_inNvsSaving = false;
+
 // Clock Absent check flag
 static volatile bool g_isclockabsent = false;
 
@@ -67,33 +79,47 @@ static volatile bool g_isclockabsent = false;
 static volatile uint32_t g_lastFrameUs = 0;
 static volatile uint32_t g_maxFrameUs  = 0;
 
+// Setting
+
+volatile bool g_usingWifi = true;
+
 // Shutdown Mechanism
-#ifdef SOFT_LATCH_SHUTDOWN
 #include "esp_timer.h"
-static esp_timer_handle_t g_autoShutdownTimerHandle = NULL;
-static volatile bool     g_userShutdownRequest = false;
-static bool              g_shutdownButtonIsHolding = false;
-static volatile uint32_t g_shutdownCountdown = 0;
+
+static esp_timer_handle_t   g_autoShutdownTimerHandle = NULL;
+volatile bool               g_shutdownButtonIsHolding = false;
+volatile uint32_t           g_shutdownCountdown = 0;
+volatile bool               g_softLatchPinIsAvailable = (POWER_PIN_OUT != -1 && POWER_PIN_OFF != -1);
+
+volatile bool     g_userShutdownRequest = false;
+volatile bool     g_timerShutdownTriggered = false;
 
 static void autoShutdownTimerCallback(void* arg) {
     LOG_INFO("SYS", "Auto shutdown timer expired (no clock). Initiating shutdown...");
+    #ifndef USING_DISPLAY
     g_userShutdownRequest = true;
+    #else
+    g_timerShutdownTriggered = true;
+    #endif
 }
 
 static void startAutoShutdownTimer() {
-    if (g_autoShutdownTimerHandle && !esp_timer_is_active(g_autoShutdownTimerHandle)) {
-        esp_timer_start_once(g_autoShutdownTimerHandle, (uint64_t)AUTO_SHUTDONW_TIMER_MS * 1000ULL);
-        LOG_INFO("SYS", "Auto shutdown timer started (%lu ms)", (unsigned long)AUTO_SHUTDONW_TIMER_MS);
+    if (g_autoShutdownTimerHandle && !esp_timer_is_active(g_autoShutdownTimerHandle) && g_softLatchPinIsAvailable) {
+        esp_timer_start_once(g_autoShutdownTimerHandle, (uint64_t)AUTO_SHUTDOWN_TIMER_MS * 1000ULL);
+        LOG_INFO("SYS", "Auto shutdown timer started (%lu ms)", (unsigned long)AUTO_SHUTDOWN_TIMER_MS);
+    } else if (!g_softLatchPinIsAvailable) {
+        LOG_WARN("SYS", "Auto shutdown timer not started: soft latch pins not available");
     }
 }
 
 static void stopAutoShutdownTimer() {
-    if (g_autoShutdownTimerHandle && esp_timer_is_active(g_autoShutdownTimerHandle)) {
+    if (g_autoShutdownTimerHandle && esp_timer_is_active(g_autoShutdownTimerHandle) && g_softLatchPinIsAvailable) {
         esp_timer_stop(g_autoShutdownTimerHandle);
         LOG_INFO("SYS", "Auto shutdown timer stopped (clock restored)");
+    } else if (!g_softLatchPinIsAvailable) {
+        LOG_WARN("SYS", "Auto shutdown timer not stopped: soft latch pins not available");
     }
 }
-#endif
 
 // ============================================================================
 // Pipeline Reinit — called from AudioSync callback (sync task context, Core 0)
@@ -101,17 +127,18 @@ static void stopAutoShutdownTimer() {
 
 static void reinitPipeline(uint32_t newRateHz) {
     g_pipelineReady = false;
-    vTaskDelay(pdMS_TO_TICKS(105));
+    vTaskDelay(pdMS_TO_TICKS(20));
 
-    if (g_audioTaskHandle) {
+    if (g_audioTaskHandle && !g_isclockabsent) {
         vTaskSuspend(g_audioTaskHandle);
     }
 
-    if (newRateHz > 0 && newRateHz != g_lastReinitSampleRate) {
+    if (newRateHz > 0 && newRateHz != g_lastReinitSampleRate && !g_inNvsSaving) { // Prevent Click sound when save saving preset
         g_lastReinitSampleRate = newRateHz;
         g_audioIO.reinit(newRateHz);
         g_pipeline.init((int32_t)newRateHz, DSP_NUM_CHANNELS);
         g_presetMgr.loadPreset(g_presetMgr.getCurrentSlotIndex(), g_pipeline);
+        g_display.setPipeline(&g_pipeline, &g_presetMgr);
     }
 
     g_currentSampleRate = (newRateHz > 0) ? newRateHz : g_currentSampleRate;
@@ -119,24 +146,16 @@ static void reinitPipeline(uint32_t newRateHz) {
     if (newRateHz > 0) {
         g_pipelineReady = true;
         g_isclockabsent = false;
-        #ifdef SOFT_LATCH_SHUTDOWN
         stopAutoShutdownTimer();
-        #endif
-        #ifdef MUTE_PIN
-        digitalWrite(MUTE_PIN, !MUTE_PIN_LOGIC);
-        #endif
+        if (MUTE_PIN != 1) digitalWrite(MUTE_PIN, !MUTE_PIN_LOGIC);
         if (g_audioTaskHandle) {
             vTaskResume(g_audioTaskHandle);
         }
         LOG_INFO("SYNC", "Pipeline reinit done: %lu Hz", (unsigned long)newRateHz);
     } else {
         g_isclockabsent = true;
-        #ifdef SOFT_LATCH_SHUTDOWN
         startAutoShutdownTimer();
-        #endif
-        #ifdef MUTE_PIN
-        digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
-        #endif
+        if (MUTE_PIN != 1) digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
         // audioTask stays suspended
         LOG_INFO("SYNC", "Pipeline stopped: clock absent");
     }
@@ -204,57 +223,15 @@ void IRAM_ATTR audioTask(void* param) {
 }
 
 // ============================================================================
-// WiFi Toggle State and Control
-// ============================================================================
-
-volatile bool g_wifiShutdownActive = false;
-
-#ifndef ONLY_SERIAL
-
-static void toggleWifiShutdown() {
-    g_wifiShutdownActive = !g_wifiShutdownActive;
-
-    // Save to NVS
-    Preferences prefs;
-    prefs.begin("sys_state", false);
-    prefs.putBool("wifi_off", g_wifiShutdownActive);
-    prefs.end();
-
-    if (g_wifiShutdownActive) {
-        LOG_INFO("SYS", "Double-press: Initiating WiFi Shutdown...");
-        
-        // 1. Save Preset 0 first
-        LOG_INFO("SYS", "Saving current DSP settings to Preset 0...");
-        g_presetMgr.savePreset(0, g_pipeline);
-        
-        // 2. Shut down WiFi completely
-        g_webServer.deinit();
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
-        LOG_INFO("SYS", "WiFi Transceiver is now fully OFF.");
-    } else {
-        LOG_INFO("SYS", "Double-press: Restarting to Initialize WiFi...");
-        #ifdef MUTE_PIN
-        digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC); // Mute during reboot
-        #endif
-        ESP.restart();
-    }
-}
-
-#endif // ONLY_SERIAL
-
-// ============================================================================
-// Control Task (Core 0, Priority 5)
+// Control Task (Core 0, Priority 12)
 // ============================================================================
 
 volatile uint16_t s_cpu_usage = 0;
 volatile uint8_t  s_heapPct = 0;
 volatile uint32_t s_fs = 0;
 
-void controlTask(void* param) {
+void IRAM_ATTR controlTask(void* param) {
     LOG_INFO("CTRL", "Control task started on core %d", xPortGetCoreID());
-    LOG_INFO("INIT", "System Ready, CPU: %lu MHz, Free Heap: %lu bytes",
-             (unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFreeHeap());
 
     uint32_t lastPerfMonitorMs = millis();
     uint32_t lastStatusMs = millis();
@@ -265,89 +242,113 @@ void controlTask(void* param) {
     #endif
 
     while (true) {
-        #ifdef SOFT_LATCH_SHUTDOWN
+        #ifndef USING_DISPLAY
         // 1. Long press detection for hard shutdown (5s)
-        bool btnIsPressed = (digitalRead(POWER_PIN_OFF) == LOW); // LOW = pressed
+        if (g_softLatchPinIsAvailable) {
+            bool btnIsPressed = (digitalRead(POWER_PIN_OFF) == LOW); // LOW = pressed
 
-        if (btnIsPressed) {
-            if (!g_shutdownButtonIsHolding) {
-                g_shutdownButtonIsHolding = true;
-                g_shutdownCountdown = millis();
-            } else if (millis() - g_shutdownCountdown >= 5000) {
-                g_userShutdownRequest = true;
-            }
-        } else {
-            g_shutdownButtonIsHolding = false;
-            g_shutdownCountdown = 0;
-        }
-
-        // 2. Click & Multi-press detection
-        static bool lastBtnState = false; // false = released, true = pressed
-        static uint32_t btnPressTime = 0;
-        static uint32_t clickCount = 0;
-        static uint32_t lastClickTime = 0;
-
-        // Variables for non-blocking GPIO trigger timing
-        static uint32_t triggerEndTime = 0;
-        static bool triggerActive = false;
-
-        if (btnIsPressed != lastBtnState) {
-            lastBtnState = btnIsPressed;
-            if (!btnIsPressed) { // Button released (transitioned from pressed to released)
-                uint32_t pressDuration = millis() - btnPressTime;
-                if (pressDuration >= 40 && pressDuration <= 600) { // Valid short click
-                    clickCount++;
-                    lastClickTime = millis();
+            if (btnIsPressed) {
+                if (!g_shutdownButtonIsHolding) {
+                    g_shutdownButtonIsHolding = true;
+                    g_shutdownCountdown = millis();
+                } else if (millis() - g_shutdownCountdown >= 5000) {
+                    g_userShutdownRequest = true;
                 }
-            } else { // Button pressed
-                btnPressTime = millis();
+            } else {
+                g_shutdownButtonIsHolding = false;
+                g_shutdownCountdown = 0;
             }
-        }
-
-        // Wait until inactivity timeout (350ms) to evaluate click count
-        if (clickCount > 0 && (millis() - lastClickTime > 350)) {
-            #ifdef TRIGGER_GPIO_PIN
-            if (clickCount == 1) {
-                LOG_INFO("SYS", "Single press detected — Triggering GPIO %d for %d ms", TRIGGER_GPIO_PIN, TRIGGER_SINGLE_DURATION_MS);
-                digitalWrite(TRIGGER_GPIO_PIN, TRIGGER_GPIO_ACTIVE_LEVEL);
-                triggerEndTime = millis() + TRIGGER_SINGLE_DURATION_MS;
-                triggerActive = true;
-            } else
-            #endif
-            if (clickCount == 2) {
-                LOG_INFO("SYS", "Double press detected — Toggling WiFi");
-                toggleWifiShutdown();
-            }
-            #ifdef TRIGGER_GPIO_PIN
-            else if (clickCount == 3) {
-                LOG_INFO("SYS", "Triple press detected — Triggering GPIO %d for %d ms", TRIGGER_GPIO_PIN, TRIGGER_TRIPLE_DURATION_MS);
-                digitalWrite(TRIGGER_GPIO_PIN, TRIGGER_GPIO_ACTIVE_LEVEL);
-                triggerEndTime = millis() + TRIGGER_TRIPLE_DURATION_MS;
-                triggerActive = true;
-            }
-            #endif
-            clickCount = 0;
-        }
-
-        // Non-blocking trigger duration control
-        #ifdef TRIGGER_GPIO_PIN
-        if (triggerActive && (millis() >= triggerEndTime)) {
-            digitalWrite(TRIGGER_GPIO_PIN, !TRIGGER_GPIO_ACTIVE_LEVEL);
-            triggerActive = false;
-            LOG_INFO("SYS", "GPIO %d trigger finished", TRIGGER_GPIO_PIN);
         }
         #endif
-        #endif
+
+            /*  Unused for now
+            // 2. Click & Multi-press detection
+            static bool lastBtnState = false; // false = released, true = pressed
+            static uint32_t btnPressTime = 0;
+            static uint32_t clickCount = 0;
+            static uint32_t lastClickTime = 0;
+
+            // Variables for non-blocking GPIO trigger timing
+            static uint32_t triggerEndTime = 0;
+            static bool triggerActive = false;
+
+            if (btnIsPressed != lastBtnState) {
+                lastBtnState = btnIsPressed;
+                if (!btnIsPressed) { // Button released (transitioned from pressed to released)
+                    uint32_t pressDuration = millis() - btnPressTime;
+                    if (pressDuration >= 40 && pressDuration <= 600) { // Valid short click
+                        clickCount++;
+                        lastClickTime = millis();
+                    }
+                } else { // Button pressed
+                    btnPressTime = millis();
+                }
+            }
+
+            // Wait until inactivity timeout (350ms) to evaluate click count
+            if (clickCount > 0 && (millis() - lastClickTime > 350)) {
+                #ifdef TRIGGER_GPIO_PIN
+                if (clickCount == 1) {
+                    LOG_INFO("SYS", "Single press detected — Triggering GPIO %d for %d ms", TRIGGER_GPIO_PIN, TRIGGER_SINGLE_DURATION_MS);
+                    digitalWrite(TRIGGER_GPIO_PIN, TRIGGER_GPIO_ACTIVE_LEVEL);
+                    triggerEndTime = millis() + TRIGGER_SINGLE_DURATION_MS;
+                    triggerActive = true;
+                } else
+                #endif
+                if (clickCount == 2) {
+                    #ifndef ONLY_SERIAL
+                    LOG_INFO("SYS", "Double press detected — Toggling WiFi");
+                    toggleWifiShutdown();
+                    #else
+                    LOG_INFO("SYS", "In ONLY_SERIAL mode Wifi in this mode is disable");
+                    #endif
+                }
+                #ifdef TRIGGER_GPIO_PIN
+                else if (clickCount == 3) {
+                    LOG_INFO("SYS", "Triple press detected — Triggering GPIO %d for %d ms", TRIGGER_GPIO_PIN, TRIGGER_TRIPLE_DURATION_MS);
+                    digitalWrite(TRIGGER_GPIO_PIN, TRIGGER_GPIO_ACTIVE_LEVEL);
+                    triggerEndTime = millis() + TRIGGER_TRIPLE_DURATION_MS;
+                    triggerActive = true;
+                }
+                #endif
+                clickCount = 0;
+            }
+
+            // Non-blocking trigger duration control
+            if (triggerActive && (millis() >= triggerEndTime)) {
+                digitalWrite(TRIGGER_GPIO_PIN, !TRIGGER_GPIO_ACTIVE_LEVEL);
+                triggerActive = false;
+                LOG_INFO("SYS", "GPIO %d trigger finished", TRIGGER_GPIO_PIN);
+            }
+            */
+
+        if (g_display.wifiOnOffTriggered) {
+            g_display.wifiOnOffTriggered = false;
+            if (g_usingWifi) {
+                LOG_INFO("SYS", "User requested WiFi OFF");
+                g_usingWifi = false;
+                g_webServer.deinit();
+                WiFi.disconnect(true);
+                WiFi.mode(WIFI_OFF);
+            } else {
+                LOG_INFO("SYS", "User requested WiFi ON");
+                g_usingWifi = true;
+                g_wifiMgr.init();
+                g_webServer.init(&g_wifiMgr, &g_uart, &g_paramCtrl);
+            }
+        }
 
         // Poll UART for incoming commands
         if (g_uart.poll()) {
             g_paramCtrl.handleCommand(g_uart.getCommand());
         }
 
-        #ifndef ONLY_SERIAL
-        // Web server housekeeping
-        g_webServer.loop();
-        g_wifiMgr.loop();
+        if (g_usingWifi && g_webServer.isWsConnected()) {
+            // Web server housekeeping
+            g_webServer.loop();
+            g_wifiMgr.loop();
+            g_paramCtrl.pollWifiStatus();
+        }
 
         // Push WiFi status if connection state changes (e.g., STA connected or fell back to AP)
         static bool lastWifiReady = false;
@@ -367,7 +368,7 @@ void controlTask(void* param) {
                 if (!g_wifiMgr.isAPMode() && g_wifiMgr.isNewlyConfiguredSTA()) {
                     g_wifiMgr.clearNewlyConfiguredSTA();
                     LOG_INFO("SYS", "New STA configured. Saving Preset 0...");
-                    g_presetMgr.savePreset(0, g_pipeline);
+                    g_presetMgr.savePreset(g_presetMgr.getCurrentPresetIndex(), g_pipeline);
                     pendingReboot = true;
                     rebootStartTime = millis();
                 }
@@ -379,40 +380,37 @@ void controlTask(void* param) {
             delay(100);
             ESP.restart();
         }
-        #endif // ONLY_SERIAL
 
-        #ifdef SOFT_LATCH_SHUTDOWN
         if (g_userShutdownRequest) {
+            #if defined(MUTE_PIN) && MUTE_PIN != 1
+                digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
+                LOG_INFO("SYS", "Mute pin set.");
+            #endif
             LOG_INFO("SYS", "Initiating shutdown sequence...");
-            g_audioIO.deinit();
-            LOG_INFO("SYS", "Audio interfaces deinitialized.");
             vTaskDelete(g_audioTaskHandle);
             LOG_INFO("SYS", "Audio task stopped.");
-            #ifdef MUTE_PIN
-            digitalWrite(MUTE_PIN, MUTE_PIN_LOGIC);
-            LOG_INFO("SYS", "Mute pin set.");
-            #endif
             vTaskDelete(g_syncTaskHandle);
             g_audioSync.clearHandle();
             LOG_INFO("SYS", "Audio synchronization stopped.");
-            #ifndef ONLY_SERIAL
-            if (!g_wifiShutdownActive) {
+            //g_audioIO.deinit(); // Some bug sometimes cause can't deinit ifself -> frozen here -> can't shutdown
+            //LOG_INFO("SYS", "Audio interfaces deinitialized.");
+            if (!g_usingWifi) {
                 WiFi.status() == WL_CONNECTED ? WiFi.disconnect(true) : WiFi.softAPdisconnect(true);
                 WiFi.mode(WIFI_OFF);
                 LOG_INFO("SYS", "WiFi Transceiver turned OFF.");
             } else {
                 LOG_INFO("SYS", "WiFi Transceiver already OFF.");
             }
-            #endif
             g_statusLED.fadeOff();
             LOG_INFO("SYS", "Status LED turned off.");
             delay(300);
             LOG_INFO("SYS", "System halted.");
-            pinMode(POWER_PIN_OUT, OUTPUT);
-            digitalWrite(POWER_PIN_OUT, LOW); // Shutdown system
+            if (g_softLatchPinIsAvailable) {             
+                pinMode(POWER_PIN_OUT, OUTPUT);
+                digitalWrite(POWER_PIN_OUT, LOW); // Shutdown system
+            }
             vTaskDelete(NULL); // Ensure task is deleted preventing auto restart
         }
-        #endif
 
         uint32_t nowMs = millis();
 
@@ -442,16 +440,49 @@ void controlTask(void* param) {
         if (nowMs - lastPerfMonitorMs >= 2000) {
             lastPerfMonitorMs = nowMs;
 
+            #ifdef USING_DISPLAY
+                g_display.setStats(
+                    s_cpu_usage,          // uint16_t tenths (cpu_usage * 10)
+                    s_heapPct,            // uint8_t
+                    s_fs,                 // uint32_t current sample rate
+                    g_uart.isSerialConnected() ? ConnectStatus::SERIAL_CONNECTED : (g_webServer.isWsConnected() ? ConnectStatus::WIFI_WS_CONNECTED : (g_usingWifi ? ConnectStatus::WIFI_ENABLE : ConnectStatus::WIFI_DISABLE)),
+                    g_isclockabsent
+                );
+            #endif
+
             #ifndef DISABLE_PERF_LOG
-            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%%), Write timeout count: %lu, Read timeout count: %lu",
+            LOG_INFO("PERF", "Frame: %lu us (%.1f%% @ %lu Hz), Max: %lu us, Heap: %lu/%lu (%u%% left), DMA largest block free: %u, Heap largest block free: %u, Write timeout count: %lu, Read timeout count: %lu",
                 g_lastFrameUs, s_usage, (unsigned long)s_fs,
-                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct, g_audioIO.getWriteTimeouts(), g_audioIO.getReadTimeouts());
+                g_maxFrameUs, ESP.getFreeHeap(), ESP.getHeapSize(), s_heapPct, heap_caps_get_largest_free_block(MALLOC_CAP_DMA), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), g_audioIO.getWriteTimeouts(), g_audioIO.getReadTimeouts());
             #endif
             g_maxFrameUs = 0;
         }
 
         // Smooth RGB LED update (Core 0)
         g_statusLED.update(s_usage, s_heapPct, g_currentSampleRate, g_isclockabsent);
+
+        #if defined(USING_BATTERY_MON) && !defined(USING_DISPLAY)
+            if (g_battery && g_battery.isPresent()) {
+                g_battery.update();
+            }
+        #endif
+
+        vTaskDelay(1);
+    }
+}
+
+// ============================================================================
+// Display Task (Core 0, Priority 5)
+// ============================================================================
+
+void IRAM_ATTR displayTask(void* param) {
+    LOG_INFO("Display", "Display task started on core %d", xPortGetCoreID());
+
+    while (true) {
+
+        EncoderEvent ev;
+        g_encoder.poll(&ev);
+        g_display.update(ev);
 
         vTaskDelay(1);
     }
@@ -462,35 +493,22 @@ void controlTask(void* param) {
 // ============================================================================
 
 void setup() {
-    #ifdef SOFT_LATCH_SHUTDOWN
+    if (g_softLatchPinIsAvailable) {
         pinMode(POWER_PIN_OUT, OUTPUT);
-        digitalWrite(POWER_PIN_OUT, LOW);
-
         pinMode(POWER_PIN_OFF, INPUT_PULLUP);
-        delay(10); 
-
-        digitalWrite(POWER_PIN_OUT, HIGH);
         g_statusLED.off();
-    #endif
+    }
 
-    #ifdef TRIGGER_GPIO_PIN
-        pinMode(TRIGGER_GPIO_PIN, OUTPUT);
-        digitalWrite(TRIGGER_GPIO_PIN, !TRIGGER_GPIO_ACTIVE_LEVEL);
-    #endif
-
-    pinMode(MUTE_PIN, OUTPUT);
-    digitalWrite(MUTE_PIN, LOW);
-
-    #ifdef SOFT_LATCH_SHUTDOWN
-        esp_timer_create_args_t shutdown_timer_args = {
-            .callback = &autoShutdownTimerCallback,
-            .arg = NULL,
-            .name = "auto_shutdown"
-        };
+    esp_timer_create_args_t shutdown_timer_args = {
+        .callback = &autoShutdownTimerCallback,
+        .arg = NULL,
+        .name = "auto_shutdown"
+    };
+    if (g_softLatchPinIsAvailable) {
         esp_timer_create(&shutdown_timer_args, &g_autoShutdownTimerHandle);
-    #endif
+    }
 
-    delay(100); // Allow time for power to stabilize before initializing components
+    vTaskDelay(pdMS_TO_TICKS(100)); // Allow time for power to stabilize before initializing components
     DBG_INIT(115200);
     DBG_PRINTLN();
     DBG_PRINTLN("=================================");
@@ -516,69 +534,70 @@ void setup() {
     // 3. Init control layer
     LOG_INFO("INIT", "Initializing UART control...");
     g_uart.init();
+    g_settingsMgr.init();
     g_presetMgr.init();
-
-    #ifndef ONLY_SERIAL
-    LOG_INFO("INIT", "Initializing WiFi & Web Server...");
-    g_wifiMgr.init();
-    #endif
     
-    g_paramCtrl.init(&g_pipeline, &g_uart, &g_presetMgr, &g_wifiMgr);
+    g_paramCtrl.init(&g_pipeline, &g_uart, &g_presetMgr, NULL);
 
-    #ifndef ONLY_SERIAL
-    g_webServer.init(&g_wifiMgr, &g_uart, &g_paramCtrl);
-
-    // Load WiFi shutdown state from NVS
-    Preferences prefs;
-    prefs.begin("sys_state", true); // read-only
-    g_wifiShutdownActive = prefs.getBool("wifi_off", false);
-    prefs.end();
-
-    if (g_wifiShutdownActive) {
-        LOG_INFO("INIT", "WiFi state in NVS is OFF. Disconnecting & turning WiFi Transceiver OFF.");
-        g_webServer.deinit();
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
-    }
+    #ifdef ONLY_SERIAL
+    g_usingWifi = false;
+    #else
+    g_usingWifi = g_settingsMgr.getWifiEnabled();
     #endif
 
-    // 4. Load preset
-    uint8_t currentSlot = g_presetMgr.getCurrentSlotIndex();
-    if (g_presetMgr.hasPreset(currentSlot)) {
-        LOG_INFO("INIT", "Auto-loading Preset Slot %d from NVS", currentSlot);
-        g_presetMgr.loadPreset(currentSlot, g_pipeline);
+    if (g_usingWifi) {
+        LOG_INFO("INIT", "Initializing WiFi & Web Server...");
+        g_wifiMgr.init();
+        g_paramCtrl.setWifiManager(&g_wifiMgr);
+        g_webServer.init(&g_wifiMgr, &g_uart, &g_paramCtrl);
+    } else {
+        #ifdef ONLY_SERIAL
+        LOG_INFO("INIT", "WiFi force disabled (ONLY_SERIAL mode)");
+        #else
+        LOG_INFO("INIT", "WiFi disabled (user setting)");   
+        #endif
     }
 
-    // 5.1. Init AudioSync — starts PCNT clock monitor on Core 0
-    //    Will fire onRateChange within SYNC_DETECT_INTERVAL_MS (100ms)
-    LOG_INFO("INIT", "Initializing AudioSync clock monitor...");
-    g_audioSync.init(onRateChange);
-    g_isclockabsent = true;
-    //g_pipelineReady = true; // Start audio task immediately for testing without AudioSync
+    // 4. Load preset from default slot (configured in settings)
+    uint8_t defaultSlot = g_presetMgr.getCurrentSlotIndex();
+    if (g_presetMgr.hasPreset(defaultSlot)) {
+        LOG_INFO("INIT", "Auto-loading Preset Slot %d from NVS", defaultSlot);
+        g_presetMgr.loadPreset(defaultSlot, g_pipeline);
+    }
 
-    // 5.2. Create AudioSync monitor task (Core 0, Priority 5)
-    xTaskCreatePinnedToCore(
-        g_audioSync.monitorTask,
-        "SyncTask",
-        SYNC_TASK_STACK_SIZE,
-        NULL,
-        SYNC_TASK_PRIORITY,
-        &g_syncTaskHandle,
-        SYNC_TASK_CORE
-    );
-    
-    // 6. Create control task (Core 0)
-    xTaskCreatePinnedToCore(
-        controlTask,
-        "ControlTask",
-        CONTROL_TASK_STACK_SIZE,
-        NULL,
-        CONTROL_TASK_PRIORITY,
-        &g_controlTaskHandle,
-        CONTROL_TASK_CORE
-    );
+    // 5. Init battery monitor
+    #ifdef USING_BATTERY_MON
+        g_battery.begin(BATT_SDA, BATT_SCL);
+        g_paramCtrl.setBatteryMonitor(&g_battery);
+        #ifndef USING_DISPLAY // display task will handle onCritical callback if USING_DISPLAY is defined
+        g_battery.onCritical([]{ g_userShutdownRequest = true; });
+        #endif
+    #endif
 
-    // 7. Create audio task (Core 1) — starts suspended, AudioSync resumes it
+    // 5.1 Load Main Menu Param
+    #if defined(USING_DISPLAY) && !defined(CONFIG_IDF_TARGET_ESP32)
+        g_display.init();
+        g_display.setBattery(&g_battery);
+        g_display.setWifiManager(&g_wifiMgr);
+        g_display.setPipeline(&g_pipeline, &g_presetMgr);
+        g_display.setSettings(&g_settingsMgr);
+        g_encoder.init(ENCODER_A_PIN, ENCODER_B_PIN, ENCODER_BTN_PIN);
+    #endif
+
+    // 5.2 Start Display Task
+    #if defined(USING_DISPLAY) && !defined(CONFIG_IDF_TARGET_ESP32) // Force Turn off display module when using esp32
+    xTaskCreatePinnedToCore(
+        displayTask,
+        "DisplayTask",
+        DISPLAY_TASK_STACK_SIZE,
+        NULL,
+        DISPLAY_TASK_PRIORITY,
+        &g_displayTaskHandle,
+        DISPLAY_TASK_CORE
+    );
+    #endif
+
+    // 6. Create audio task (Core 1) — starts suspended, AudioSync resumes it
     //    after first clock detection.
     xTaskCreatePinnedToCore(
         audioTask,
@@ -589,6 +608,45 @@ void setup() {
         &g_audioTaskHandle,
         AUDIO_TASK_CORE
     );
+ 
+    // 7.1. Init AudioSync — starts PCNT clock monitor on Core 0, Priority 5
+    #if defined(USE_MASTER_MODE)
+    g_pipelineReady = true; // Start audio task immediately for testing without AudioSync 
+    #else
+    LOG_INFO("INIT", "Initializing AudioSync clock monitor...");
+    g_audioSync.init(onRateChange);
+    g_isclockabsent = true;
+    #endif
+
+    #if !defined(USE_MASTER_MODE)
+    // 7.2. Create AudioSync monitor task (Core 0, Priority 5)
+    xTaskCreatePinnedToCore(
+        g_audioSync.monitorTask,
+        "SyncTask",
+        SYNC_TASK_STACK_SIZE,
+        NULL,
+        SYNC_TASK_PRIORITY,
+        &g_syncTaskHandle,
+        SYNC_TASK_CORE
+    );
+    #endif
+    
+    // 8. Create control task (Core 0)
+    xTaskCreatePinnedToCore(
+        controlTask,
+        "ControlTask",
+        CONTROL_TASK_STACK_SIZE,
+        NULL,
+        CONTROL_TASK_PRIORITY,
+        &g_controlTaskHandle,
+        CONTROL_TASK_CORE
+    );
+
+    // 9. Set POWER_PIN_OUT to high 
+    if (g_softLatchPinIsAvailable) digitalWrite(POWER_PIN_OUT, HIGH);
+
+    LOG_INFO("INIT", "System Ready, CPU: %lu MHz, Free Heap: %lu bytes",
+             (unsigned long)ESP.getCpuFreqMHz(), (unsigned long)ESP.getFreeHeap());
 }
 
 // ============================================================================

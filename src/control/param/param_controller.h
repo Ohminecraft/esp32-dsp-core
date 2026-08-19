@@ -6,11 +6,12 @@
 #ifndef PARAM_CONTROLLER_H
 #define PARAM_CONTROLLER_H
 
-#include "../audio/audio_io.h"
-#include "../effects/dsp_pipeline.h"
+#include "../../audio/audio_io.h"
+#include "../../effects/dsp_pipeline.h"
 #include "preset_manager.h"
-#include "uart_protocol.h"
-#include "wifi_manager.h"
+#include "../uart_protocol.h"
+#include "../wifi/wifi_manager.h"
+#include "../display/battery_monitor.h"
 
 extern volatile uint16_t s_cpu_usage;
 extern volatile uint8_t  s_heapPct;
@@ -22,13 +23,23 @@ public:
               UartProtocol* uart, PresetManager* presetMgr,
               WiFiManager* wifiMgr = nullptr);
 
+    /** Wire up the WiFi manager instance so CMD_WIFI_* commands can be handled. */
+    void setWifiManager(WiFiManager* wifiMgr);
+
+    /** Wire up the battery monitor instance so CMD_GET_BATTERY_STATUS can report on it. */
+    void setBatteryMonitor(BatteryMonitor* batteryMgr);
+
+    /** Call from the control task loop to poll for UART commands. */
     void handleCommand(const UartCommand& cmd);
+
+    void pollWifiStatus();
 
 private:
     DspPipeline*   _pipeline;
     UartProtocol*  _uart;
     PresetManager* _presetMgr;
     WiFiManager*   _wifiMgr = nullptr;
+    BatteryMonitor* _batteryMgr = nullptr;
 
     // ── Existing handlers ─────────────────────────────────────────────────────
     void handleEnableDisable(const UartCommand& cmd, bool enable);
@@ -40,6 +51,14 @@ private:
     void handleWifiSetSTA(const UartCommand& cmd);
     void handleWifiSetAP(const UartCommand& cmd);
     void handleWifiGetStatus(const UartCommand& cmd);
+
+    // ── WiFi config view/edit (view SSID+pass, change root AP, forget STA) ────
+    void handleWifiGetConfig(const UartCommand& cmd);
+    void handleWifiSetApConfig(const UartCommand& cmd);
+    void handleWifiClearSta(const UartCommand& cmd);
+
+    // ── Battery ────────────────────────────────────────────────────────────────
+    void handleGetBatteryStatus(const UartCommand& cmd);
 
     // ── ISF handlers ──────────────────────────────────────────────────────────
 
@@ -97,6 +116,12 @@ private:
     static int32_t extractInt32(const uint8_t* data);
     static int16_t extractInt16(const uint8_t* data);
     static uint16_t extractUint16(const uint8_t* data);
+    
+    /** Extract IEEE-754 float32 from 4 bytes, little-endian. */
+    static float extractFloat(const uint8_t* data);
+    
+    /** Pack IEEE-754 float32 into 4 bytes, little-endian. */
+    static void packFloat(uint8_t* dest, float value);
 
     /** Resolve ISF instance from module ID. Returns nullptr if not ISF. */
     IndexSelectableFilter* resolveIsf(uint8_t moduleId);

@@ -8,13 +8,24 @@
 #include "pin_config.h"
 
 void UartProtocol::init(uint32_t baud) {
-    Serial2.begin(baud, SERIAL_8N1, UART_CONTROL_RX_PIN, UART_CONTROL_TX_PIN);
+    //Serial2.begin(baud, SERIAL_8N1, UART_CONTROL_RX_PIN, UART_CONTROL_TX_PIN);
+    #ifndef USE_BUILTIN_SERIAL
+    UART.setPins(UART_CONTROL_RX_PIN, UART_CONTROL_TX_PIN);
+    #endif
+
+    UART.begin(115200);
     resetParser();
 }
 
+static uint32_t timeCheckSerialConnected = millis();
+
 bool UartProtocol::poll() {
-    while (Serial2.available()) {
-        uint8_t byte = Serial2.read();
+    if (millis() - timeCheckSerialConnected > 3000) { // Is possible because app always send packet every 1-2 second, if not, it means UART is not connected to a host
+        timeCheckSerialConnected = millis();
+        appConnected = false;
+    }
+    while (UART.available()) {
+        uint8_t byte = UART.read();
         switch (_state) {
             case WAIT_SYNC1:
                 if (byte == UART_SYNC_BYTE_1) _state = WAIT_SYNC2;
@@ -74,6 +85,8 @@ bool UartProtocol::poll() {
                 if (byte == _calcCrc) {
                     _cmd.valid = true;
                     resetParser();
+                    appConnected = true;  // Mark UART as connected to a host
+                    timeCheckSerialConnected = millis();
                     return true;  // Valid command received
                 } else {
                     _cmd.valid = false;
@@ -109,18 +122,18 @@ void UartProtocol::sendFrame(uint8_t cmd, uint8_t moduleId, const uint8_t* data,
     header[4] = dataLen & 0xFF;
     header[5] = (dataLen >> 8) & 0xFF;
 
-    Serial2.write(header, 6);
+    UART.write(header, 6);
 
     uint8_t crc = cmd ^ moduleId ^ header[4] ^ header[5];
 
     if (data && dataLen > 0) {
-        Serial2.write(data, dataLen);
+        UART.write(data, dataLen);
         for (uint16_t i = 0; i < dataLen; i++) {
             crc ^= data[i];
         }
     }
 
-    Serial2.write(crc);
+    UART.write(crc);
 
     // ── Dual output: broadcast to WebSocket clients ────────────────────────
     #ifndef ONLY_SERIAL

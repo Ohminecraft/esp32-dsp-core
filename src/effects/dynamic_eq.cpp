@@ -32,6 +32,7 @@
  */
 
 #include "dynamic_eq.h"
+#include "../utils/psram.h"
 #include "dsp_pipeline.h"
 #include <string.h>
 
@@ -43,7 +44,9 @@
 // init
 // ---------------------------------------------------------------------------
 void DynamicEQ::init(int32_t sampleRate, int32_t numChannels) {
+    const float savedMs = _lookaheadMs;
     DspModule::init(sampleRate, numChannels);
+    _lookaheadMs = savedMs;
 
     _eqLow .init(sampleRate, numChannels);
     _eqHigh.init(sampleRate, numChannels);
@@ -57,6 +60,14 @@ void DynamicEQ::init(int32_t sampleRate, int32_t numChannels) {
     _attackMs  = 50;
     _releaseMs = 200;
 
+    if (_laFeedBuf == nullptr)
+        _laFeedBuf = (float*)PSRAM_MALLOC((DYNEQ_LOOKAHEAD_MAX + 1) * sizeof(float));
+    if (_lookaheadMs <= 0.0f) {
+        _lookaheadSamples = 0;
+    } else {
+        int s = (int)(_lookaheadMs * 0.001f * (float)sampleRate + 0.5f);
+        _lookaheadSamples = (s > DYNEQ_LOOKAHEAD_MAX) ? DYNEQ_LOOKAHEAD_MAX : s;
+    }
     recalcCoeffs();
     reset();
 }
@@ -65,6 +76,8 @@ void DynamicEQ::init(int32_t sampleRate, int32_t numChannels) {
 // reset
 // ---------------------------------------------------------------------------
 void DynamicEQ::reset() {
+    if (_laFeedBuf) memset(_laFeedBuf, 0, (DYNEQ_LOOKAHEAD_MAX + 1) * sizeof(float));
+    _laWriteIdx  = 0;
     _rmsEnergySq = 0.0f;
     _energyDb    = -96.0f;
     _alphaLow    = 0.0f;
@@ -180,10 +193,29 @@ void IRAM_ATTR DynamicEQ::process(float* __restrict samples, size_t numSamples) 
     const size_t totalSamples = numSamples * (size_t)_numChannels;
 
     // ------------------------------------------------------------------
-    // 1. Compute frame energy from watch buffer (or input if not set)
+    // 1. Compute frame energy — với lookahead, feed mỗi sample qua
+    //    circular buffer mono trước, đọc sample cũ hơn N ms để detect.
+    //    Output signal không bị ảnh hưởng.
     // ------------------------------------------------------------------
     const float* watchSrc = (_watchBuf != nullptr) ? _watchBuf : samples;
-    _energyDb = computeFrameRms(watchSrc, totalSamples);
+    if (_lookaheadSamples > 0 && _laFeedBuf != nullptr) {
+        // Ghi từng sample mono vào feed buffer, đọc delayed sample để RMS
+        float& state = _rmsEnergySq;
+        const int bufSz = DYNEQ_LOOKAHEAD_MAX + 1;
+        int wIdx = _laWriteIdx;
+        for (size_t i = 0; i < totalSamples; i++) {
+            _laFeedBuf[wIdx] = watchSrc[i];
+            int rIdx = wIdx - _lookaheadSamples;
+            if (rIdx < 0) rIdx += bufSz;
+            state = rms_update(state, _laFeedBuf[rIdx], _rmsCoeff);
+            if (++wIdx >= bufSz) wIdx = 0;
+        }
+        _laWriteIdx = wIdx;
+        float rms = (state > 0.0f) ? sqrtf(state) : 0.0f;
+        _energyDb = linear_to_db(rms);
+    } else {
+        _energyDb = computeFrameRms(watchSrc, totalSamples);
+    }
 
     // ------------------------------------------------------------------
     // 2. Compute instantaneous target alphas from state machine
@@ -301,4 +333,17 @@ void DynamicEQ::setAttackTime(int32_t ms) {
 void DynamicEQ::setReleaseTime(int32_t ms) {
     _releaseMs = ms;
     recalcCoeffs();
+}
+
+void DynamicEQ::setLookahead(float ms) {
+    _lookaheadMs = (ms < 0.0f) ? 0.0f : ms;
+    if (_lookaheadMs <= 0.0f) {
+        _lookaheadSamples = 0;
+    } else {
+        int s = (int)(_lookaheadMs * 0.001f * (float)_sampleRate + 0.5f);
+        _lookaheadSamples = (s > DYNEQ_LOOKAHEAD_MAX) ? DYNEQ_LOOKAHEAD_MAX : s;
+        if (_laFeedBuf == nullptr)
+            _laFeedBuf = (float*)PSRAM_MALLOC((DYNEQ_LOOKAHEAD_MAX + 1) * sizeof(float));
+    }
+    reset();
 }

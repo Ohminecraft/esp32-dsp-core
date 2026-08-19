@@ -8,7 +8,7 @@
  */
 
 #include "preset_manager.h"
-#include "../utils/debug_log.h"
+#include "../../utils/debug_log.h"
 
 #define TAG "PRESET"
 
@@ -34,10 +34,12 @@ struct ISFPresetData {
 struct ISFInstanceData {
     uint8_t      numPresets;
     uint8_t      _pad[1];
-    int16_t      rmsMs;        // RMS window ms
-    int16_t      slewMs;       // slew time per index step ms
+    int16_t      rmsMs;          // RMS window ms
+    int16_t      slewMs;         // slew time per index step ms
+    int16_t      lookaheadMs10;  // lookahead ms×10 (e.g. 50 = 5.0ms); 0=disabled
+    int16_t      _pad2[1];
     ISFPresetData presets[ISF_MAX_PRESETS];
-};  // 1+1+2+2+10*86 = 866 bytes
+};  // 1+1+2+2+2+2+10*86 = 870 bytes
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PresetData — full NVS blob
@@ -51,8 +53,13 @@ struct PresetData {
     int8_t   vol_mono;      // 0 = stereo, 1 = mono
     int8_t   pre_vol_mono;  // 0 = stereo, 1 = mono
 
+    // ── Pre EQ ────────────────────────────────────────────────────────────────
+    int16_t        preeq_pregainq88;
+    EQFilterParams preeq_bands[3];
+
     // ── Compander ─────────────────────────────────────────────────────────────
-    int32_t cp_thresholdDb, cp_ratioBelow, cp_ratioAbove;
+    float cp_thresholdDb;
+    int32_t cp_ratioBelow, cp_ratioAbove;
     int32_t cp_attackMs, cp_releaseMs, cp_pregainQ412;
     int32_t cp_lookaheadMs10; // ms × 10 (e.g. 50 = 5.0ms); 0 = disabled
 
@@ -63,11 +70,12 @@ struct PresetData {
     int32_t db_cutoffFreq, db_gainBoost, db_enhanced;
     int32_t db_boostfullthreshold, db_neutralthreshold;
     int32_t db_clipfullthreshold, db_clipattack, db_cliprelease;
+    int32_t db_lookaheadMs10; // ms×10, 0=disabled
 
     // ── DRC ───────────────────────────────────────────────────────────────────
-    int32_t drc_thresholdDb, drc_ratio, drc_attackMs, drc_releaseMs, drc_pregainQ412;
-    int32_t drc_mode;
-    int32_t drc_lookaheadMs10[4]; // per-band ms×10; index 3 = fullband
+    int32_t drc_mode, drc_crossoverflttype, drc_crossoverfreq[2], drc_Q[2];
+    int32_t drc_thresholdDb[4], drc_ratio[4], drc_attackMs[4], drc_releaseMs[4], drc_pregain[4];
+    int32_t drc_lookaheadMs[4]; // per-band ms; index 0 = fullband
 
     // ── EQ1 / EQ2 ─────────────────────────────────────────────────────────────
     int16_t        eq1_pregain_q88;
@@ -78,6 +86,7 @@ struct PresetData {
     // ── Dynamic EQ ────────────────────────────────────────────────────────────
     int32_t deq_lowThresh, deq_normThresh, deq_highThresh;
     int32_t deq_attackMs, deq_releaseMs;
+    int32_t deq_lookaheadMs10; // ms×10, 0=disabled
     int16_t deq_low_pregain_q88;
     EQFilterParams deq_low_bands[MAX_EQ_BANDS];
     int16_t deq_high_pregain_q88;
@@ -105,8 +114,9 @@ static void makeDefaultIsfInstance(ISFInstanceData& inst,
                                    int32_t sampleRate)
 {
     memset(&inst, 0, sizeof(ISFInstanceData));
-    inst.rmsMs  = ISF_DEFAULT_RMS_MS;
-    inst.slewMs = ISF_DEFAULT_SLEW_MS;
+    inst.rmsMs          = ISF_DEFAULT_RMS_MS;
+    inst.slewMs         = ISF_DEFAULT_SLEW_MS;
+    inst.lookaheadMs10  = 0;
 
     if (!withLoudnessCurve) {
         // Flat passthrough — 1 preset at -96 dB threshold
@@ -169,6 +179,7 @@ static void loadIsfInstance(IndexSelectableFilter& isf,
     isf.setRmsWindowMs(data.rmsMs  > 0 ? data.rmsMs  : ISF_DEFAULT_RMS_MS);
     isf.setSlewMs     (data.slewMs > 0 ? data.slewMs : ISF_DEFAULT_SLEW_MS);
     isf.setNumPresets (data.numPresets);
+    isf.setLookahead  ((float)data.lookaheadMs10 / 10.0f);
 
     for (int p = 0; p < data.numPresets && p < ISF_MAX_PRESETS; p++) {
         const ISFPresetData& pd = data.presets[p];
@@ -196,8 +207,9 @@ static void loadIsfInstance(IndexSelectableFilter& isf,
 static void saveIsfInstance(ISFInstanceData& data,
                              IndexSelectableFilter& isf)
 {
-    data.rmsMs      = (int16_t)isf.getRmsWindowMs();
-    data.slewMs     = (int16_t)isf.getSlewMs();
+    data.rmsMs         = (int16_t)isf.getRmsWindowMs();
+    data.slewMs        = (int16_t)isf.getSlewMs();
+    data.lookaheadMs10 = (int16_t)(isf.getLookaheadMs() * 10.0f + 0.5f);
     data.numPresets = isf.getNumPresets();
 
     for (int p = 0; p < data.numPresets && p < ISF_MAX_PRESETS; p++) {
@@ -221,22 +233,46 @@ static void saveIsfInstance(ISFInstanceData& data,
 // ─────────────────────────────────────────────────────────────────────────────
 
 void PresetManager::init() {
+    esp_err_t err = nvs_flash_init_partition("nvs2");
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase_partition("nvs2"));
+        err = nvs_flash_init_partition("nvs2");
+    }
     for (int i = 0; i < MAX_PRESET_SLOTS; i++) {
         if (!hasPreset(i)) saveDefault(i);
+    }
+    if (!hasMainMenuParam()) {
+        static MainMenuParam mmparam;
+        memset(&mmparam, 0, sizeof(MainMenuParam));
+        nvs_handle_t nvs;
+        nvs_open("main_menu_param", NVS_READWRITE, &nvs);
+        mmparam.vol = 32;
+        mmparam.bass = 50;
+        mmparam.mid = 50;
+        mmparam.treble = 50;
+        nvs_set_blob(nvs, "blob", &mmparam, sizeof(MainMenuParam));
+        nvs_commit(nvs);
+        nvs_close(nvs);
     }
 }
 
 void PresetManager::saveCurrentSlotIndex(uint8_t slot) {
     if (slot >= MAX_PRESET_SLOTS) return;
-    _prefs.begin("meta", false);
-    _prefs.putUChar("cur_slot", slot);
-    _prefs.end();
+    nvs_handle_t nvs;
+    nvs_open("settings", NVS_READWRITE, &nvs);
+    nvs_set_u8(nvs, "cur_slot_act", slot);
+    nvs_commit(nvs);
+    nvs_close(nvs);
 }
 
 uint8_t PresetManager::getCurrentSlotIndex() {
-    _prefs.begin("meta", true);
-    uint8_t slot = _prefs.getUChar("cur_slot", 0);
-    _prefs.end();
+    nvs_handle_t nvs;
+    uint8_t slot = 0;
+    esp_err_t openErr = nvs_open("settings", NVS_READWRITE, &nvs);
+    if (openErr == ESP_OK) {
+        nvs_get_u8(nvs, "cur_slot_act", &slot);
+        nvs_close(nvs);
+    }
     if (slot >= MAX_PRESET_SLOTS) return 0;
     return slot;
 }
@@ -252,15 +288,15 @@ void PresetManager::saveDefault(uint8_t slot) {
     memset(&pd, 0, sizeof(PresetData));
     pd.valid = true;
 
-    // Chain: [0]=preGain enabled, [11]=postGain enabled
-    pd.en_mask    = (1u << 0) | (1u << 11);
+    // Chain: [0]=mainmenuParamGain enable, [1]=preEq enable,[2]=preGain enabled, [13]=postGain enabled
+    pd.en_mask    = (1u << 0) | (1u << 2) | (1u << 1) | (1u << 13);
     pd.vol_db     = 0;
     pd.pre_vol_db = 0;
     pd.vol_mono   = 0;
     pd.pre_vol_mono = 0;
 
     // Compander defaults
-    pd.cp_thresholdDb  = -2000;
+    pd.cp_thresholdDb  = -20;
     pd.cp_ratioBelow   = 100;
     pd.cp_ratioAbove   = 400;
     pd.cp_attackMs     = 10;
@@ -276,27 +312,36 @@ void PresetManager::saveDefault(uint8_t slot) {
     // Dynamic Bass defaults
     pd.db_cutoffFreq          = 60;
     pd.db_gainBoost           = 600;
-    pd.db_clipattack          = 600;
+    pd.db_clipattack          = 5;
     pd.db_cliprelease         = 200;
     pd.db_clipfullthreshold   = -800;
+    pd.db_lookaheadMs10       = 0;
     pd.db_neutralthreshold    = -1600;
     pd.db_boostfullthreshold  = -2400;
 
     // DRC defaults
-    pd.drc_thresholdDb = -1500;
-    pd.drc_ratio       = 400;
-    pd.drc_attackMs    = 5;
-    pd.drc_releaseMs   = 160;
-    pd.drc_pregainQ412 = 4096;
-    pd.drc_mode        = DRC_MODE_FULLBAND;
-    memset(pd.drc_lookaheadMs10, 0, sizeof(pd.drc_lookaheadMs10)); // disabled by default
+    pd.drc_mode             = DRC_MODE_FULLBAND;
+    pd.drc_crossoverflttype = DRC_CF_BUTTERWORTH_1;
+    pd.drc_crossoverfreq[0] = 120;
+    pd.drc_crossoverfreq[1] = 6000;
+    pd.drc_Q[0] = 724;
+    pd.drc_Q[1] = 724;
+    for (int i = 0; i < 4; i++) {
+        pd.drc_thresholdDb[i] = -1500;
+        pd.drc_ratio[i] = 400;
+        pd.drc_attackMs[i] = 5;
+        pd.drc_releaseMs[i] = 160;
+        pd.drc_pregain[i] = 0;
+        pd.drc_lookaheadMs[i] = 0;
+    }
 
     // DynEQ defaults
     pd.deq_lowThresh  = -4000;
     pd.deq_normThresh = -2000;
     pd.deq_highThresh = -600;
-    pd.deq_attackMs   = 10;
-    pd.deq_releaseMs  = 100;
+    pd.deq_attackMs      = 10;
+    pd.deq_releaseMs     = 100;
+    pd.deq_lookaheadMs10 = 0;
 
     // EQ bands: all disabled defaults
     for (int b = 0; b < MAX_EQ_BANDS; b++) {
@@ -311,6 +356,16 @@ void PresetManager::saveDefault(uint8_t slot) {
         pd.eql_bands[b] = pd.eqr_bands[b] = def;
     }
 
+    EQFilterParams preeqParam[3] = {
+        { true,  EQ_FILTER_TYPE_LOW_SHELF, 80, 724, 0 },
+        { true,  EQ_FILTER_TYPE_PEAKING, 1000, 724, 0 },
+        { true,  EQ_FILTER_TYPE_HIGH_SHELF, 8000, 724, 0 }
+    };
+
+    for (int b = 0; b < 3; b++) {
+        pd.preeq_bands[b] = preeqParam[b];
+    }
+
     // ISF defaults:
     //   ISF1 = loudness-dependent bass curve (5 presets)
     //   ISF2 = flat passthrough (1 preset, ready for user customization)
@@ -318,12 +373,11 @@ void PresetManager::saveDefault(uint8_t slot) {
     makeDefaultIsfInstance(pd.isf2, false, DSP_SAMPLE_RATE_DEFAULT);
 
     String key = getSlotKey(slot);
-    _prefs.begin(key.c_str(), false);
-    _prefs.putBytes("blob", &pd, sizeof(PresetData));
-    _prefs.end();
-
-    Serial.printf("sizeof(PresetData) = %d bytes\n", sizeof(PresetData));
-    Serial.printf("sizeof(EQFilterParams) = %d bytes\n", sizeof(EQFilterParams));
+    nvs_handle_t nvssave;
+    nvs_open_from_partition("nvs2", key.c_str(), NVS_READWRITE, &nvssave);
+    nvs_set_blob(nvssave, "blob", &pd, sizeof(PresetData));
+    nvs_commit(nvssave);
+    nvs_close(nvssave);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -332,6 +386,8 @@ void PresetManager::saveDefault(uint8_t slot) {
 
 bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     if (slot >= MAX_PRESET_SLOTS) return false;
+
+    g_inNvsSaving = true;
 
     static PresetData pd;
     memset(&pd, 0, sizeof(PresetData));
@@ -349,8 +405,13 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.vol_mono   = pipeline.getPostGain().isMono() ? 1 : 0;
     pd.pre_vol_mono = pipeline.getPreGain().isMono() ? 1 : 0;
 
+    pd.preeq_pregainq88 = pipeline.getPreEq().getPregain();
+    for (int i = 0; i < 3; i++) {
+        pd.preeq_bands[i] = pipeline.getPreEq()._params[i];
+    }
+
     // Compander
-    pd.cp_thresholdDb = pipeline.getCompander()._thresholdDbInt;
+    pd.cp_thresholdDb = pipeline.getCompander()._thresholdDb;
     pd.cp_ratioBelow  = pipeline.getCompander()._ratioBelowQ88;
     pd.cp_ratioAbove  = pipeline.getCompander()._ratioAboveQ88;
     pd.cp_attackMs    = pipeline.getCompander()._attackMs;
@@ -372,16 +433,24 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.db_boostfullthreshold = pipeline.getDynamicBass().getBoostFullThresh();
     pd.db_clipattack         = pipeline.getDynamicBass().getClipAttack();
     pd.db_cliprelease        = pipeline.getDynamicBass().getClipRelease();
+    pd.db_lookaheadMs10      = (int32_t)(pipeline.getDynamicBass()._lookaheadMs * 10.0f + 0.5f);
 
     // DRC (fullband band[3])
-    pd.drc_thresholdDb = pipeline.getDrc()._bands[3].thresholdDbInt;
-    pd.drc_ratio       = pipeline.getDrc()._bands[3].ratioX100;
-    pd.drc_attackMs    = pipeline.getDrc()._bands[3].attackMs;
-    pd.drc_releaseMs   = pipeline.getDrc()._bands[3].releaseMs;
-    pd.drc_pregainQ412 = pipeline.getDrc()._bands[3].pregainQ412;
-    pd.drc_mode        = (int32_t)pipeline.getDrc()._mode;
-    for (int b = 0; b < 4; b++)
-        pd.drc_lookaheadMs10[b] = (int32_t)(pipeline.getDrc()._bands[b].lookaheadMs * 10.0f + 0.5f);
+    pd.drc_mode             = (int32_t)pipeline.getDrc()._mode;
+    pd.drc_crossoverflttype = pipeline.getDrc()._cfType;
+    pd.drc_crossoverfreq[0] = pipeline.getDrc()._fc[0];
+    pd.drc_crossoverfreq[1] = pipeline.getDrc()._fc[1];
+    pd.drc_Q[0]             = pipeline.getDrc()._qLp;
+    pd.drc_Q[1]             = pipeline.getDrc()._qHp;
+
+    for (int b = 0; b < 4; b++) {
+        pd.drc_thresholdDb[b] = pipeline.getDrc()._bands[b].thresholdDb * 100.0f;
+        pd.drc_ratio[b]       = pipeline.getDrc()._bands[b].ratioX100;
+        pd.drc_attackMs[b]    = pipeline.getDrc()._bands[b].attackMs;
+        pd.drc_releaseMs[b]   = pipeline.getDrc()._bands[b].releaseMs;
+        pd.drc_pregain[b] = pipeline.getDrc()._bands[b].pregainIn * 100.0f;
+        pd.drc_lookaheadMs[b] = (int32_t)(pipeline.getDrc()._bands[b].lookaheadMs + 0.5f);
+    }
 
     // EQ1 / EQ2
     pd.eq1_pregain_q88 = pipeline.getEqDsp_1().getPregain();
@@ -396,8 +465,9 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     pd.deq_lowThresh  = pipeline.getDynamicEq()._lowThreshDb;
     pd.deq_normThresh = pipeline.getDynamicEq()._normalThreshDb;
     pd.deq_highThresh = pipeline.getDynamicEq()._highThreshDb;
-    pd.deq_attackMs   = pipeline.getDynamicEq()._attackMs;
-    pd.deq_releaseMs  = pipeline.getDynamicEq()._releaseMs;
+    pd.deq_attackMs      = pipeline.getDynamicEq()._attackMs;
+    pd.deq_releaseMs     = pipeline.getDynamicEq()._releaseMs;
+    pd.deq_lookaheadMs10 = (int32_t)(pipeline.getDynamicEq()._lookaheadMs * 10.0f + 0.5f);
 
     pd.deq_low_pregain_q88  = pipeline.getDynamicEq().getEqLow().getPregain();
     for (int i = 0; i < MAX_EQ_BANDS; i++)
@@ -421,11 +491,16 @@ bool PresetManager::savePreset(uint8_t slot, DspPipeline& pipeline) {
     saveIsfInstance(pd.isf2, pipeline.getIsf2());
 
     String key = getSlotKey(slot);
-    _prefs.begin(key.c_str(), false);
-    _prefs.putBytes("blob", &pd, sizeof(PresetData));
-    _prefs.end();
+    nvs_handle_t nvssave;
+    nvs_open_from_partition("nvs2", key.c_str(), NVS_READWRITE, &nvssave);
+    nvs_set_blob(nvssave, "blob", &pd, sizeof(PresetData));
+    nvs_commit(nvssave);
+    nvs_close(nvssave);
 
     LOG_INFO(TAG, "Saved preset to slot %d", slot);
+
+    g_inNvsSaving = false;
+
     return true;
 }
 
@@ -437,38 +512,33 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     if (slot >= MAX_PRESET_SLOTS) return false;
 
     String key = getSlotKey(slot);
-    _prefs.begin(key.c_str(), true);
-    static PresetData pd;
-    memset(&pd, 0, sizeof(PresetData));
-    size_t len = _prefs.getBytesLength("blob");
-    if (len != sizeof(PresetData)) {
-        _prefs.end();
-        LOG_WARN(TAG, "Slot %d incompatible (got %u, expected %u). Re-initializing.",
-            slot, len, sizeof(PresetData));
+    nvs_handle_t nvsload;
+    esp_err_t openErr = nvs_open_from_partition("nvs2", key.c_str(), NVS_READONLY, &nvsload);
+    if (openErr != ESP_OK) {
+        LOG_WARN(TAG, "Slot %d nvs_open failed (err=%d). Re-initializing.", slot, openErr);
         saveDefault(slot);
         return false;
     }
-    _prefs.getBytes("blob", &pd, sizeof(PresetData));
-    _prefs.end();
+
+    static PresetData pd;
+    memset(&pd, 0, sizeof(PresetData));
+    size_t len = sizeof(PresetData);  // MUST be set to buffer capacity before nvs_get_blob
+    esp_err_t getErr = nvs_get_blob(nvsload, "blob", &pd, &len);
+
+    if (getErr != ESP_OK || len != sizeof(PresetData)) {
+        nvs_close(nvsload);
+        LOG_WARN(TAG, "Slot %d incompatible (err=%d, got %u, expected %u). Re-initializing.",
+            slot, getErr, (unsigned)len, (unsigned)sizeof(PresetData));
+        saveDefault(slot);
+        return false;
+    }
+
+    nvs_close(nvsload);
 
     if (!pd.valid) {
         LOG_WARN(TAG, "Slot %d invalid flag.", slot);
         return false;
     }
-
-    // Sanity guards
-    if (pd.cp_pregainQ412 <= 0) pd.cp_pregainQ412 = 4096;
-    if (pd.cp_ratioBelow  < 10) pd.cp_ratioBelow  = 100;
-    if (pd.cp_ratioAbove  < 100) pd.cp_ratioAbove = 400;
-    if (pd.cp_attackMs    <= 0) pd.cp_attackMs    = 10;
-    if (pd.cp_releaseMs   <= 0) pd.cp_releaseMs   = 100;
-    if (pd.cp_lookaheadMs10 < 0) pd.cp_lookaheadMs10 = 0;
-    if (pd.drc_pregainQ412 <= 0) pd.drc_pregainQ412 = 4096;
-    if (pd.drc_ratio       < 100) pd.drc_ratio = 400;
-    if (pd.drc_attackMs   <= 0) pd.drc_attackMs  = 5;
-    if (pd.drc_releaseMs  <= 0) pd.drc_releaseMs = 160;
-    if (pd.drc_mode < DRC_MODE_FULLBAND || pd.drc_mode > DRC_MODE_3BAND_FULLBAND)
-        pd.drc_mode = DRC_MODE_FULLBAND;
 
     // Apply enable mask
     DspModule** chain = pipeline.getChain();
@@ -480,6 +550,10 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     pipeline.getPreGain().setGainDb(pd.pre_vol_db);
     pipeline.getPostGain().setMono(pd.vol_mono != 0);
     pipeline.getPreGain().setMono(pd.pre_vol_mono != 0);
+
+    pipeline.getPreEq().setPregain(pd.preeq_pregainq88);
+    for (int i = 0; i < 3; i++)
+        pipeline.getPreEq().setBand(i, pd.preeq_bands[i]);
 
     pipeline.getCompander().setThreshold(pd.cp_thresholdDb);
     pipeline.getCompander().setRatioBelow(pd.cp_ratioBelow);
@@ -501,6 +575,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     pipeline.getDynamicBass().setClipFullThreshold(pd.db_clipfullthreshold);
     pipeline.getDynamicBass().setClipAttack(pd.db_clipattack);
     pipeline.getDynamicBass().setClipRelease(pd.db_cliprelease);
+    pipeline.getDynamicBass().setLookahead((float)pd.db_lookaheadMs10 / 10.0f);
 
     pipeline.getEqDsp_1().setPregain(pd.eq1_pregain_q88);
     for (int i = 0; i < MAX_EQ_BANDS; i++)
@@ -515,6 +590,7 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     pipeline.getDynamicEq().setHighEnergyThreshold(pd.deq_highThresh);
     pipeline.getDynamicEq().setAttackTime(pd.deq_attackMs);
     pipeline.getDynamicEq().setReleaseTime(pd.deq_releaseMs);
+    pipeline.getDynamicEq().setLookahead((float)pd.deq_lookaheadMs10 / 10.0f);
 
     pipeline.getDynamicEq().getEqLow().setPregain(pd.deq_low_pregain_q88);
     for (int i = 0; i < MAX_EQ_BANDS; i++)
@@ -524,14 +600,21 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     for (int i = 0; i < MAX_EQ_BANDS; i++)
         pipeline.getDynamicEq().getEqHigh().setBand(i, pd.deq_high_bands[i]);
 
-    pipeline.getDrc().setThreshold(3, pd.drc_thresholdDb);
-    pipeline.getDrc().setRatio(3, pd.drc_ratio);
-    pipeline.getDrc().setAttackTime(3, pd.drc_attackMs);
-    pipeline.getDrc().setReleaseTime(3, pd.drc_releaseMs);
-    pipeline.getDrc().setPregain(3, pd.drc_pregainQ412);
     pipeline.getDrc().setMode((DRCMode)pd.drc_mode);
-    for (int b = 0; b < 4; b++)
-        pipeline.getDrc().setLookahead((uint8_t)b, (float)pd.drc_lookaheadMs10[b] / 10.0f);
+    pipeline.getDrc().setCrossoverType((DRCCrossoverType)pd.drc_crossoverflttype);
+    pipeline.getDrc().setCrossoverFreq(0, pd.drc_crossoverfreq[0]);
+    pipeline.getDrc().setCrossoverFreq(1, pd.drc_crossoverfreq[1]);
+    pipeline.getDrc().setCrossoverQ(0, pd.drc_Q[0]);
+    pipeline.getDrc().setCrossoverQ(1, pd.drc_Q[1]);
+
+    for (int i = 0; i < 4; i++) {
+        pipeline.getDrc()._bands[i].thresholdDb = (float)pd.drc_thresholdDb[i] / 100.0f;
+        pipeline.getDrc()._bands[i].ratioX100 = pd.drc_ratio[i];
+        pipeline.getDrc()._bands[i].attackMs = pd.drc_attackMs[i];
+        pipeline.getDrc()._bands[i].releaseMs = pd.drc_releaseMs[i];
+        pipeline.getDrc()._bands[i].pregainIn = (float)pd.drc_pregain[i] / 100.0f;
+        pipeline.getDrc()._bands[i].lookaheadMs= pd.drc_lookaheadMs[i];
+    }
 
     pipeline.getLeftRightEq().getEqLeft().setPregain(pd.eql_pregain_q88);
     for (int i = 0; i < MAX_EQ_BANDS; i++)
@@ -548,22 +631,72 @@ bool PresetManager::loadPreset(uint8_t slot, DspPipeline& pipeline) {
     currentpresetidx = slot;
 
     LOG_INFO(TAG, "Loaded preset from slot %d", slot);
+
     return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// loadMainMenuParam/saveMainMenuParam
+// ─────────────────────────────────────────────────────────────────────────────
+
+void PresetManager::loadMainMenuParam(MainMenuParam* param) {
+    if (!param) return;
+    nvs_handle_t nvsload;
+    esp_err_t openErr = nvs_open("main_menu_param", NVS_READONLY, &nvsload);
+    if (openErr != ESP_OK) {
+        LOG_WARN(TAG, "main_menu_param nvs_open failed (err=%d)", openErr);
+        return;
+    }
+
+    size_t len = sizeof(MainMenuParam);  // buffer capacity, input to nvs_get_blob
+    esp_err_t getErr = nvs_get_blob(nvsload, "blob", param, &len);
+    nvs_close(nvsload);
+
+    if (getErr != ESP_OK || len != sizeof(MainMenuParam)) {
+        LOG_WARN(TAG, "main_menu_param read failed (err=%d, got %u, expected %u)",
+            getErr, (unsigned)len, (unsigned)sizeof(MainMenuParam));
+    }
+}
+
+void PresetManager::saveMainMenuParam(MainMenuParam* param) {
+    if (!param) return;
+    g_inNvsSaving = true;
+    nvs_handle_t nvssave;
+    esp_err_t openErr = nvs_open("main_menu_param", NVS_READWRITE, &nvssave);
+    if (openErr == ESP_OK) {
+        nvs_set_blob(nvssave, "blob", param, sizeof(MainMenuParam));
+        nvs_commit(nvssave);
+        nvs_close(nvssave);
+    } else {
+        LOG_WARN(TAG, "main_menu_param nvs_open failed (err=%d)", openErr);
+    }
+    g_inNvsSaving = false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // hasPreset / getSlotKey
 // ─────────────────────────────────────────────────────────────────────────────
 
+bool PresetManager::hasMainMenuParam() {
+    size_t len;
+    nvs_handle_t nvsload;
+    nvs_open("main_menu_param", NVS_READONLY, &nvsload);
+    nvs_get_blob(nvsload, "blob", NULL, &len);
+    nvs_close(nvsload);
+    return len == sizeof(MainMenuParam);
+}
+
 bool PresetManager::hasPreset(uint8_t slot) {
     if (slot >= MAX_PRESET_SLOTS) return false;
     String key = getSlotKey(slot);
-    _prefs.begin(key.c_str(), true);
-    size_t len = _prefs.getBytesLength("blob");
-    _prefs.end();
+    size_t len;
+    nvs_handle_t nvsload;
+    nvs_open_from_partition("nvs2", key.c_str(), NVS_READONLY, &nvsload);
+    nvs_get_blob(nvsload, "blob", NULL, &len);
+    nvs_close(nvsload);
     return len == sizeof(PresetData);
 }
 
 String PresetManager::getSlotKey(uint8_t slot) {
-    return "dsp_s" + String(slot);
+    return "preset_" + String(slot);
 }

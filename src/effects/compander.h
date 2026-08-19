@@ -14,6 +14,7 @@
 class Compander : public DspModule {
     friend class PresetManager;
     friend class ParamController;
+    friend class Display;
 public:
     void init(int32_t sampleRate, int32_t numChannels) override;
     void process(float* __restrict samples, size_t numSamples) override;
@@ -23,7 +24,7 @@ public:
     uint8_t getModuleId() const override { return MODULE_ID_COMPANDER; }
 
     // ---- Parameter API ----
-    void setThreshold(int32_t db_001);
+    void setThreshold(float db);
     void setRatioBelow(int32_t ratio_q88);
     void setRatioAbove(int32_t ratio_q88);
     void setAttackTime(int32_t ms);
@@ -44,7 +45,6 @@ public:
 
 private:
     // ── Raw parameter storage (written by setters) ──
-    int32_t _thresholdDbInt;
     int32_t _ratioBelowQ88;
     int32_t _ratioAboveQ88;
     int32_t _attackMs;

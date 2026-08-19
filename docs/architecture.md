@@ -21,8 +21,8 @@ The ESP32 DSP Core is designed as a **deterministic real-time system**. It lever
 │  Priority: 5 (Low)          │  Priority: 24 (CRITICAL)      │
 │                             │                               │
 │  ┌─────────────────┐        │  ┌──────────────────────────┐ │
-│  │ WebServer / WS  │        │  │ I2S Port 1 (Input)       │ │
-│  │ (AsyncTCP)      │        │  │ 96kHz / 32-bit Float     │ │
+│  │ WebServer,      │        │  │ I2S Port 0 (Input)       │ │
+│  │ Display         │        │  │ 96kHz / 32-bit Float     │ │
 │  └────────┬────────┘        │  └──────────┬───────────────┘ │
 │           ↓                 │             ↓                 │
 │  ┌─────────────────┐        │  ┌──────────────────────────┐ │
@@ -32,7 +32,7 @@ The ESP32 DSP Core is designed as a **deterministic real-time system**. It lever
 │           ↓                 │             ↓                 │
 │  ┌─────────────────┐        │  ┌──────────────────────────┐ │
 │  │ NVS Preset Mgr  │◄───────┼─►│ I2S Port 0 (Output)      │ │
-│  │ (4 Slots)       │        │  │ PCM5102A Master          │ │
+│  │ (5 Slots)       │        │  │ PCM5102A Master          │ │
 │  └─────────────────┘        │  └──────────────────────────┘ │
 └──────────────┬──────────────┴───────────────────────────────┘
                │
@@ -45,7 +45,7 @@ The ESP32 DSP Core is designed as a **deterministic real-time system**. It lever
 ### 2. Signal Chain Logic
 The DSP pipeline operates in **Core 1** with a strict frame-based approach (256 samples per frame @ 96kHz).
 
-`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → EQ1 → EQ2 → Left/Right EQ → Multi-band DRC → Post Gain → OUTPUT`
+`INPUT → Pre Gain → Compander → Exciter → Dynamic Bass → Dynamic EQ → ISF EQ 1 → ISF EQ 2 → EQ1 → EQ2 → Left/Right EQ → Multi-band DRC → Post Gain → OUTPUT`
 
 - **In-place Processing**: Each module modifies the global audio buffer directly to minimize latency and memory footprint.
 - **Stateful Processing**: Modules like Compander and DRC persist their envelope and gain states between frames for smooth tracking.

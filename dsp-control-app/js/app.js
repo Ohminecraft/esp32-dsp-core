@@ -12,14 +12,18 @@ import {
     buildGetAllState, buildGetModuleMeter, buildSetLookahead,
     buildSetIsfPreset, buildSetIsfConfig, buildGetIsfState,
     buildWifiScan, buildWifiSetSTA, buildWifiSetAP, buildWifiGetStatus,
+    buildWifiGetConfig, buildWifiSetApConfig, buildWifiClearSta,
+    buildGetBatteryStatus,
     dbToQ88, dbToQ31, qToQ610,
-    leToInt16, leToInt32,
+    leToInt16, leToInt32, leToFloat,
     buildSetIsfBandParams
 } from './protocol.js';
 import { EQGraph } from './eq-graph.js';
 import { DRCGraph } from './drc-graph.js';
 
-let eqGraph = null;
+// eqGraphs: Map<moduleId (string), EQGraph instance>
+// Multiple accordions can have their own graph open simultaneously.
+const eqGraphs = new Map();
 let drcGraph = null;
 let parser = new FrameParser();
 
@@ -75,7 +79,10 @@ let sendDebounce = {};
 let autoScanInterval = null;
 let manualMode = false;
 let isFetchingState = false;
-let isPendingStaReboot = false; // Tracks if we expect a reboot after submitting WiFi config
+let staConnectPollHandle = null;    // polls WIFI_GET_STATUS while waiting to see if the new STA config worked
+let staConnectTimeoutHandle = null; // gives up and shows a failure message if it takes too long
+let awaitingStaReboot = false;      // true from submit until we confirm success/failure/disconnect
+let awaitingStaSsid = '';
 let isProbing = false;       // true while a single port probe is in-flight
 let probeResolver = null;
 let probeAborted = false;    // set true to cancel an in-flight probe immediately
@@ -130,6 +137,8 @@ function onConnected(port) {
     isFetchingState = true;
     sendFrame(buildGetAllState());
     sendFrame(buildWifiGetStatus());
+    sendFrame(buildWifiGetConfig());
+    sendFrame(buildGetBatteryStatus());
     showStatus('Connected — Fetching DSP State...', 'ok');
 }
 
@@ -223,8 +232,10 @@ function onConnectedWS(url) {
     isFetchingState = true;
     sendFrame(buildGetAllState());
     sendFrame(buildWifiGetStatus());
+    sendFrame(buildWifiGetConfig());
+    sendFrame(buildGetBatteryStatus());
     showStatus(`Connected via WiFi (${url}) — Fetching DSP State...`, 'ok');
-    switchLobbyScreen('scan-wifi-connected');
+    switchLobbyScreen('scan-wifi-content');
 }
 
 async function disconnectWebSocket() {
@@ -252,6 +263,12 @@ function switchLobbyScreen(screenId) {
         const el = document.getElementById(id);
         if (el) el.style.display = (id === screenId) ? 'block' : 'none';
     });
+
+    // The shared .scan-card is sized for the simple single-column lobby
+    // screens (400px) — the WiFi config screen needs real room for its
+    // two-column layout.
+    const el = document.getElementById(screenId);
+    el?.closest('.scan-card')?.classList.toggle('scan-card-wide', screenId === 'scan-wifi-content');
 }
 
 function showConnectionLobby() {
@@ -359,7 +376,9 @@ parser.onFrame((frame) => {
             setTimeout(() => sendFrame(buildWifiScan()), 1500);
         }
     }
-    else if (frame.cmd === CMD.ERROR) showStatus(`Error: 0x${frame.data[0]?.toString(16)}`, 'error');
+    else if (frame.cmd === CMD.ERROR) {
+        showStatus(`Error: 0x${frame.data[0]?.toString(16)}`, 'error');
+    }
     else if (frame.cmd === CMD.REPORT_ENABLE_MASK && frame.data.length >= 2) {
         // Firmware sends enable mask after GET_ALL_STATE
         // Bits correspond to chain order: [0]=preGain ... [11]=postGain
@@ -370,74 +389,88 @@ parser.onFrame((frame) => {
         });
     }
     else if (frame.cmd === CMD.SET_PARAM && frame.data.length >= 5) {
-        const pIndex = frame.data[0];
-        const val = readInt32(frame.data, 1);
-
-        switch (frame.moduleId) {
-            case MODULE.PRE_GAIN:
-                if (pIndex === 0) store.updateParam('preGain', 'gainDb', val);
-                else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
-                else if (pIndex === 2) store.updateParam('preGain', 'mono', val !== 0);
-                break;
-            case MODULE.POST_GAIN:
-                if (pIndex === 0) store.updateParam('postGain', 'gainDb', val);
-                else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
-                else if (pIndex === 2) store.updateParam('postGain', 'mono', val !== 0);
-                break;
-            case MODULE.COMPANDER:
-                if (pIndex === 0) store.updateParam('compander', 'threshold', val);
-                else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val);
-                else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val);
-                else if (pIndex === 3) store.updateParam('compander', 'attackMs', val);
-                else if (pIndex === 4) store.updateParam('compander', 'releaseMs', val);
-                else if (pIndex === 5) store.updateParam('compander', 'pregain', val);
-                else if (pIndex === 6) store.updateParam('compander', 'lookaheadMs', val / 10); // ms×10 → ms
-                break;
-            case MODULE.EXCITER:
-                if (pIndex === 0) store.updateParam('exciter', 'cutoffFreq', val);
-                else if (pIndex === 1) store.updateParam('exciter', 'dry', val);
-                else if (pIndex === 2) store.updateParam('exciter', 'wet', val);
-                break;
-            case MODULE.DYNAMIC_BASS:
-                if (pIndex === 0) store.updateParam('dynamicBass', 'cutoffFreq', val);
-                else if (pIndex === 1) store.updateParam('dynamicBass', 'gainBoost', val);
-                else if (pIndex === 2) store.updateParam('dynamicBass', 'enhanced', val);
-                else if (pIndex === 3) store.updateParam('dynamicBass', 'boostthreshold', val);
-                else if (pIndex === 4) store.updateParam('dynamicBass', 'neutralthreshold', val);
-                else if (pIndex === 5) store.updateParam('dynamicBass', 'clipthreshold', val);
-                else if (pIndex === 6) store.updateParam('dynamicBass', 'clipattack', val);
-                else if (pIndex === 7) store.updateParam('dynamicBass', 'cliprelease', val);
-                break;
-            case MODULE.DRC: {
-                // New encoding:
-                //   pIndex 0x10 = mode
-                //   pIndex 0x20-0x3F = per-band: band=(pIndex-0x20)>>3, param=(pIndex-0x20)&7
-                if (pIndex === 0x10) {
-                    store.drc.mode = val;
-                } else if (pIndex >= 0x20 && pIndex <= 0x3F) {
-                    const bandIdx = (pIndex - 0x20) >> 3;   // 0-3
-                    const param   = (pIndex - 0x20) & 0x07; // 0-4
-                    const drcBand = store.drc.bands[bandIdx];
-                    if (drcBand) {
-                        if (param === 0) drcBand.threshold = val;
-                        else if (param === 1) drcBand.ratio = val;
-                        else if (param === 2) drcBand.attackMs = val;
-                        else if (param === 3) drcBand.releaseMs = val;
-                        else if (param === 4) drcBand.pregain = val;
-                        else if (param === 5) drcBand.lookaheadMs = val / 10; // ms×10 → ms
-                    }
+    const pIndex = frame.data[0];
+    const val = leToFloat(frame.data, 1);  // float32 from firmware
+    switch (frame.moduleId) {
+        case MODULE.PRE_GAIN:
+            if (pIndex === 0) store.updateParam('preGain', 'gainDb', val);      // already dB
+            else if (pIndex === 1) store.updateParam('preGain', 'mute', val !== 0);
+            else if (pIndex === 2) store.updateParam('preGain', 'mono', val !== 0);
+            break;
+        case MODULE.POST_GAIN:
+            if (pIndex === 0) store.updateParam('postGain', 'gainDb', val);     // already dB
+            else if (pIndex === 1) store.updateParam('postGain', 'mute', val !== 0);
+            else if (pIndex === 2) store.updateParam('postGain', 'mono', val !== 0);
+            break;
+        case MODULE.COMPANDER:
+            if (pIndex === 0) store.updateParam('compander', 'threshold', val);      // dB
+            else if (pIndex === 1) store.updateParam('compander', 'ratioBelow', val);
+            else if (pIndex === 2) store.updateParam('compander', 'ratioAbove', val); 
+            else if (pIndex === 3) store.updateParam('compander', 'attackMs', val);
+            else if (pIndex === 4) store.updateParam('compander', 'releaseMs', val);
+            else if (pIndex === 5) store.updateParam('compander', 'pregain', val * 4096);   // dB → Q4.12
+            else if (pIndex === 6) store.updateParam('compander', 'lookaheadMs', val);      // already ms
+            break;
+        case MODULE.EXCITER:
+            if (pIndex === 0) store.updateParam('exciter', 'cutoffFreq', val);
+            else if (pIndex === 1) store.updateParam('exciter', 'dry', val);
+            else if (pIndex === 2) store.updateParam('exciter', 'wet', val);
+            break;
+        case MODULE.DYNAMIC_BASS:
+            if (pIndex === 0) store.updateParam('dynamicBass', 'cutoffFreq', val);
+            else if (pIndex === 1) store.updateParam('dynamicBass', 'gainBoost', val);
+            else if (pIndex === 2) store.updateParam('dynamicBass', 'enhanced', val);
+            else if (pIndex === 3) store.updateParam('dynamicBass', 'boostthreshold', val);
+            else if (pIndex === 4) store.updateParam('dynamicBass', 'neutralthreshold', val);
+            else if (pIndex === 5) store.updateParam('dynamicBass', 'clipthreshold', val);
+            else if (pIndex === 6) store.updateParam('dynamicBass', 'clipattack', val);
+            else if (pIndex === 7) store.updateParam('dynamicBass', 'cliprelease', val);
+            else if (pIndex === 8) store.updateParam('dynamicBass', 'lookaheadMs', val);  // already ms
+            break;
+        case MODULE.DRC: {
+            // Firmware sends float32, convert to internal store format
+            if (pIndex === 0) {
+                store.drc.mode = val;  // enum, keep as int
+            } else if (pIndex === 1) {
+                store.drc.cfType = val;
+            } else if (pIndex === 2) {
+                store.drc.fc1 = val;
+            } else if (pIndex === 3) {
+                store.drc.qLp = val;
+            } else if (pIndex === 4) {
+                store.drc.fc2 = val;
+            } else if (pIndex === 5) {
+                store.drc.qHp = val;
+            } else if (pIndex >= 0x20 && pIndex <= 0x3F) {
+                const bandIdx = (pIndex - 0x20) >> 3;
+                const param   = (pIndex - 0x20) & 0x07;
+                const drcBand = store.drc.bands[bandIdx];
+                if (drcBand) {
+                    if (param === 0) drcBand.threshold = val;
+                    else if (param === 1) drcBand.ratio = val;
+                    else if (param === 2) drcBand.attackMs = val;
+                    else if (param === 3) drcBand.releaseMs = val;
+                    else if (param === 4) {drcBand.pregain = val;}
+                    else if (param === 5) drcBand.lookaheadMs = val;     // already ms
                 }
-                break;
             }
+            break;
         }
+        default:
+            console.debug(`[SET_PARAM] Unknown module=${frame.moduleId} idx=${pIndex} val=${val}`);
     }
-    else if (frame.cmd === CMD.SET_EQ_BAND && frame.data.length >= 11) {
+}
+    else if (frame.cmd === CMD.SET_EQ_BAND && frame.data.length >= 19) {
+        // New float32 layout: pregainDb(f32) + band(1) + enabled(1) + type(1) + freq(f32) + gainDb(f32) + Q(f32) = 19 bytes
         const d = frame.data;
-        const pregain = leToInt16(d, 0);
-        const b = d[2];
-        const gain = leToInt16(d, 7);
-        const qVal = leToInt16(d, 9);
-        const changes = { enabled: d[3] === 1, type: d[4], freq: d[5] | (d[6] << 8), gain: gain / 256, q: qVal / 1024 };
+        const pregain = leToFloat(d, 0);
+        const b = d[4];
+        const enabled = d[5];
+        const type = d[6];
+        const freq = leToFloat(d, 7);
+        const gain = leToFloat(d, 11);
+        const q = leToFloat(d, 15);
+        const changes = { enabled: enabled === 1, type, freq, gain, q };
         
         let eqState;
         let realBand = b;
@@ -445,6 +478,8 @@ parser.onFrame((frame) => {
             eqState = store.eq1;
         } else if (frame.moduleId === MODULE.EQ_DSP_2) {
             eqState = store.eq2;
+        } else if (frame.moduleId === MODULE.PRE_EQ) {
+            eqState = store.preEq;
         } else if (frame.moduleId === MODULE.LEFTRIGHT_EQ) {
             if (b & 0x80) {
                 eqState = store.leftRightEq.eqRight;
@@ -455,29 +490,34 @@ parser.onFrame((frame) => {
         }
 
         if (eqState && eqState.bands[realBand]) {
-            eqState.pregain = pregain / 256;
+            eqState.pregain = pregain;
             Object.assign(eqState.bands[realBand], changes);
             store.emit('eq:changed');
         }
     }
-    else if ((frame.cmd === CMD.SET_DYNEQ_LOW_BAND || frame.cmd === CMD.SET_DYNEQ_HIGH_BAND) && frame.data.length >= 11) {
+    else if ((frame.cmd === CMD.SET_DYNEQ_LOW_BAND || frame.cmd === CMD.SET_DYNEQ_HIGH_BAND) && frame.data.length >= 19) {
+        // New float32 layout: pregainDb(f32) + band(1) + enabled(1) + type(1) + freq(f32) + gainDb(f32) + Q(f32) = 19 bytes
         const d = frame.data;
-        const pregain = leToInt16(d, 0);
-        const b = d[2];
-        const gain = leToInt16(d, 7);
-        const qVal = leToInt16(d, 9);
-        const changes = { enabled: d[3] === 1, type: d[4], freq: d[5] | (d[6] << 8), gain: gain / 256, q: qVal / 1024 };
+        const pregain = leToFloat(d, 0);
+        const b = d[4];
+        const enabled = d[5];
+        const type = d[6];
+        const freq = leToFloat(d, 7);
+        const gain = leToFloat(d, 11);
+        const q = leToFloat(d, 15);
+        const changes = { enabled: enabled === 1, type, freq, gain, q };
         const eqTarget = frame.cmd === CMD.SET_DYNEQ_HIGH_BAND ? store.dynamicEq.eqHigh : store.dynamicEq.eqLow;
-        eqTarget.pregain = pregain / 256;
+        eqTarget.pregain = pregain;
         Object.assign(eqTarget.bands[b], changes);
         store.emit('eq:changed');
     }
-    else if (frame.cmd === CMD.SET_DYNEQ_THRESH && frame.data.length >= 20) {
-        store.updateParam('dynamicEq', 'lowThresh', leToInt32(frame.data, 0));
-        store.updateParam('dynamicEq', 'normalThresh', leToInt32(frame.data, 4));
-        store.updateParam('dynamicEq', 'highThresh', leToInt32(frame.data, 8));
-        store.updateParam('dynamicEq', 'attackMs', leToInt32(frame.data, 12));
-        store.updateParam('dynamicEq', 'releaseMs', leToInt32(frame.data, 16));
+    else if (frame.cmd === CMD.SET_DYNEQ_THRESH && frame.data.length >= 24) {
+        store.updateParam('dynamicEq', 'lowThresh', Math.round(leToFloat(frame.data, 0)));
+        store.updateParam('dynamicEq', 'normalThresh', Math.round(leToFloat(frame.data, 4)));
+        store.updateParam('dynamicEq', 'highThresh', Math.round(leToFloat(frame.data, 8)));
+        store.updateParam('dynamicEq', 'attackMs', Math.round(leToFloat(frame.data, 12)));
+        store.updateParam('dynamicEq', 'releaseMs', Math.round(leToFloat(frame.data, 16)));
+        store.updateParam('dynamicEq', 'lookaheadMs', leToFloat(frame.data, 20));
     }
     else if (frame.cmd === CMD.SEND_REPORT_CPU_USAGE && frame.data.length >= 7) {
         const cpu10 = frame.data[0] | (frame.data[1] << 8);
@@ -485,27 +525,40 @@ parser.onFrame((frame) => {
         const fs = readInt32(frame.data, 3);
         updateCpuUI(cpu10 / 10.0, 100 - heapPct, fs);
     }
-    else if (frame.cmd === CMD.REPORT_ISF && frame.data.length >= 7) {
-        // Data: instance(1)+level_q88(2)+slew_q88(2)+activeA(1)+activeB(1)+numPresets(1)
+    else if (frame.cmd === CMD.REPORT_ISF_CONFIG && frame.data.length >= 13) {
+        // Data: instance(1) + rmsWindowMs(f32) + slewMs(f32) + lookaheadMs(f32) = 13 bytes
+        const inst = frame.data[0];
+        const which = inst === 0 ? 'isf1' : 'isf2';
+        const rmsWindowMs = leToFloat(frame.data, 1);
+        const slewMs = leToFloat(frame.data, 5);
+        const lookaheadMs = leToFloat(frame.data, 9);
+        store.updateIsfConfig(which, rmsWindowMs, slewMs, lookaheadMs);
+    }
+    else if (frame.cmd === CMD.REPORT_ISF && frame.data.length >= 16) {
+        // Data: instance(1)+levelDb(f32)+slewIdx(f32)+lookaheadMs(f32)+activeA(1)+activeB(1)+numPresets(1) = 16 bytes
         const d = frame.data;
         const instanceIdx = d[0];
         const which = instanceIdx === 0 ? 'isf1' : 'isf2';
-        const levelDb  = leToInt16(d, 1) / 256;
-        const slewQ88  = leToInt16(d, 3);
-        const slewIdx  = slewQ88 / 256;
-        const activeA  = d[5];
-        const activeB  = d[6];
+        const levelDb    = leToFloat(d, 1);
+        const slewIdx    = leToFloat(d, 5);
+        const lookahead  = leToFloat(d, 9);
+        const activeA    = d[13];
+        const activeB    = d[14];
+        const numPresets = d[15];
+        store.getIsfInstance(which).numPresets = numPresets;
+        store.getIsfInstance(which).lookaheadMs = lookahead;
         store.updateIsfState(which, levelDb, slewIdx, activeA, activeB);
         renderIsfLevelMeter(which, levelDb, slewIdx, activeA, activeB);
     }
-    else if (frame.cmd === CMD.REPORT_ISF_BAND_PER_PRESET && frame.data.length >= 10) {
+    else if (frame.cmd === CMD.REPORT_ISF_BAND_PER_PRESET && frame.data.length >= 16) {;
+        // Layout: presetIdx(1) + bandIdx(1) + enabled(1) + type(1) + freq(f32) + gain(f32) + Q(f32) = 16 bytes
         const d = frame.data;
         const moduleId  = frame.moduleId;
         const which     = (moduleId === MODULE.ISF_1) ? 'isf1' : 'isf2';
         const presetIdx = d[0];
         const bandIdx = d[1];
         const isf = store.getIsfInstance(which);
-        const changes = { enabled: d[2] === 1, type: d[3], freq: (d[4] | (d[5] << 8)), gain: leToInt16(d, 6) / 256, q: leToInt16(d, 8) / 1024};
+        const changes = { enabled: d[2] === 1, type: d[3], freq: leToFloat(d, 4), gain: leToFloat(d, 8), q: leToFloat(d, 12)};
         Object.assign(isf.presets[presetIdx].bands[bandIdx], changes);
         isf.presets[presetIdx].numBands = isf.presets[presetIdx].bands.filter(x => x.enabled).length;
         store.emit("isf:preset-data-update", which, presetIdx);
@@ -514,41 +567,39 @@ parser.onFrame((frame) => {
         store.setActivePreset(frame.data[0]);
     }
     // ── Live meter reports ───────────────────────────────────────────────────
-    else if (frame.cmd === CMD.REPORT_DYNBASS && frame.data.length >= 4 && !isFetchingState) {
-        const energyDb = leToInt16(frame.data, 0) / 256;  // Q8.8 → float dB
-        const alpha    = leToInt16(frame.data, 2) / 256;  // Q8.8 → float [-1..1]
+    else if (frame.cmd === CMD.REPORT_DYNBASS && frame.data.length >= 8 && !isFetchingState) {
+        const energyDb = leToFloat(frame.data, 0);
+        const alpha    = leToFloat(frame.data, 4);
         renderDynBassMeter(energyDb, alpha);
     }
-    else if (frame.cmd === CMD.REPORT_DYNEQ && frame.data.length >= 6 && !isFetchingState) {
-        const energyDb  = leToInt16(frame.data, 0) / 256;
-        const alphaLow  = leToInt16(frame.data, 2) / 256;
-        const alphaHigh = leToInt16(frame.data, 4) / 256;
+    else if (frame.cmd === CMD.REPORT_DYNEQ && frame.data.length >= 12 && !isFetchingState) {
+        const energyDb  = leToFloat(frame.data, 0);
+        const alphaLow  = leToFloat(frame.data, 4);
+        const alphaHigh = leToFloat(frame.data, 8);
         renderDynEqMeter(energyDb, alphaLow, alphaHigh);
     }
-    else if (frame.cmd === CMD.REPORT_COMPANDER && frame.data.length >= 4 && !isFetchingState) {
-        // envLinear Q1.14 (0..16384 = 0..1.0), gainDb Q8.8
-        const envLinear = (frame.data[0] | (frame.data[1] << 8)) / 16384;
-        const gainDb    = leToInt16(frame.data, 2) / 256;
+    else if (frame.cmd === CMD.REPORT_COMPANDER && frame.data.length >= 8 && !isFetchingState) {
+        const envLinear = leToFloat(frame.data, 0);
+        const gainDb    = leToFloat(frame.data, 4);
         renderCompanderMeter(envLinear, gainDb);
     }
-    else if (frame.cmd === CMD.REPORT_DRC && frame.data.length >= 8 && !isFetchingState) {
-        // 4 × int16 Q8.8 gain reduction dB (bands 0-2 + fullband)
+    else if (frame.cmd === CMD.REPORT_DRC && frame.data.length >= 16 && !isFetchingState) {
         const gains = [
-            leToInt16(frame.data, 0) / 256,
-            leToInt16(frame.data, 2) / 256,
-            leToInt16(frame.data, 4) / 256,
-            leToInt16(frame.data, 6) / 256,
+            leToFloat(frame.data, 0),
+            leToFloat(frame.data, 4),
+            leToFloat(frame.data, 8),
+            leToFloat(frame.data, 12),
         ];
         renderDrcMeter(gains);
     }
-    else if (frame.cmd === CMD.REPORT_ISF_PRESET && frame.data.length >= 5) {
-        // Data: preset_idx(1)+threshold(2)+pregain(2)
+    else if (frame.cmd === CMD.REPORT_ISF_PRESET && frame.data.length >= 9) {
+        // Data: preset_idx(1)+thresholdDb(f32)+pregainDb(f32) = 9 bytes
         const d = frame.data;
         const moduleId  = frame.moduleId;
         const which     = (moduleId === MODULE.ISF_1) ? 'isf1' : 'isf2';
         const presetIdx = d[0];
-        const threshDb  = leToInt16(d, 1) / 256;
-        const pregainDb = leToInt16(d, 3) / 256;
+        const threshDb  = leToFloat(d, 1);
+        const pregainDb = leToFloat(d, 5);
         
         store.updateIsfPreset(which, presetIdx, { thresholdDb: threshDb, pregainDb});
         store.emit("isf:preset-data-update", which, presetIdx);
@@ -569,6 +620,41 @@ parser.onFrame((frame) => {
         store.wifi.ssid = ssid;
         updateWifiUI();
     }
+    else if (frame.cmd === CMD.WIFI_GET_CONFIG && frame.data.length >= 3) {
+        const d = frame.data;
+        let off = 0;
+        const apSsidLen = d[off]; off += 1;
+        const apSsid = apSsidLen ? new TextDecoder().decode(new Uint8Array(d.slice(off, off + apSsidLen))) : '';
+        off += apSsidLen;
+        const apPassLen = d[off]; off += 1;
+        const apPass = apPassLen ? new TextDecoder().decode(new Uint8Array(d.slice(off, off + apPassLen))) : '';
+        off += apPassLen;
+        const hasSta = d[off] === 1; off += 1;
+        const staSsidLen = d[off] || 0; off += 1;
+        const staSsid = staSsidLen ? new TextDecoder().decode(new Uint8Array(d.slice(off, off + staSsidLen))) : '';
+        off += staSsidLen;
+        const staPassLen = d[off] || 0; off += 1;
+        const staPass = staPassLen ? new TextDecoder().decode(new Uint8Array(d.slice(off, off + staPassLen))) : '';
+
+        store.updateWifiConfig({ apSsid, apPass, hasSavedSta: hasSta, staSsid, staPass });
+        renderWifiConfigPanel();
+    }
+    else if (frame.cmd === CMD.REPORT_BATTERY && frame.data.length >= 22) {
+        const d = frame.data;
+        const present = d[0] === 1;
+        const stateNames = ['normal', 'warning', 'critical', 'charging'];
+        const state = stateNames[d[1]] || 'unknown';
+        store.updateBattery({
+            present,
+            state,
+            soc: leToFloat(d, 2),
+            busVoltage: leToFloat(d, 6),
+            currentMa: leToFloat(d, 10),
+            consumedMah: leToFloat(d, 14),
+            totalMah: leToFloat(d, 18)
+        });
+        updateBatteryUI();
+    }
     else if (frame.cmd === CMD.WIFI_SCAN) {
         if (frame.data.length >= 4) {
             const idx = frame.data[0];
@@ -584,6 +670,12 @@ parser.onFrame((frame) => {
             }
         }
     }
+    else {
+        console.warn(
+            `[CMD] Unhandled cmd=0x${frame.cmd.toString(16).padStart(2, "0")} module=${frame.moduleId} len=${frame.data.length}`,
+            frame
+        );
+    }
 });
 
 // ─── Accordion Builder ───────────────────────────────────────────────
@@ -591,7 +683,8 @@ parser.onFrame((frame) => {
 // Extended module list: split Dynamic EQ into DynEQ Thresh, DynEQ Low, DynEQ High
 const ACCORDION_MODULES = [
     { id: MODULE.PRE_GAIN, name: 'Pre Gain', icon: '🎚️' },
-    { id: MODULE.COMPANDER, name: 'Compander', icon: '📊' },
+    { id: MODULE.PRE_EQ, name: 'Pre EQ (Tone)', icon: '🎵' },
+    { id: MODULE.COMPANDER, name: 'Compander', icon: '⚡' },
     { id: MODULE.EXCITER, name: 'Exciter', icon: '✨' },
     { id: MODULE.DYNAMIC_BASS, name: 'Dynamic Bass', icon: '🔊' },
     { id: 'DYNEQ_THRESH', name: 'Dynamic EQ — Thresholds', icon: '⚡', parentId: MODULE.DYNAMIC_EQ },
@@ -604,14 +697,16 @@ const ACCORDION_MODULES = [
     { id: 'EQ_LEFT', name: 'EQ Left', icon: '👈', parentId: MODULE.LEFTRIGHT_EQ },
     { id: 'EQ_RIGHT', name: 'EQ Right', icon: '👉', parentId: MODULE.LEFTRIGHT_EQ },
     { id: MODULE.DRC, name: 'Dynamic Range Compression', icon: '🛡️' },
-    { id: MODULE.POST_GAIN, name: 'Post Gain', icon: '🔉' },
+    { id: MODULE.POST_GAIN, name: 'Post Gain', icon: '🎚️' }
 ];
 
 function buildAccordionModules() {
     const container = document.getElementById('modules-list');
-    
-    // Remember which accordion was open
-    const openModuleId = document.querySelector('.accordion.open')?.dataset.moduleId;
+
+    // Remember which accordions were open (support multiple)
+    const openModuleIds = new Set(
+        [...document.querySelectorAll('.accordion.open')].map(a => a.dataset.moduleId)
+    );
     
     container.innerHTML = '';
 
@@ -657,7 +752,7 @@ function buildAccordionModules() {
         header.appendChild(title);
         header.appendChild(chevron);
 
-        const EQ_MODULE_IDS = [String(MODULE.ISF_1), String(MODULE.ISF_2), String(MODULE.EQ_DSP_1), String(MODULE.EQ_DSP_2), 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT'];
+        const EQ_MODULE_IDS = [String(MODULE.ISF_1), String(MODULE.ISF_2), String(MODULE.EQ_DSP_1), String(MODULE.EQ_DSP_2), String(MODULE.PRE_EQ), 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT'];
         const isEqModule = EQ_MODULE_IDS.includes(String(mod.id));
 
         header.addEventListener('click', (e) => {
@@ -667,23 +762,17 @@ function buildAccordionModules() {
                 const wasOpen = acc.classList.contains('open');
 
                 if (wasOpen) {
-                    // Close this EQ accordion
+                    // Close & unmount only THIS accordion's graph
                     acc.classList.remove('open');
-                    unmountGraph();
+                    unmountGraph(acc);
                 } else {
-                    // Close ALL other EQ accordions first
-                    document.querySelectorAll('.accordion').forEach(other => {
-                        if (other !== acc && EQ_MODULE_IDS.includes(other.dataset.moduleId)) {
-                            other.classList.remove('open');
-                        }
-                    });
-
-                    // Open this one
+                    // Open this one (others stay open)
                     acc.classList.add('open');
 
-                    // Set active EQ
+                    // Track which EQ target this accordion represents
                     if (mod.id === MODULE.EQ_DSP_1) store.setActiveEq('eq1');
                     else if (mod.id === MODULE.EQ_DSP_2) store.setActiveEq('eq2');
+                    else if (mod.id === MODULE.PRE_EQ) store.setActiveEq('preEq');
                     else if (mod.id === 'DYNEQ_LOW') store.setActiveEq('dynLow');
                     else if (mod.id === 'DYNEQ_HIGH') store.setActiveEq('dynHigh');
                     else if (mod.id === 'EQ_LEFT') store.setActiveEq('eqLeft');
@@ -691,7 +780,7 @@ function buildAccordionModules() {
                     else if (mod.id === MODULE.ISF_1) { store.setActiveIsfInstance('isf1'); store.graphMode = 'isf1'; }
                     else if (mod.id === MODULE.ISF_2) { store.setActiveIsfInstance('isf2'); store.graphMode = 'isf2'; }
 
-                    // Mount graph
+                    // Mount graph into THIS accordion
                     mountGraphToAccordion(acc);
                 }
             } else {
@@ -709,10 +798,10 @@ function buildAccordionModules() {
         acc.appendChild(body);
         container.appendChild(acc);
 
-        // Restore open state
-        if (mod.id === openModuleId || (mod.id === Number(openModuleId))) {
+        // Restore open state (multiple accordions can be open)
+        if (openModuleIds.has(String(mod.id))) {
             acc.classList.add('open');
-            // If it was an EQ module, we need to remount the graph
+            // If it was an EQ module, remount its graph
             if (isEqModule) {
                 setTimeout(() => mountGraphToAccordion(acc), 0);
             }
@@ -724,15 +813,15 @@ function buildModuleBody(body, mod) {
     switch (mod.id) {
         case MODULE.COMPANDER:
             body.appendChild(buildGrMeter({ id: 'compander', label: 'Gain Reduction' }));
-            addSlider(body, 'Threshold', -6000, 0, 100, 'dB',
+            addSlider(body, 'Threshold', -60, 0, 0.1, 'dB',
                 () => store.compander.threshold,
                 (v) => { store.compander.threshold = v; sendFrame(buildSetParam(MODULE.COMPANDER, 0, v)); },
-                null, 0.01);
-            addSlider(body, 'Ratio Below', 10, 1000, 10, '',
+                null, 1);
+            addSlider(body, 'Ratio Below', 10, 1000, 10, ':1',
                 () => store.compander.ratioBelow,
                 (v) => { store.compander.ratioBelow = v; sendFrame(buildSetParam(MODULE.COMPANDER, 1, v)); },
                 null, 0.01);
-            addSlider(body, 'Ratio Above', 10, 1000, 10, '',
+            addSlider(body, 'Ratio Above', 100, 1000, 10, ':1',
                 () => store.compander.ratioAbove,
                 (v) => { store.compander.ratioAbove = v; sendFrame(buildSetParam(MODULE.COMPANDER, 2, v)); },
                 null, 0.01);
@@ -742,13 +831,12 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Release', 10, 2000, 1, 'ms',
                 () => store.compander.releaseMs,
                 (v) => { store.compander.releaseMs = v; sendFrame(buildSetParam(MODULE.COMPANDER, 4, v)); });
-            addSlider(body, 'Lookahead', 0, 100, 1, 'ms',
+            addSlider(body, 'Lookahead', 0, 10, 0.1, 'ms',
                 () => store.compander.lookaheadMs,
                 (v) => {
                     store.compander.lookaheadMs = v;
-                    // paramId 6, encoding: ms × 10 → int32
                     sendFrame(buildSetLookahead(MODULE.COMPANDER, 6, v));
-                }, null, 0.1);
+                }, null, 1);
             break;
 
         case MODULE.EXCITER:
@@ -776,37 +864,35 @@ function buildModuleBody(body, mod) {
             addSlider(body, 'Cutoff Freq', 30, 300, 5, 'Hz',
                 () => store.dynamicBass.cutoffFreq,
                 (v) => { store.dynamicBass.cutoffFreq = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 0, v)); });
-            addSlider(body, 'Gain Boost', 0, 2000, 10, 'dB',
+            addSlider(body, 'Gain Boost', 0, 20, 0.1, 'dB',
                 () => store.dynamicBass.gainBoost,
                 (v) => { store.dynamicBass.gainBoost = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 1, v)); },
-                null, 0.01);
+                null, 1);
             addSwitch(body, 'Boost Enhanced',
                 () => store.dynamicBass.enhanced > 0,
                 (v) => { store.dynamicBass.enhanced = v ? 1 : 0; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 2, v ? 1 : 0)); });
-            addSlider(body, 'Boost Full Thres', -6000, 0, 10, 'dB',
+            addSlider(body, 'Boost Full Thres', -60, 0, 0.1, 'dB',
                 () => store.dynamicBass.boostthreshold,
                 (v) => { store.dynamicBass.boostthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 3, v)); },
-                null, 0.01);
-            addSlider(body, 'Neutral Thres', -6000, 0, 10, 'dB',
+                null, 1);
+            addSlider(body, 'Neutral Thres', -60, 0, 0.1, 'dB',
                 () => store.dynamicBass.neutralthreshold,
                 (v) => { store.dynamicBass.neutralthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 4, v)); },
-                null, 0.01);
-            addSlider(body, 'Clip Full Thres', -6000, 0, 10, 'dB',
+                null, 1);
+            addSlider(body, 'Clip Full Thres', -60, 0, 0.1, 'dB',
                 () => store.dynamicBass.clipthreshold,
                 (v) => { store.dynamicBass.clipthreshold = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 5, v)); },
-                null, 0.01);
+                null, 1);
             addSlider(body, 'Clip Attack', 0, 2000, 1, 'ms',
                 () => store.dynamicBass.clipattack,
                 (v) => { store.dynamicBass.clipattack = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 6, v)); });
             addSlider(body, 'Clip Release', 0, 2000, 1, 'ms',
                 () => store.dynamicBass.cliprelease,
                 (v) => { store.dynamicBass.cliprelease = v; sendFrame(buildSetParam(MODULE.DYNAMIC_BASS, 7, v)); });
+            addSlider(body, 'Lookahead', 0, 10, 0.1, 'ms',
+                () => store.dynamicBass.lookaheadMs,
+                (v) => { store.dynamicBass.lookaheadMs = v; sendFrame(buildSetLookahead(MODULE.DYNAMIC_BASS, 8, v)); }, null, 1);
             break;
-
-        case MODULE.AUTO_EQ:
-            buildAutoEqPanel(body);
-            break;
-
         case MODULE.ISF_1:
             buildIsfPanel(body, 'isf1');
             break;
@@ -831,6 +917,10 @@ function buildModuleBody(body, mod) {
             buildEqBandPanel(body, MODULE.LEFTRIGHT_EQ, 'eqRight');
             break;
 
+        case MODULE.PRE_EQ:
+            buildEqBandPanel(body, MODULE.PRE_EQ, 'preEq');
+            break;
+
         case 'DYNEQ_THRESH': {
             body.appendChild(buildDynMeter({
                 id:     'dyneq',
@@ -846,22 +936,22 @@ function buildModuleBody(body, mod) {
             // Build sliders and wire cross-constraints:
             //   highThresh >= normalThresh >= lowThresh
             const { slider: slLow, valInput: vsLow } =
-                addSlider(body, 'Low Thresh', -6000, 0, 100, 'dB',
+                addSlider(body, 'Low Thresh', -60, 0, 0.1, 'dB',
                     () => store.dynamicEq.lowThresh,
-                    (v) => { store.dynamicEq.lowThresh = v; sendFrame(buildSetDynEqThresholds(v, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs)); },
-                    null, 0.01);
+                    (v) => { store.dynamicEq.lowThresh = v; sendFrame(buildSetDynEqThresholds(v, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); },
+                    null, 1);
 
             const { slider: slNorm, valInput: vsNorm } =
-                addSlider(body, 'Normal Thresh', -6000, 0, 100, 'dB',
+                addSlider(body, 'Normal Thresh', -60, 0, 0.1, 'dB',
                     () => store.dynamicEq.normalThresh,
-                    (v) => { store.dynamicEq.normalThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, v, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs)); },
-                    null, 0.01);
+                    (v) => { store.dynamicEq.normalThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, v, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); },
+                    null, 1);
 
             const { slider: slHigh, valInput: vsHigh } =
-                addSlider(body, 'High Thresh', -6000, 0, 100, 'dB',
+                addSlider(body, 'High Thresh', -60, 0, 0.1, 'dB',
                     () => store.dynamicEq.highThresh,
-                    (v) => { store.dynamicEq.highThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, v, store.dynamicEq.attackMs, store.dynamicEq.releaseMs)); },
-                    null, 0.01);
+                    (v) => { store.dynamicEq.highThresh = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, v, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); },
+                    null, 1);
 
             // Constraint enforcement (runs after addSlider's own listener)
             slLow.addEventListener('input', () => {
@@ -870,12 +960,12 @@ function buildModuleBody(body, mod) {
                 if (v > parseFloat(slNorm.value)) {
                     slNorm.value = v;
                     store.dynamicEq.normalThresh = v;
-                    vsNorm.value = (v * 0.01).toFixed(2);
+                    vsNorm.value = (v * 1).toFixed(2);
                     // normal raising might also need to push high up
                     if (v > parseFloat(slHigh.value)) {
                         slHigh.value = v;
                         store.dynamicEq.highThresh = v;
-                        vsHigh.value = (v * 0.01).toFixed(2);
+                        vsHigh.value = (v * 1).toFixed(2);
                     }
                 }
             });
@@ -886,13 +976,13 @@ function buildModuleBody(body, mod) {
                 if (parseFloat(slLow.value) > v) {
                     slLow.value = v;
                     store.dynamicEq.lowThresh = v;
-                    vsLow.value = (v * 0.01).toFixed(2);
+                    vsLow.value = (v * 1).toFixed(2);
                 }
                 // clamp high ≥ normal
                 if (parseFloat(slHigh.value) < v) {
                     slHigh.value = v;
                     store.dynamicEq.highThresh = v;
-                    vsHigh.value = (v * 0.01).toFixed(2);
+                    vsHigh.value = (v * 1).toFixed(2);
                 }
             });
 
@@ -902,22 +992,25 @@ function buildModuleBody(body, mod) {
                 if (v < parseFloat(slNorm.value)) {
                     slNorm.value = v;
                     store.dynamicEq.normalThresh = v;
-                    vsNorm.value = (v * 0.01).toFixed(2);
+                    vsNorm.value = (v * 1).toFixed(2);
                     // normal dropping might also need to push low down
                     if (v < parseFloat(slLow.value)) {
                         slLow.value = v;
                         store.dynamicEq.lowThresh = v;
-                        vsLow.value = (v * 0.01).toFixed(2);
+                        vsLow.value = (v * 1).toFixed(2);
                     }
                 }
             });
 
             addSlider(body, 'Attack', 1, 2000, 1, 'ms',
                 () => store.dynamicEq.attackMs,
-                (v) => { store.dynamicEq.attackMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, v, store.dynamicEq.releaseMs)); });
+                (v) => { store.dynamicEq.attackMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, v, store.dynamicEq.releaseMs, store.dynamicEq.lookaheadMs)); });
             addSlider(body, 'Release', 10, 2000, 1, 'ms',
                 () => store.dynamicEq.releaseMs,
-                (v) => { store.dynamicEq.releaseMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, v)); });
+                (v) => { store.dynamicEq.releaseMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, v, store.dynamicEq.lookaheadMs)); });
+            addSlider(body, 'Lookahead', 0, 10, 0.1, 'ms',
+                () => store.dynamicEq.lookaheadMs,
+                (v) => { store.dynamicEq.lookaheadMs = v; sendFrame(buildSetDynEqThresholds(store.dynamicEq.lowThresh, store.dynamicEq.normalThresh, store.dynamicEq.highThresh, store.dynamicEq.attackMs, store.dynamicEq.releaseMs, v)); }, null, 1);
 
             /*
             const syncBtn = document.createElement('button');
@@ -942,15 +1035,15 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.DRC:
-            body.appendChild(buildGrMeter({ id: 'drc', label: 'Gain Reduction', multiband: true }));
+            body.appendChild(buildGrMeter({ id: 'drc', label: 'Gain Reduction', multiband: true, isDrc: true }));
             buildDrcPanel(body);
             break;
 
         case MODULE.PRE_GAIN:
-            addSlider(body, 'Gain', -9600, 2400, 25, 'dB',
+            addSlider(body, 'Gain', -96, 24, 0.1, 'dB',
                 () => store.preGain.gainDb,
                 (v) => { store.preGain.gainDb = v; sendFrame(buildSetParam(MODULE.PRE_GAIN, 0, v)); },
-                null, 0.01);
+                null, 1);
             addSwitch(body, 'Mute',
                 () => store.postGain.mute,
                 (v) => { store.postGain.mute = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 1, v ? 1 : 0)); });
@@ -960,10 +1053,10 @@ function buildModuleBody(body, mod) {
             break;
 
         case MODULE.POST_GAIN:
-            addSlider(body, 'Gain', -9600, 2400, 25, 'dB',
+            addSlider(body, 'Gain', -96, 24, 0.1, 'dB',
                 () => store.postGain.gainDb,
                 (v) => { store.postGain.gainDb = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 0, v)); },
-                null, 0.01);
+                null, 1);
             addSwitch(body, 'Mute',
                 () => store.postGain.mute,
                 (v) => { store.postGain.mute = v; sendFrame(buildSetParam(MODULE.POST_GAIN, 1, v ? 1 : 0)); });
@@ -997,8 +1090,8 @@ function buildDrcPanel(container) {
 
     const refreshGraph = () => {
         const band = d.bands[d.activeBand];
-        const thDb = band.threshold / 100;
-        const ratio = band.ratio / 100;
+        const thDb = band.threshold;
+        const ratio = band.ratio;
         drcGraph.draw(thDb, ratio);
     };
     refreshGraph();
@@ -1016,11 +1109,9 @@ function buildDrcPanel(container) {
     const modeSelect = document.createElement('select');
     modeSelect.className = 'drc-select';
     [
-        [0, 'Full Band'],
-        [1, '2 Band'],
-        [2, '2 Band + Full'],
-        [3, '3 Band'],
-        [4, '3 Band + Full'],
+        [0, 'Fullband'],
+        [1, '2-Band'],
+        [2, '3-Band'],
     ].forEach(([val, name]) => {
         const opt = document.createElement('option');
         opt.value = val;
@@ -1030,7 +1121,7 @@ function buildDrcPanel(container) {
     });
     modeSelect.addEventListener('change', () => {
         d.mode = parseInt(modeSelect.value);
-        sendFrame(buildSetParam(MODULE.DRC, 0x10, d.mode));
+        sendFrame(buildSetParam(MODULE.DRC, 0, d.mode));
         updateCrossoverVisibility();
         updateBandTabs();
     });
@@ -1046,10 +1137,10 @@ function buildDrcPanel(container) {
     const cfSelect = document.createElement('select');
     cfSelect.className = 'drc-select';
     [
-        [1, 'Butterworth, order=1'],
-        [2, 'Linkwitz-Riley, order=2'],
-        [3, 'Linkwitz-Riley, order=4'],
-        [4, 'Q-controlled, order=4'],
+        [0, 'Butterworth, order=1'],
+        [1, 'Linkwitz-Riley, order=2'],
+        [2, 'Linkwitz-Riley, order=4'],
+        [3, 'Q-controller, order=2'],
     ].forEach(([val, name]) => {
         const opt = document.createElement('option');
         opt.value = val;
@@ -1059,7 +1150,7 @@ function buildDrcPanel(container) {
     });
     cfSelect.addEventListener('change', () => {
         d.cfType = parseInt(cfSelect.value);
-        sendFrame(buildSetParam(MODULE.DRC, 0x11, d.cfType));
+        sendFrame(buildSetParam(MODULE.DRC, 1, d.cfType));
         updateCrossoverVisibility();
     });
     cfRow.appendChild(cfLabel);
@@ -1076,15 +1167,15 @@ function buildDrcPanel(container) {
     fc1Inp.addEventListener('change', () => {
         d.fc1 = Math.max(20, Math.min(20000, parseInt(fc1Inp.value) || d.fc1));
         fc1Inp.value = d.fc1;
-        sendFrame(buildSetParam(MODULE.DRC, 0x12, d.fc1));
+        sendFrame(buildSetParam(MODULE.DRC, 2, d.fc1));
     });
     const qLpLabel = document.createElement('span'); qLpLabel.textContent = 'Q(LP)'; qLpLabel.className = 'drc-qlabel';
     const qLpInp = document.createElement('input');
-    qLpInp.type = 'number'; qLpInp.className = 'drc-num drc-q'; qLpInp.min = 0.1; qLpInp.max = 4; qLpInp.step = 0.01;
-    qLpInp.value = (d.qLp / 1024).toFixed(2);
+    qLpInp.type = 'number'; qLpInp.className = 'drc-num drc-q'; qLpInp.min = 0.01; qLpInp.max = 4; qLpInp.step = 0.001;
+    qLpInp.value = (d.qLp / 1024).toFixed(3);
     qLpInp.addEventListener('change', () => {
-        d.qLp = Math.round(parseFloat(qLpInp.value) * 1024);
-        sendFrame(buildSetParam(MODULE.DRC, 0x14, d.qLp));
+        d.qLp = parseFloat(qLpInp.value);
+        sendFrame(buildSetParam(MODULE.DRC, 4, d.qLp + 0.001));
     });
     cf1Row.appendChild(fc1Inp);
     cf1Row.appendChild(qLpLabel);
@@ -1101,15 +1192,15 @@ function buildDrcPanel(container) {
     fc2Inp.addEventListener('change', () => {
         d.fc2 = Math.max(20, Math.min(20000, parseInt(fc2Inp.value) || d.fc2));
         fc2Inp.value = d.fc2;
-        sendFrame(buildSetParam(MODULE.DRC, 0x13, d.fc2));
+        sendFrame(buildSetParam(MODULE.DRC, 3, d.fc2));
     });
     const qHpLabel = document.createElement('span'); qHpLabel.textContent = 'Q(HP)'; qHpLabel.className = 'drc-qlabel';
     const qHpInp = document.createElement('input');
-    qHpInp.type = 'number'; qHpInp.className = 'drc-num drc-q'; qHpInp.min = 0.1; qHpInp.max = 4; qHpInp.step = 0.01;
-    qHpInp.value = (d.qHp / 1024).toFixed(2);
+    qHpInp.type = 'number'; qHpInp.className = 'drc-num drc-q'; qHpInp.min = 0.1; qHpInp.max = 4; qHpInp.step = 0.001;
+    qHpInp.value = (d.qHp / 1024).toFixed(3);
     qHpInp.addEventListener('change', () => {
-        d.qHp = Math.round(parseFloat(qHpInp.value) * 1024);
-        sendFrame(buildSetParam(MODULE.DRC, 0x15, d.qHp));
+        d.qHp = parseFloat(qHpInp.value);
+        sendFrame(buildSetParam(MODULE.DRC, 5, d.qHp + 0.001));
     });
     cf2Row.appendChild(fc2Inp);
     cf2Row.appendChild(qHpLabel);
@@ -1132,31 +1223,32 @@ function buildDrcPanel(container) {
 
     const buildBandControls = (bandIdx) => {
         bandControls.innerHTML = '';
+        //if ()
         const band = d.bands[bandIdx];
         const pBase = BAND_PARAM[bandIdx];
 
-        addSlider(bandControls, 'Pregain', -7200, 1800, 25, 'dB',
-            () => Math.round((Math.log10(band.pregain / 4096) * 20) * 100),
+        addSlider(bandControls, 'Pregain', -72, 18, 0.1, 'dB',
+            () => band.pregain,
             (v) => {
-                band.pregain = Math.round(Math.pow(10, v / 2000) * 4096);
+                band.pregain = v;
                 sendFrame(buildSetParam(MODULE.DRC, pBase + 4, band.pregain));
-            }, null, 0.01);
+            }, null, 1);
 
-        addSlider(bandControls, 'Threshold', -9000, 0, 50, 'dB',
+        addSlider(bandControls, 'Threshold', -90, 0, 0.1, 'dB',
             () => band.threshold,
             (v) => {
                 band.threshold = v;
                 sendFrame(buildSetParam(MODULE.DRC, pBase + 0, v));
                 refreshGraph();
-            }, null, 0.01);
+            }, null, 1);
 
-        addSlider(bandControls, 'Ratio', 100, 10000, 100, ':1',
+        addSlider(bandControls, 'Ratio', 1, 100, 1, ':1',
             () => band.ratio,
             (v) => {
                 band.ratio = v;
-                sendFrame(buildSetParam(MODULE.DRC, pBase + 1, v));
+                sendFrame(buildSetParam(MODULE.DRC, pBase + 1, v * 100));
                 refreshGraph();
-            }, null, 0.01);
+            }, null, 1);
 
         addSlider(bandControls, 'Attack', 1, 2000, 1, 'ms',
             () => band.attackMs,
@@ -1165,23 +1257,31 @@ function buildDrcPanel(container) {
         addSlider(bandControls, 'Release', 10, 2000, 1, 'ms',
             () => band.releaseMs,
             (v) => { band.releaseMs = v; sendFrame(buildSetParam(MODULE.DRC, pBase + 3, v)); });
-        addSlider(bandControls, 'Lookahead', 0, 100, 1, 'ms',
+        addSlider(bandControls, 'Lookahead', 0, 10, 0.1, 'ms',
             () => band.lookaheadMs,
             (v) => {
                 band.lookaheadMs = v;
                 // pBase + 5: band-specific lookahead, encoding ms × 10 → int32
                 sendFrame(buildSetLookahead(MODULE.DRC, pBase + 5, v));
-            }, null, 0.1);
+            }, null, 1);
     };
 
     const renderTabs = () => {
         tabsRow.innerHTML = '';
         const visibleBands = getBandCount(d.mode);
+        const mode = d.mode;
 
         for (let tabPos = 0; tabPos < visibleBands; tabPos++) {
-            const bandIdx = tabToBandIdx(tabPos, d.mode);
-            const isFullband = (bandIdx === 3);
-            const label = isFullband ? '● Full' : `Band ${tabPos + 1}`;
+            const bandIdx = tabToBandIdx(tabPos, mode);
+            // Generate tab label based on mode
+            let label;
+            if (mode === 0) {
+                label = '● Fullband';
+            } else if (mode === 1) {
+                label = tabPos === 0 ? '● Low' : '● High';
+            } else {
+                label = tabPos === 0 ? '● Low' : tabPos === 1 ? '● Mid' : '● High';
+            }
             const tab = document.createElement('button');
             tab.className = 'drc-tab' + (d.activeBand === bandIdx ? ' active' : '');
             tab.textContent = label;
@@ -1190,37 +1290,39 @@ function buildDrcPanel(container) {
                 refreshGraph();
                 buildBandControls(bandIdx);
                 tabsRow.querySelectorAll('.drc-tab').forEach((t, idx) => {
-                    t.classList.toggle('active', tabToBandIdx(idx, d.mode) === bandIdx);
+                    t.classList.toggle('active', tabToBandIdx(idx, mode) === bandIdx);
                 });
             });
             tabsRow.appendChild(tab);
         }
     };
 
-    // For fullband-only mode, show fullband = bands[3]
+    // Band count based on mode:
+    // mode 0 (Fullband): 1 band (band[0])
+    // mode 1 (2-Band): 2 bands (band[1]=Low, band[2]=High)
+    // mode 2 (3-Band): 3 bands (band[1]=Low, band[2]=Mid, band[3]=High)
     const getBandCount = (mode) => {
         switch (mode) {
-            case 0: return 1;  // fullband only → show index 3
-            case 1: return 2;
-            case 2: return 3;  // band1, band2, fullband
-            case 3: return 3;
-            case 4: return 4;
+            case 0: return 1;  // Fullband → band[0]
+            case 1: return 2;  // 2-Band → band[1], band[2]
+            case 2: return 3;  // 3-Band → band[1], band[2], band[3]
             default: return 1;
         }
     };
 
     // Map tab position → band index
+    // mode 0 (Fullband): tabPos=0 → band[0]
+    // mode 1 (2-Band): tabPos=0→band[1], tabPos=1→band[2]
+    // mode 2 (3-Band): tabPos=0→band[1], tabPos=1→band[2], tabPos=2→band[3]
     const tabToBandIdx = (tabPos, mode) => {
-        if (mode === 0) return 3;   // fullband
-        if (mode === 2 && tabPos === 2) return 3;   // 2band+full → tab2=fullband
-        if (mode === 4 && tabPos === 3) return 3;   // 3band+full → tab3=fullband
-        return tabPos;
+        if (mode === 0) return 0;   // Fullband → band[0]
+        return tabPos + 1;          // 2-Band/3-Band → offset by 1
     };
 
     const updateBandTabs = () => {
         // Always resolve activeBand to correct band index
         if (d.mode === 0) {
-            d.activeBand = 3;  // fullband mode → always show band[3]
+            d.activeBand = 0;  // fullband mode → always show band[0]
         } else {
             const count = getBandCount(d.mode);
             // If current activeBand is out of range, reset to first visible
@@ -1234,14 +1336,17 @@ function buildDrcPanel(container) {
     };
 
     const updateCrossoverVisibility = () => {
-        const needCf = d.mode !== 0;
-        const need2Cf = d.mode === 3 || d.mode === 4;
-        const needQ = d.cfType === 4;
+        const needCf = d.mode !== 0;           // Show crossover settings when not Fullband
+        const need2Cf = d.mode === 2;          // 3-Band needs 2 crossovers
+        const isQCtrl = d.cfType === 3;        // Q-controller selected
+        const needQ1 = needCf && isQCtrl;      // Show Q(LP) when 2-Band/3-Band + Q-Ctrl
+        const needQ2 = need2Cf && isQCtrl;     // Show Q(HP) when 3-Band + Q-Ctrl
+        
         cfRow.style.display  = needCf ? '' : 'none';
         cf1Row.style.display = needCf ? '' : 'none';
         cf2Row.style.display = need2Cf ? '' : 'none';
-        qLpLabel.style.display = qLpInp.style.display = needQ ? '' : 'none';
-        qHpLabel.style.display = qHpInp.style.display = needQ ? '' : 'none';
+        qLpLabel.style.display = qLpInp.style.display = needQ1 ? '' : 'none';
+        qHpLabel.style.display = qHpInp.style.display = needQ2 ? '' : 'none';
     };
 
     updateCrossoverVisibility();
@@ -1278,42 +1383,68 @@ function buildEqBandPanel(container, moduleId, eqKey) {
     eq.bands.forEach((band, i) => {
         if (!band.enabled) return;
         container.appendChild(buildBandRow(band, i, (idx, changes) => {
-            store.updateEqBand(idx, changes);
+            // Update directly on this eq, not store.getActiveEqState()
+            Object.assign(eq.bands[idx], changes);
+            store.emit('eq:changed');
+            store.emit('eq:band-updated', idx);
             syncEqBand(moduleId, idx);
         }, (idx) => {
-            store.removeEqBand(idx);
-            syncEqBand(moduleId, idx);  // Tell firmware this slot is now disabled
-        }));
+            eq.bands[idx].enabled = false;
+            Object.assign(eq.bands[idx], { type: 0, freq: 1000, gain: 0, q: 0.707 });
+            store.emit('eq:changed');
+            store.emit('eq:structure-changed');
+            syncEqBand(moduleId, idx);
+        }, eqKey === 'preEq'));
     });
 
     const actions = document.createElement('div');
     actions.className = 'eq-actions';
 
-    if (enabledCount >= 10) {
-        const msg = document.createElement('span');
-        msg.className = 'band-limit-msg';
-        msg.textContent = '⚠ Max 10 bands';
-        actions.appendChild(msg);
+    if (eqKey !== 'preEq') {
+        if (enabledCount >= 10) {
+            const msg = document.createElement('span');
+            msg.className = 'band-limit-msg';
+            msg.textContent = '⚠ Max 10 bands';
+            actions.appendChild(msg);
+        } else {
+            const addBtn = document.createElement('button');
+            addBtn.textContent = '+ Add Band';
+            addBtn.className = 'btn btn-outline btn-sm';
+            addBtn.addEventListener('click', () => {
+                // Add directly to this eq, not store.getActiveEqState()
+                const slot = eq.bands.findIndex(b => !b.enabled);
+                if (slot === -1) return;
+                Object.assign(eq.bands[slot], { enabled: true, freq: 1000, gain: 0, q: 0.707, type: 0 });
+                store.emit('eq:changed');
+                store.emit('eq:structure-changed');
+                if (slot !== null) syncEqBand(moduleId, slot);
+            });
+            actions.appendChild(addBtn);
+
+            const resetBtn = document.createElement('button');
+            resetBtn.textContent = 'Reset';
+            resetBtn.className = 'btn btn-sm';
+            resetBtn.style.color = 'var(--accent-red)';
+            resetBtn.addEventListener('click', () => {
+                // Reset directly on this eq, not store.getActiveEqState()
+                eq.bands.forEach(b => {
+                    b.enabled = false;
+                    b.type = 0; b.freq = 1000; b.gain = 0; b.q = 0.707;
+                });
+                store.emit('eq:changed');
+                store.emit('eq:structure-changed');
+                eq.bands.forEach((_, i) => syncEqBand(moduleId, i));
+            });
+            actions.appendChild(resetBtn);
+        }
     } else {
-        const addBtn = document.createElement('button');
-        addBtn.textContent = '+ Add Band';
-        addBtn.className = 'btn btn-outline btn-sm';
-        addBtn.addEventListener('click', () => {
-            const slot = store.addEqBand(1000, 0, 0.707, 0);
-            if (slot !== null) syncEqBand(moduleId, slot);
-        });
-        actions.appendChild(addBtn);
+        const msg = document.createElement('span');
+            msg.className = 'band-limit-msg';
+            msg.textContent = '⚠ Max 3 bands, To Change Gain you must using display DSP to change';
+            actions.appendChild(msg);
     }
 
-    const resetBtn = document.createElement('button');
-    resetBtn.textContent = 'Reset';
-    resetBtn.className = 'btn btn-sm';
-    resetBtn.style.color = 'var(--accent-red)';
-    resetBtn.addEventListener('click', () => {
-        store.resetEqBands();
-        eq.bands.forEach((_, i) => syncEqBand(moduleId, i));
-    });
-    actions.appendChild(resetBtn);
+    container.appendChild(actions);
 }
 // ─── Dynamic EQ Band Panel ───────────────────────────────────────────
 
@@ -1373,7 +1504,7 @@ function buildDynEqBandPanel(container, isHigh) {
 
 // ─── Shared Band Row Builder ─────────────────────────────────────────
 
-function buildBandRow(band, index, onUpdate, onDelete) {
+function buildBandRow(band, index, onUpdate, onDelete, ispreeq = false) {
     const row = document.createElement('div');
     row.className = 'eq-band-row';
     row.dataset.bandIndex = index;
@@ -1398,7 +1529,9 @@ function buildBandRow(band, index, onUpdate, onDelete) {
     // Freq
     row.appendChild(createNumInput(band.freq, 20, 20000, 1, 'Hz', 'freq', (v) => onUpdate(index, { freq: v })));
     // Gain
-    row.appendChild(createNumInput(band.gain, -24, 24, 0.5, 'dB', 'gain', (v) => onUpdate(index, { gain: v })));
+    if (!ispreeq) {
+        row.appendChild(createNumInput(band.gain, -24, 24, 0.5, 'dB', 'gain', (v) => onUpdate(index, { gain: v })));
+    }
     // Q
     row.appendChild(createNumInput(band.q, 0.1, 20, 0.1, 'Q', 'q', (v) => onUpdate(index, { q: v })));
 
@@ -1443,7 +1576,7 @@ function rebuildAccordionBody(moduleId) {
 
     // Nếu accordion này đang mount graph, unmount trước để tránh memory leak
     const hadGraph = !!body.querySelector('.eq-graph-container');
-    if (hadGraph) unmountGraph();
+    if (hadGraph) unmountGraph(acc);
 
     body.innerHTML = '';
 
@@ -1463,6 +1596,7 @@ function syncEqBand(moduleId, index) {
     let realIndex = index;
     if (moduleId === MODULE.EQ_DSP_1) eq = store.eq1;
     else if (moduleId === MODULE.EQ_DSP_2) eq = store.eq2;
+    else if (moduleId === MODULE.PRE_EQ) eq = store.preEq;
     else if (moduleId === MODULE.LEFTRIGHT_EQ) {
         if (store.activeEq === 'eqRight') {
             eq = store.leftRightEq.eqRight;
@@ -1495,11 +1629,9 @@ function syncEqToHardware(moduleId) {
         store.activeEq = 'eqRight';
         store.leftRightEq.eqRight.bands.forEach((_, i) => syncEqBand(moduleId, i));
         store.activeEq = prev;
+    } else if (moduleId === MODULE.PRE_EQ) {
+        store.preEq.forEach((_, i) => syncEqBand(moduleId, i));
     }
-}
-
-function syncAutoEqToHardware() {
-    sendDebounced('auto_eq_bands', () => buildSetAutoEqTarget(store.autoEq.bands), 16);
 }
 
 function syncDynEqBand(isHigh, index) {
@@ -1532,9 +1664,10 @@ function addSlider(container, label, min, max, step, unit, getter, setter, forma
     valInput.type = 'text';
     valInput.className = 'param-input';
     
+    const decimals = (step * displayScale) < 1 ? 2 : 0;
     const updateInputFromSlider = () => {
         const v = parseFloat(slider.value);
-        valInput.value = (v * displayScale).toFixed(displayScale < 1 ? 2 : 0);
+        valInput.value = (v * displayScale).toFixed(decimals);
     };
 
     updateInputFromSlider();
@@ -1700,22 +1833,24 @@ function buildGrMeter(opts) {
     const wrap = document.createElement('div');
     wrap.className = 'lm-wrap';
 
-    const head = document.createElement('div');
-    head.className = 'lm-head';
-    const lbl = document.createElement('span');
-    lbl.className = 'lm-label';
-    lbl.textContent = opts.label;
-    const val = document.createElement('span');
-    val.className = 'lm-value lm-value-red';
-    val.id = `lm-${opts.id}-gr`;
-    val.textContent = '0.0 dB';
-    head.appendChild(lbl);
-    head.appendChild(val);
-    wrap.appendChild(head);
+    if (!opts.isDrc) {
+        const head = document.createElement('div');
+        head.className = 'lm-head';
+        const lbl = document.createElement('span');
+        lbl.className = 'lm-label';
+        lbl.textContent = opts.label;
+        const val = document.createElement('span');
+        val.className = 'lm-value lm-value-red';
+        val.id = `lm-${opts.id}-gr`;
+        val.textContent = '0.0 dB';
+        head.appendChild(lbl);
+        head.appendChild(val);
+        wrap.appendChild(head);
+    }
 
     if (opts.multiband) {
-        // 4 bars: Low / Mid / High / Full
-        const bandNames = ['Low', 'Mid', 'High', 'Full'];
+        // 4 bars: Full / Low / Mid / High
+        const bandNames = ['Full', 'Low', 'Mid', 'High'];
         const rows = document.createElement('div');
         rows.className = 'lm-gr-rows';
         bandNames.forEach((name, i) => {
@@ -1829,22 +1964,38 @@ function renderCompanderMeter(envLinear, gainDb) {
 }
 
 function renderDrcMeter(gains) {
-    // gains[0..3]: gain reduction dB per band (negative = reduction)
     const grLabel = document.getElementById('lm-drc-gr');
+    const activeBand = store.drc.activeBand ?? 3;
     if (grLabel) grLabel.textContent = `${gains[3].toFixed(1)} dB`;
 
-    gains.forEach((g, i) => {
-        const fill = document.getElementById(`lm-drc-fill-${i}`);
-        const val  = document.getElementById(`lm-drc-val-${i}`);
-        if (!fill) return;
-        const pct  = Math.max(0, Math.min(100, (-g) / 24 * 100));
-        fill.style.width = `${pct}%`;
-        if (val) val.textContent = g.toFixed(1);
-    });
+    // [srcIndexInGains, domBandIndex]
+    const maps = {
+        0: [[0, 0]],                  // Full
+        1: [[1, 1], [2, 3]],          // Low, High
+        2: [[1, 1], [2, 2], [3, 3]],  // Low, Mid, High
+    };
 
-    // Update operating point on the compression curve graph
+    const pairs = maps[store.drc.mode] || [];
+    // domIdx -> srcIdx tra nhanh
+    const activeMap = new Map(pairs.map(([src, dom]) => [dom, src]));
+
+    for (let domIdx = 0; domIdx <= 3; domIdx++) {
+        const fill = document.getElementById(`lm-drc-fill-${domIdx}`);
+        const val = document.getElementById(`lm-drc-val-${domIdx}`);
+        if (!fill) continue;
+
+        if (activeMap.has(domIdx)) {
+            const g = gains[activeMap.get(domIdx)];
+            const pct = Math.max(0, Math.min(100, (-g) / 24 * 100));
+            fill.style.width = `${pct}%`;
+            if (val) val.textContent = g.toFixed(1);
+        } else {
+            fill.style.width = `0%`;
+            if (val) val.textContent = '0.0';
+        }
+    }
+
     if (drcGraph) {
-        const activeBand = store.drc.activeBand ?? 3;
         drcGraph.updateLiveMeter(gains[activeBand]);
     }
 }
@@ -1869,7 +2020,7 @@ function syncIsfAllPresets(which) {
     }
     // Also send config
     sendDebounced(`isf_${which}_config`,
-        () => buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb),
+        () => buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb, isf.lookaheadMs),
         30
     );
 }
@@ -1963,10 +2114,11 @@ function buildIsfPanel(container, which) {
     const configRow = document.createElement('div');
     configRow.className = 'isf-config-row';
     const sendConfig = () =>
-        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb));
+        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb, isf.lookaheadMs));
 
     const { el: rmsEl } = makeConfigItem('RMS Window', isf.rmsMs, 10, 2000, 10, 'ms', v => { isf.rmsMs = v; sendConfig(); });
     const { el: slewEl } = makeConfigItem('Slew Time', isf.slewMs, 10, 5000, 50, 'ms/step', v => { isf.slewMs = v; sendConfig(); });
+    const { el: laEl } = makeConfigItem('Lookahead', isf.lookaheadMs ?? 0, 0, 10, 0.1, 'ms', v => { isf.lookaheadMs = v; sendConfig(); });
 
     const ovItem = document.createElement('div'); ovItem.className = 'isf-config-item';
     const ovChk = document.createElement('input'); ovChk.type = 'checkbox'; ovChk.checked = isf.overrideDb !== null;
@@ -1978,7 +2130,7 @@ function buildIsfPanel(container, which) {
     const applyOv = () => { isf.overrideDb = ovChk.checked ? parseFloat(ovInp.value) : null; ovInp.disabled = !ovChk.checked; sendConfig(); };
     ovChk.addEventListener('change', applyOv); ovInp.addEventListener('change', applyOv);
     ovItem.appendChild(ovChk); ovItem.appendChild(ovLbl); ovItem.appendChild(ovInp); ovItem.appendChild(ovUnit);
-    configRow.appendChild(rmsEl); configRow.appendChild(slewEl); configRow.appendChild(ovItem);
+    configRow.appendChild(rmsEl); configRow.appendChild(slewEl); configRow.appendChild(laEl); configRow.appendChild(ovItem);
     container.appendChild(configRow);
 
     // ── Live level meter ──────────────────────────────────────────────────
@@ -2142,40 +2294,52 @@ function buildIsfPanel(container, which) {
             });
             tabBar.appendChild(tab);
         }
-        addPresetBtn.disabled  = isf.numPresets >= 5;
+        addPresetBtn.disabled  = isf.numPresets >= 10;
         removePresetBtn.disabled = isf.numPresets <= 1;
+        if (removePresetBtn.disabled) removePresetBtn.textContent = "⚠ At least 1 preset";
+        if (addPresetBtn.disabled) addPresetBtn.textContent = "⚠ Max 10 presets";
     };
 
 
     addPresetBtn.addEventListener('click', () => {
-        if (isf.numPresets >= 5) {
+        if (isf.numPresets >= 9) {
             addPresetBtn.disabled = true;
-            addPresetBtn.textContent = "⚠ Max 5 presets";
-            return;
+            addPresetBtn.textContent = "⚠ Max 10 presets";
         } else {
             addPresetBtn.textContent = "+ Preset";
         };
+        removePresetBtn.textContent = "− Preset";
+        removePresetBtn.disabled    = false;
         const p = isf.numPresets++;
         isf.presets[p].thresholdDb = -96 + p * Math.round(96 / isf.numPresets);
         isf.presets[p].numBands = 0; isf.presets[p].pregainDb = 0;
-        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb));
-        rebuildTabs(); switchPreset(p);
+        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb, isf.lookaheadMs));
+        currentPreset = p;
+        switchPreset(p);
+        rebuildTabs();
     });
 
     removePresetBtn.addEventListener('click', () => {
-        if (isf.numPresets <= 1) {
+        if (isf.numPresets <= 2) {
             removePresetBtn.disabled = true;
             removePresetBtn.textContent = "⚠ At least 1 preset";
-            return;
         } else {
             removePresetBtn.textContent = "− Preset";
         };
+        addPresetBtn.textContent = "+ Preset";
+        addPresetBtn.disabled    = false;
         isf.numPresets--;
-        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb));
-        rebuildTabs(); switchPreset(Math.min(currentPreset, isf.numPresets - 1));
+        sendFrame(buildSetIsfConfig(modId, isf.numPresets, isf.rmsMs, isf.slewMs, isf.overrideDb, isf.lookaheadMs));
+        switchPreset(Math.min(currentPreset, isf.numPresets - 1));
+        rebuildTabs();
     });
 
     // ── Event listeners ───────────────────────────────────────────────────
+
+    store.on('isf:band-changed', (w, pIdx, bandIdx) => {
+        if (w !== which || pIdx !== currentPreset) return;
+        syncIsfBandParams(which, currentPreset, bandIdx);
+    });
 
     // Đang drag → update freq/gain inputs live (không rebuild toàn bộ list)
     store.on('isf:band-dragging', (w, pIdx2, bandArrayIdx) => {
@@ -2196,17 +2360,19 @@ function buildIsfPanel(container, which) {
 
             if (fFreq && fFreq !== targetActiveElem) fFreq.value = draggedBand.freq;
             if (fGain && fGain !== targetActiveElem) fGain.value = draggedBand.gain.toFixed(1);
+            if (fQ && fQ !== targetActiveElem) fQ.value = draggedBand.q;
         }
         syncIsfBandParams(which, currentPreset, bandArrayIdx);
     });
     // Band added từ graph double-click
-    store.on('isf:band-added', (w, pIdx2) => {
+    store.on('isf:band-added', (w, pIdx2, bIdx) => {
         if (w !== which) return;
         if (pIdx2 !== undefined && pIdx2 !== currentPreset) {
             tabBar.querySelectorAll('.isf-tab').forEach((t, i) => t.classList.toggle('active', i === pIdx2));
             switchPreset(pIdx2);
         } else {
             renderBandList();
+            syncIsfBandParams(which, currentPreset, bIdx);
         }
     });
 
@@ -2230,19 +2396,27 @@ function buildIsfPanel(container, which) {
 // ─── Graph Container Helpers ─────────────────────────────────────────
 
 function mountGraphToAccordion(acc) {
-    unmountGraph(); // clean up any existing
+    const moduleId = acc.dataset.moduleId;
+
+    // If this accordion already has a graph, destroy and re-create
+    // (e.g. after rebuildStructural wipes body.innerHTML)
+    if (eqGraphs.has(moduleId)) {
+        eqGraphs.get(moduleId).destroy();
+        eqGraphs.delete(moduleId);
+    }
 
     const body = acc.querySelector('.accordion-body');
     if (!body) return;
+
+    // Remove any stale DOM remnants from a previous mount on this accordion
+    body.querySelector('.eq-graph-container')?.remove();
+    body.querySelector('.eq-controls')?.remove();
 
     const container = document.createElement('div');
     container.className = 'eq-graph-container';
     body.insertBefore(container, body.firstChild);
 
     const canvas = document.createElement('canvas');
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-    canvas.style.display = 'block';
     container.appendChild(canvas);
 
     // Controls wrapper for Pregain
@@ -2251,40 +2425,54 @@ function mountGraphToAccordion(acc) {
     body.insertBefore(controls, container.nextSibling);
 
     // Pregain slider below graph
-    const moduleId = acc.dataset.moduleId;
     let eqState;
     if (moduleId === String(MODULE.ISF_1)) eqState = null;
     else if (moduleId === String(MODULE.ISF_2)) eqState = null;
     else if (moduleId === String(MODULE.EQ_DSP_1)) eqState = store.eq1;
     else if (moduleId === String(MODULE.EQ_DSP_2)) eqState = store.eq2;
+    else if (moduleId === String(MODULE.PRE_EQ)) eqState = store.preEq;
     else if (moduleId === 'DYNEQ_LOW') eqState = store.dynamicEq.eqLow;
     else if (moduleId === 'DYNEQ_HIGH') eqState = store.dynamicEq.eqHigh;
     else if (moduleId === 'EQ_LEFT') eqState = store.leftRightEq.eqLeft;
     else if (moduleId === 'EQ_RIGHT') eqState = store.leftRightEq.eqRight;
 
     if (eqState) {
-        addSlider(controls, 'Pregain', -2400, 2400, 50, 'dB',
-            () => (eqState.pregain || 0) * 100,
+        if (moduleId !== String(MODULE.PRE_EQ)) {
+            addSlider(controls, 'Pregain', -24, 24, 0.5, 'dB',
+            () => (eqState.pregain),
             (v) => {
-                eqState.pregain = v / 100;
+                eqState.pregain = v;
                 store.emit('eq:changed');
-                // Sync via first enabled band or band 0
                 let bandIdx = eqState.bands.findIndex(b => b.enabled);
                 if (bandIdx === -1) bandIdx = 0;
-                
                 if (moduleId === String(MODULE.EQ_DSP_1) || moduleId === String(MODULE.EQ_DSP_2)) {
                     syncEqBand(parseInt(moduleId), bandIdx);
                 } else if (moduleId === 'EQ_LEFT' || moduleId === 'EQ_RIGHT') {
                     syncEqBand(MODULE.LEFTRIGHT_EQ, bandIdx);
+                } else if (moduleId === String(MODULE.PRE_EQ)) {
+                    syncEqBand(MODULE.PRE_EQ, bandIdx);
                 } else {
                     syncDynEqBand(moduleId === 'DYNEQ_HIGH', bandIdx);
                 }
             },
-            null, 0.01);
+            null, 1);
+        }
     }
 
-    // Initialize graph instance
-    eqGraph = new EQGraph(canvas);
+    // Map accordion moduleId → canonical string key used by EQGraph._getMyEqState/_getMyGraphMode
+    const MODULE_KEY_MAP = {
+        [String(MODULE.ISF_1)]:     'isf1',
+        [String(MODULE.ISF_2)]:     'isf2',
+        [String(MODULE.EQ_DSP_1)]:  'EQ_DSP_1',
+        [String(MODULE.EQ_DSP_2)]:  'EQ_DSP_2',
+        [String(MODULE.PRE_EQ)]:    'PRE_EQ',
+        // DYNEQ_LOW, DYNEQ_HIGH, EQ_LEFT, EQ_RIGHT are already string keys
+    };
+    const graphKey = MODULE_KEY_MAP[moduleId] ?? moduleId;
+
+    // Create and register the EQGraph instance for this accordion
+    const graph = new EQGraph(canvas, graphKey);
+    eqGraphs.set(moduleId, graph);
 }
 
 function updateCpuUI(usage, heapPct, fs) {
@@ -2336,13 +2524,27 @@ function updateCpuUI(usage, heapPct, fs) {
     }
 }
 
-function unmountGraph() {
-    if (eqGraph) {
-        eqGraph.destroy();
-        eqGraph = null;
+/**
+ * Unmount graph(s).
+ * @param {HTMLElement|null} acc - If provided, unmount only that accordion's graph.
+ *                                  If null/omitted, unmount ALL graphs (e.g. on full rebuild).
+ */
+function unmountGraph(acc = null) {
+    if (acc) {
+        // Unmount only the graph belonging to this accordion
+        const moduleId = acc.dataset.moduleId;
+        if (eqGraphs.has(moduleId)) {
+            eqGraphs.get(moduleId).destroy();
+            eqGraphs.delete(moduleId);
+        }
+        acc.querySelector('.eq-graph-container')?.remove();
+        acc.querySelector('.eq-controls')?.remove();
+    } else {
+        // Unmount ALL graphs (full rebuild path)
+        eqGraphs.forEach(g => g.destroy());
+        eqGraphs.clear();
+        document.querySelectorAll('.eq-graph-container, .eq-controls').forEach(el => el.remove());
     }
-    // Remove containers entirely
-    document.querySelectorAll('.eq-graph-container, .eq-controls').forEach(el => el.remove());
 }
 
 function updateStatusUI() {
@@ -2367,12 +2569,18 @@ function updateStatusUI() {
         if (heapContainer) heapContainer.style.display = 'none';
         if (manualMode) ['port-select', 'btn-refresh', 'btn-connect'].forEach(id => document.getElementById(id).style.display = '');
         document.getElementById('btn-wifi-config').style.display = 'none';
+        const battContainer = document.getElementById('battery-container');
+        if (battContainer) battContainer.style.display = 'none';
+        const wifiBadge = document.getElementById('wifi-status-badge');
+        if (wifiBadge) wifiBadge.style.display = 'none';
     }
 }
 
 // ─── WiFi UI Handlers ────────────────────────────────────────────────
 
 function updateWifiUI() {
+    updateWifiStatusBadge();
+
     const modeEl = document.getElementById('wifi-current-mode');
     if (modeEl) {
         modeEl.textContent = `Current: ${store.wifi.mode} (${store.wifi.ip})`;
@@ -2392,79 +2600,489 @@ function updateWifiUI() {
     }
     
     if (store.wifi.mode === 'STA' && store.wifi.ip && store.wifi.ip !== '0.0.0.0') {
-        if (!document.getElementById('scan-overlay').classList.contains('hidden')) {
-            switchLobbyScreen('scan-wifi-connected');
-            
-            // Show reboot countdown if we just configured it
-            if (isPendingStaReboot) {
-                isPendingStaReboot = false;
-                
-                // Clear any old countdowns
-                const oldMsg = document.getElementById('reboot-countdown');
-                if (oldMsg) oldMsg.remove();
-                
-                const msgEl = document.createElement('div');
-                msgEl.id = 'reboot-countdown';
-                msgEl.style.color = 'var(--accent-red)';
-                msgEl.style.fontWeight = 'bold';
-                msgEl.style.textAlign = 'center';
-                msgEl.style.marginTop = '15px';
-                
-                // Insert before the buttons
-                const btnRow = document.getElementById('scan-wifi-connected').querySelector('div[style*="justify-content: center"]');
-                if (btnRow) {
-                    document.getElementById('scan-wifi-connected').insertBefore(msgEl, btnRow);
-                } else {
-                    document.getElementById('scan-wifi-connected').appendChild(msgEl);
-                }
-                
-                let count = 5;
-                msgEl.innerHTML = `
-                    <div style="background: rgba(255,50,50,0.1); border: 1px solid var(--accent-red); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
-                        <div style="font-size: 16px; margin-bottom: 5px; color: var(--accent-red); font-weight: bold;">WiFi Config Saved!</div>
-                        <div style="font-size: 14px; color: white;">Rebooting in <span style="color:var(--accent-red); font-size:18px;">${count}</span>s...</div>
-                        <div style="margin-top: 10px; font-size: 12px; color: var(--text-dim);">
-                            After reboot, connect your phone to <strong>${store.wifi.ssid}</strong> and access:<br/>
-                            <strong style="color: var(--accent-green); font-size: 14px;">http://esp32-dsp.local</strong>
-                        </div>
-                    </div>
-                `;
-                
-                const intv = setInterval(() => {
-                    count--;
-                    const countSpan = msgEl.querySelector('span');
-                    if (count > 0) {
-                        if (countSpan) countSpan.textContent = count;
-                    } else {
-                        clearInterval(intv);
-                        msgEl.innerHTML = `
-                            <div style="background: var(--accent-green); color: black; padding: 15px; border-radius: 8px; font-weight: bold; text-align: center;">
-                                Rebooting...<br/>Please switch to WiFi: ${store.wifi.ssid}
-                            </div>
-                        `;
-                    }
-                }, 1000);
-            }
+        // If we were in the middle of a connect attempt, this is success —
+        // stop polling/waiting and clear the "Connecting..." UI. Firmware
+        // pushes this unsolicited once WiFiManager resolves the async
+        // WiFi.begin() (see ParamController::pollWifiStatus in firmware).
+        if (awaitingStaReboot || staConnectPollHandle || staConnectTimeoutHandle) {
+            clearStaConnectWait();
+            showStatus(`Connected to ${store.wifi.ssid}`, 'ok');
         }
-        
-        document.getElementById('wifi-conn-mode').textContent = store.wifi.mode;
-        document.getElementById('wifi-conn-ssid').textContent = store.wifi.ssid;
-        document.getElementById('wifi-conn-ip').textContent = store.wifi.ip;
-        document.getElementById('wifi-conn-rssi').textContent = `${store.wifi.rssi} dBm`;
-        document.getElementById('wifi-conn-ws').textContent = `ws://${store.wifi.ip}/ws`;
-    } else {
-        // In AP mode or connecting — show config/scan screen instead of info screen
-        if (!document.getElementById('scan-overlay').classList.contains('hidden')) {
-            document.getElementById('scan-wifi-connected').style.display = 'none';
-            // Only show config if not in other lobby screens
-            if (document.getElementById('scan-auto-content').style.display === 'none' &&
-                document.getElementById('scan-manual-content').style.display === 'none' &&
-                document.getElementById('lobby-choice-content').style.display === 'none' &&
-                document.getElementById('lobby-wifi-searching').style.display === 'none') {
-                document.getElementById('scan-wifi-content').style.display = 'block';
-            }
-        }
+    } else if (store.wifi.mode === 'AP' && awaitingStaReboot) {
+        // Firmware fell back to AP after its own STA connect timeout —
+        // that's a definitive failure, no need to wait for our client-side
+        // 20s timeout to fire.
+        showStaConnectFailed(awaitingStaSsid);
     }
+
+    renderStaSection();
+}
+
+// ─── Battery UI ─────────────────────────────────────────────────────
+
+let batteryAlertState = null; // edge-triggers the low-battery alert
+
+function initBatteryUI() {
+    if (document.getElementById('battery-container')) return; // already built
+    const cpuContainer = document.getElementById('cpu-container');
+    if (!cpuContainer || !cpuContainer.parentElement) return; // no anchor on this layout
+
+    const container = document.createElement('div');
+    container.id = 'battery-container';
+    container.className = 'battery-container';
+    container.style.display = 'none';
+    container.title = 'Click for battery details';
+
+    const icon = document.createElement('span');
+    icon.id = 'battery-icon';
+    icon.className = 'battery-icon';
+    icon.textContent = '🔋';
+
+    const text = document.createElement('span');
+    text.id = 'battery-value';
+    text.className = 'battery-value';
+    text.textContent = '--%';
+
+    container.appendChild(icon);
+    container.appendChild(text);
+    cpuContainer.parentElement.appendChild(container);
+
+    const detail = document.createElement('div');
+    detail.id = 'battery-detail-panel';
+    detail.className = 'battery-detail-panel hidden'; // .hidden is scoped to this class in style.css
+    detail.innerHTML = `
+        <div id="battery-detail-state" class="bd-title"></div>
+        <div id="battery-detail-mah" class="bd-row"></div>
+        <div id="battery-detail-va" class="bd-row"></div>
+    `;
+    document.body.appendChild(detail);
+
+    container.addEventListener('click', () => {
+        if (!store.battery.present) return; // nothing to show when absent — disabled
+        // Position just under the widget, right-aligned to it
+        const rect = container.getBoundingClientRect();
+        detail.style.top = `${rect.bottom + 6}px`;
+        detail.style.right = `${window.innerWidth - rect.right}px`;
+        detail.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (e) => {
+        if (!detail.classList.contains('hidden') && !detail.contains(e.target) && !container.contains(e.target)) {
+            detail.classList.add('hidden');
+        }
+    });
+}
+
+function updateBatteryUI() {
+    const container = document.getElementById('battery-container');
+    if (!container) return;
+    const bat = store.battery;
+
+    if (!store.system.connected || !bat.checked) {
+        // Not connected, or haven't heard from firmware yet — nothing to show.
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = 'flex';
+
+    const text = document.getElementById('battery-value');
+    text.classList.remove('state-normal', 'state-warning', 'state-critical', 'state-charging', 'state-na');
+
+    if (!bat.present) {
+        // Confirmed: no battery monitor on this device — show disabled state
+        // rather than hiding, so it's clear the feature exists but isn't wired up.
+        container.classList.add('disabled');
+        container.title = 'No battery monitor detected on this device';
+        document.getElementById('battery-icon').textContent = '🔋';
+        text.textContent = 'N/A';
+        text.classList.add('state-na');
+        return;
+    }
+
+    container.classList.remove('disabled');
+    container.title = 'Click for battery details';
+
+    const pct = Math.round(bat.soc * 100);
+    const stateIcons  = { normal: '🔋', warning: '🪫', critical: '🪫', charging: '⚡' };
+    const stateClass  = { normal: 'state-normal', warning: 'state-warning', critical: 'state-critical', charging: 'state-charging' };
+    const stateLabels = { normal: 'Normal', warning: 'Low', critical: 'LOW — Charge now', charging: 'Charging' };
+
+    document.getElementById('battery-icon').textContent = stateIcons[bat.state] || '🔋';
+    text.textContent = `${pct}%`;
+    text.classList.add(stateClass[bat.state] || 'state-normal');
+
+    const detailState = document.getElementById('battery-detail-state');
+    if (detailState) detailState.textContent = `Battery: ${pct}% — ${stateLabels[bat.state] || bat.state}`;
+    const detailMah = document.getElementById('battery-detail-mah');
+    if (detailMah) detailMah.textContent = `Used: ${bat.consumedMah.toFixed(0)} / ${bat.totalMah.toFixed(0)} mAh`;
+    const detailVa = document.getElementById('battery-detail-va');
+    if (detailVa) detailVa.textContent = `${bat.busVoltage.toFixed(2)} V, ${(bat.currentMa / 1000).toFixed(2)} A`;
+
+    // Edge-triggered low-battery alert — fires once per state transition, not every poll
+    if ((bat.state === 'critical' || bat.state === 'warning') && batteryAlertState !== bat.state) {
+        showStatus(bat.state === 'critical' ? 'Battery low — charge now!' : 'Battery getting low', 'error');
+    }
+    batteryAlertState = bat.state;
+}
+
+// ─── WiFi status badge (topbar) — shows whether WiFi is currently on ──
+// Note: firmware's WIFI_GET_STATUS only ever reports AP or STA mode; there's
+// no explicit "radio off" bit on the wire today. So "on" here means "we have
+// a confirmed, current status from the device" (mode !== 'Unknown'); until
+// that first reply arrives (or if it's stale), it reads as "Off/Unknown".
+function initWifiStatusBadge() {
+    if (document.getElementById('wifi-status-badge')) return; // already built
+    const wifiBtn = document.getElementById('btn-wifi-config');
+    if (!wifiBtn || !wifiBtn.parentElement) return; // no anchor on this layout
+
+    const badge = document.createElement('div');
+    badge.id = 'wifi-status-badge';
+    badge.className = 'wifi-status-badge off';
+    badge.style.display = 'none';
+    badge.innerHTML = `<span class="status-dot"></span><span id="wifi-status-badge-text">WiFi: Off</span>`;
+    wifiBtn.parentElement.insertBefore(badge, wifiBtn);
+}
+
+function updateWifiStatusBadge() {
+    const badge = document.getElementById('wifi-status-badge');
+    if (!badge) return;
+
+    if (!store.system.connected) {
+        badge.style.display = 'none';
+        return;
+    }
+    badge.style.display = 'flex';
+
+    const textEl = document.getElementById('wifi-status-badge-text');
+    const isOn = store.wifi.mode === 'AP' || store.wifi.mode === 'STA';
+    badge.classList.toggle('on', isOn);
+    badge.classList.toggle('off', !isOn);
+    if (textEl) {
+        textEl.textContent = store.wifi.mode === 'AP' ? 'WiFi: AP Mode'
+                            : store.wifi.mode === 'STA' ? `WiFi: Connected (${store.wifi.ssid || 'STA'})`
+                            : 'WiFi: Off';
+    }
+}
+
+// ─── WiFi Advanced Settings (view/change AP, forget saved STA) ─────────
+
+function initWifiScanColumns() {
+    const container = document.getElementById('scan-wifi-content');
+    if (!container || container.dataset.restructured) return; // already built
+    container.dataset.restructured = '1';
+
+    // The back button moves out of the scan list and down to the bottom of
+    // the right column instead (see below), so pull it out first.
+    const backBtn = document.getElementById('btn-wifi-back');
+    if (backBtn) backBtn.remove();
+
+    // Move everything else already in this screen (scan list, connect form,
+    // rescan button, etc.) into a left column, untouched.
+    const leftCol = document.createElement('div');
+    leftCol.className = 'wifi-scan-col';
+    while (container.firstChild) {
+        leftCol.appendChild(container.firstChild);
+    }
+
+    // Right column: root AP config, live/saved STA info, then Forget + Back
+    // at the bottom. This replaces both the old separate "⚙️ WiFi Settings"
+    // popup AND the old separate "scan-wifi-connected" read-only screen —
+    // one WiFi screen now, not three.
+    const rightCol = document.createElement('div');
+    rightCol.className = 'wifi-scan-col wifi-scan-col-right';
+    rightCol.innerHTML = `
+        <div id="wifi-adv-status" class="wifi-scan-status"></div>
+
+        <div style="margin-bottom:18px;">
+            <div class="wifi-scan-section-label">Root Access Point (phone connects here)</div>
+            <input id="wifi-adv-ap-ssid" class="wifi-scan-input" placeholder="AP name">
+            <div class="wifi-scan-input-wrap">
+                <input id="wifi-adv-ap-pass" class="wifi-scan-input" type="password" placeholder="AP password (8+ characters)">
+                <button id="wifi-adv-ap-toggle" class="wifi-scan-eye" type="button">👁</button>
+            </div>
+            <button id="wifi-adv-ap-save" class="btn btn-primary btn-sm">Save AP</button>
+        </div>
+
+        <div style="margin-bottom:18px;">
+            <div class="wifi-scan-section-label">WiFi Network (STA)</div>
+            <div id="wifi-scan-sta-status" class="wifi-scan-info-text">No network saved</div>
+        </div>
+
+        <div class="wifi-scan-col-spacer"></div>
+
+        <button id="wifi-adv-sta-forget" class="btn btn-danger btn-sm" style="display:none; width:100%; margin-bottom:8px;">Forget this network</button>
+    `;
+    if (backBtn) rightCol.appendChild(backBtn);
+
+    const row = document.createElement('div');
+    row.className = 'wifi-scan-columns';
+    row.appendChild(leftCol);
+    row.appendChild(rightCol);
+    container.appendChild(row);
+
+    const ssidInp = rightCol.querySelector('#wifi-adv-ap-ssid');
+    const passInp = rightCol.querySelector('#wifi-adv-ap-pass');
+    ssidInp.addEventListener('input', () => { ssidInp.dataset.userEdited = '1'; });
+    passInp.addEventListener('input', () => { passInp.dataset.userEdited = '1'; });
+
+    rightCol.querySelector('#wifi-adv-ap-toggle').addEventListener('click', () => {
+        passInp.type = passInp.type === 'password' ? 'text' : 'password';
+    });
+    rightCol.querySelector('#wifi-adv-ap-save').addEventListener('click', () => {
+        if (!store.wifi.configLoaded) return; // disabled state — ignore stray clicks
+        const ssid = ssidInp.value.trim();
+        const pass = passInp.value;
+        if (!ssid) { alert('Please enter an AP name'); return; }
+        if (pass && pass.length < 8) { alert('AP password must be at least 8 characters (or leave blank for an open network)'); return; }
+        sendFrame(buildWifiSetApConfig(ssid, pass));
+        showStatus('New AP config sent', 'ok');
+    });
+    rightCol.querySelector('#wifi-adv-sta-forget').addEventListener('click', () => {
+        if (!store.wifi.configLoaded) return; // disabled state — ignore stray clicks
+        if (!confirm(`Forget network "${store.wifi.staSsid}"? The device will switch back to AP mode.`)) return;
+        sendFrame(buildWifiClearSta());
+        showStatus('Saved WiFi network forgotten', 'ok');
+    });
+
+    setWifiConfigButtonsEnabled(false); // until the first WIFI_GET_CONFIG reply arrives
+    renderStaSection();
+}
+
+/** Renders the combined "WiFi Network (STA)" info box: live connection
+ *  details (from WIFI_GET_STATUS) if currently joined, else the saved
+ *  credentials (from WIFI_GET_CONFIG) if one exists, else a placeholder.
+ *  Also toggles the "Forget this network" button. Called whenever either
+ *  status or config data updates, so it's correct regardless of which
+ *  arrives first. */
+function renderStaSection() {
+    const el = document.getElementById('wifi-scan-sta-status');
+    const forgetBtn = document.getElementById('wifi-adv-sta-forget');
+    if (!el) return;
+
+    const w = store.wifi;
+    const liveConnected = w.mode === 'STA' && w.ip && w.ip !== '0.0.0.0';
+
+    if (liveConnected) {
+        el.innerHTML = `
+            <div>SSID: <strong style="color:white;">${w.ssid}</strong></div>
+            <div>IP: ${w.ip}</div>
+            <div>RSSI: ${w.rssi} dBm</div>
+            <div>mDNS: esp32-dsp.local</div>
+        `;
+    } else if (w.hasSavedSta) {
+        el.innerHTML = `
+            <div>SSID: ${w.staSsid} <span style="color:#94a3b8;">(saved, not connected)</span></div>
+            <div>Password: ${w.staPass}</div>
+        `;
+    } else {
+        el.textContent = 'No network saved';
+    }
+
+    if (forgetBtn) forgetBtn.style.display = w.hasSavedSta ? 'block' : 'none';
+}
+
+/** Requests the AP/STA config and shows a loading/unavailable state until it arrives. Call whenever the WiFi screen is opened. */
+function requestWifiConfig() {
+    setWifiConfigButtonsEnabled(false);
+    const statusEl = document.getElementById('wifi-adv-status');
+    if (statusEl) {
+        statusEl.className = 'wifi-scan-status loading';
+        statusEl.textContent = 'Loading configuration...';
+    }
+
+    sendFrame(buildWifiGetConfig());
+
+    clearTimeout(wifiConfigTimeoutHandle);
+    wifiConfigTimeoutHandle = setTimeout(() => {
+        if (!store.wifi.configLoaded && statusEl) {
+            statusEl.className = 'wifi-scan-status unavailable';
+            statusEl.textContent = 'WiFi config not available on this device/firmware.';
+        }
+    }, 3000);
+}
+
+let wifiConfigTimeoutHandle = null;
+
+function setWifiConfigButtonsEnabled(enabled) {
+    const saveBtn = document.getElementById('wifi-adv-ap-save');
+    const forgetBtn = document.getElementById('wifi-adv-sta-forget');
+    [saveBtn, forgetBtn].forEach(btn => {
+        if (!btn) return;
+        btn.disabled = !enabled;
+        btn.style.opacity = enabled ? '1' : '0.5';
+        btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+    });
+}
+
+function renderWifiConfigPanel() {
+    clearTimeout(wifiConfigTimeoutHandle);
+    const statusEl = document.getElementById('wifi-adv-status');
+    if (statusEl) statusEl.className = 'wifi-scan-status';
+    setWifiConfigButtonsEnabled(true);
+
+    const ssidInp = document.getElementById('wifi-adv-ap-ssid');
+    const passInp = document.getElementById('wifi-adv-ap-pass');
+    if (ssidInp && !ssidInp.dataset.userEdited) {
+        ssidInp.value = store.wifi.apSsid || '';
+        ssidInp.placeholder = store.wifi.apSsid ? '' : '(firmware default)';
+    }
+    if (passInp && !passInp.dataset.userEdited) {
+        passInp.value = store.wifi.apPass || '';
+        passInp.placeholder = store.wifi.apPass ? '' : '(firmware default)';
+    }
+
+    renderStaSection();
+}
+
+// ─── STA connect flow: real "connecting..." feedback + failure detection ──
+// Firmware now pushes an unsolicited CMD_WIFI_GET_STATUS frame the moment
+// the async STA connect attempt actually resolves (success, or timed-out
+// and fell back to AP — see ParamController::pollWifiStatus() in firmware),
+// so updateWifiUI() picks the result up as soon as it arrives. The polling
+// below (serial transport only) and the 20s timeout are just a safety net
+// in case that push is ever missed/delayed.
+
+function ensureWifiConnectStatusEl() {
+    let el = document.getElementById('wifi-connect-status');
+    if (el) return el;
+    const box = document.getElementById('wifi-connect-box');
+    if (!box) return null;
+    el = document.createElement('div');
+    el.id = 'wifi-connect-status';
+    el.style.display = 'none';
+    el.style.textAlign = 'center';
+    el.style.padding = '14px 4px 4px';
+    box.appendChild(el);
+    return el;
+}
+
+function setWifiConnectFormVisible(visible) {
+    ['wifi-pass', 'btn-wifi-connect-submit', 'wifi-pass-eye-toggle'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = visible ? '' : 'none';
+    });
+    const statusEl = document.getElementById('wifi-connect-status');
+    if (statusEl && visible) statusEl.style.display = 'none';
+}
+
+function startStaConnectWait(ssid) {
+    setWifiConnectFormVisible(false);
+    awaitingStaReboot = true;
+    awaitingStaSsid = ssid;
+
+    const statusEl = ensureWifiConnectStatusEl();
+    if (statusEl) {
+        statusEl.innerHTML = `
+            <div class="scan-spinner" style="width:30px; height:30px; margin:0 auto 10px;"></div>
+            <div style="font-weight:600;">Saving config — restarting to join "${ssid}"...</div>
+            <div class="scan-subtitle" style="margin:4px 0 0; font-size:12px;">The device restarts to apply new WiFi settings — this can take up to 15 seconds.</div>
+        `;
+        statusEl.style.display = 'block';
+    }
+    showStatus(`Restarting to join ${ssid}...`, 'info');
+
+    clearInterval(staConnectPollHandle);
+    clearTimeout(staConnectTimeoutHandle);
+
+    // Over Serial the COM port typically stays enumerated through the
+    // restart, so keep polling — it'll just go quiet for a few seconds
+    // while the board boots. Over WebSocket there's nothing to poll: the
+    // device's own AP/IP disappears the moment it restarts into STA mode,
+    // so we rely on the onDisconnected hook (see wsAPI.onDisconnected below)
+    // instead of polling a socket that's about to die.
+    if (store.system.transport === 'serial') {
+        staConnectPollHandle = setInterval(() => sendFrame(buildWifiGetStatus()), 2000);
+    }
+
+    // Reboot (~2-3s) + firmware's own 10s STA connect timeout + margin.
+    staConnectTimeoutHandle = setTimeout(() => {
+        if (awaitingStaReboot) showStaConnectFailed(ssid);
+    }, 20000);
+}
+
+function showStaConnectFailed(ssid) {
+    clearInterval(staConnectPollHandle);
+    staConnectPollHandle = null;
+    staConnectTimeoutHandle = null;
+    awaitingStaReboot = false;
+
+    const statusEl = ensureWifiConnectStatusEl();
+    if (statusEl) {
+        statusEl.innerHTML = `
+            <div style="color:var(--accent-red); font-weight:700; margin-bottom:8px;">Couldn't connect to "${ssid}"</div>
+            <div class="scan-subtitle" style="font-size:13px; margin-bottom:14px;">
+                Double-check the password, or move closer to the router and try again.
+            </div>
+            <button id="wifi-connect-retry" class="btn btn-primary btn-sm">Try Again</button>
+        `;
+        statusEl.style.display = 'block';
+        document.getElementById('wifi-connect-retry')?.addEventListener('click', () => {
+            setWifiConnectFormVisible(true);
+            const passInp = document.getElementById('wifi-pass');
+            if (passInp) { passInp.value = ''; passInp.focus(); }
+        });
+    }
+    showStatus(`Couldn't connect to ${ssid}`, 'error');
+}
+
+/** Shown when the WebSocket connection drops right after submitting new STA
+ *  credentials — expected, since the device's own AP disappears once it
+ *  restarts and joins the new network. We can't poll a dead socket, so this
+ *  is the best guidance available: tell the user where to look next. */
+function showStaRebootReconnectMessage(ssid) {
+    awaitingStaReboot = false;
+    clearInterval(staConnectPollHandle);
+    clearTimeout(staConnectTimeoutHandle);
+    staConnectPollHandle = null;
+    staConnectTimeoutHandle = null;
+
+    const statusEl = ensureWifiConnectStatusEl();
+    if (statusEl) {
+        statusEl.innerHTML = `
+            <div style="font-weight:700; margin-bottom:8px;">Device is restarting</div>
+            <div class="scan-subtitle" style="font-size:13px; line-height:1.6;">
+                It's switching to join <strong style="color:white;">${ssid}</strong>.
+                Reconnect this device to that WiFi network, then open:<br/>
+                <strong style="color: var(--accent-green);">http://esp32-dsp.local</strong>
+            </div>
+        `;
+        statusEl.style.display = 'block';
+    }
+    showStatus('Device restarting — reconnect to your WiFi network', 'info');
+}
+
+function clearStaConnectWait() {
+    clearInterval(staConnectPollHandle);
+    clearTimeout(staConnectTimeoutHandle);
+    staConnectPollHandle = null;
+    staConnectTimeoutHandle = null;
+    awaitingStaReboot = false;
+}
+
+/** Wraps a password input so a 👁 toggle sits inside it, matching the AP
+ *  password field's style (rather than a separate button off to the side). */
+function addPasswordEyeToggle(inputId) {
+    const input = document.getElementById(inputId);
+    if (!input || input.dataset.eyeAdded) return;
+    input.dataset.eyeAdded = '1';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'wifi-scan-input-wrap';
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+    // Leave room so typed text doesn't run under the eye button.
+    input.style.paddingRight = '34px';
+
+    const eyeBtn = document.createElement('button');
+    eyeBtn.type = 'button';
+    eyeBtn.id = inputId + '-eye-toggle';
+    eyeBtn.className = 'wifi-scan-eye';
+    eyeBtn.textContent = '👁';
+    eyeBtn.title = 'Show/hide password';
+    wrap.appendChild(eyeBtn);
+
+    eyeBtn.addEventListener('click', () => {
+        input.type = input.type === 'password' ? 'text' : 'password';
+    });
 }
 
 function renderWifiList() {
@@ -2488,6 +3106,8 @@ function renderWifiList() {
         li.innerHTML = `<span>${net.ssid}</span> <span style="color:var(--text-dim); font-size:12px;">${net.rssi} dBm ${net.encrypted ? '🔒' : ''}</span>`;
         
         li.addEventListener('click', () => {
+            clearStaConnectWait();
+            setWifiConnectFormVisible(true);
             document.getElementById('wifi-connect-box').style.display = 'block';
             document.getElementById('wifi-selected-ssid-label').textContent = `Connect to ${net.ssid}`;
             document.getElementById('wifi-selected-ssid').value = net.ssid;
@@ -2528,12 +3148,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('btn-wifi-config').addEventListener('click', () => {
         document.getElementById('scan-overlay').classList.remove('hidden');
-        document.getElementById('scan-auto-content').style.display = 'none';
-        document.getElementById('scan-manual-content').style.display = 'none';
-        document.getElementById('scan-wifi-content').style.display = 'block';
+        switchLobbyScreen('scan-wifi-content');
         document.getElementById('wifi-network-list').innerHTML = '';
-        
+
+        // Clear any stale "Connecting.../Couldn't connect" UI left over from
+        // a previous attempt — without this, reopening the screen after a
+        // connect had already succeeded (or failed) elsewhere kept showing
+        // the old state forever, since nothing here used to reset it.
+        clearStaConnectWait();
+        setWifiConnectFormVisible(true);
+        const connectBox = document.getElementById('wifi-connect-box');
+        if (connectBox) connectBox.style.display = 'none';
+        const connectStatusEl = document.getElementById('wifi-connect-status');
+        if (connectStatusEl) connectStatusEl.style.display = 'none';
+
         sendFrame(buildWifiGetStatus());
+        requestWifiConfig();
         
         if (store.wifi.mode === 'STA' && store.wifi.ip !== '0.0.0.0') {
             document.getElementById('wifi-scanning-text').style.display = 'none';
@@ -2683,7 +3313,15 @@ document.addEventListener('DOMContentLoaded', () => {
     window.serialAPI.onDisconnected(() => {
         if (store.system.transport !== 'serial') return; // Ignore if we switched transports
         store.setConnected(false); updateStatusUI();
-        showStatus('Serial Disconnected', 'error');
+        if (awaitingStaReboot) {
+            // Expected — device is restarting to apply the new WiFi config.
+            // Keep the "Saving config..." UI up; startAutoScan() below will
+            // pick it back up once the COM port re-enumerates, and the
+            // connect-wait timeout/poll (already running) takes it from there.
+            showStatus('Device restarting...', 'info');
+        } else {
+            showStatus('Serial Disconnected', 'error');
+        }
         manualMode = false; startAutoScan();
     });
 
@@ -2693,6 +3331,16 @@ document.addEventListener('DOMContentLoaded', () => {
         window.wsAPI.onDisconnected(() => {
             if (store.system.transport !== 'websocket') return;
             store.setConnected(false); updateStatusUI();
+
+            if (awaitingStaReboot) {
+                // Expected — the device's own AP just disappeared because it
+                // restarted into STA mode. There's no old address left to
+                // reconnect to, so don't auto-reconnect; tell the user where
+                // to look instead.
+                showStaRebootReconnectMessage(awaitingStaSsid);
+                return;
+            }
+
             showStatus('WiFi Disconnected', 'error');
             
             if (isBrowser) {
@@ -2712,6 +3360,14 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('scan-wifi-content').style.display = 'block';
         document.getElementById('wifi-network-list').innerHTML = '';
         document.getElementById('wifi-scanning-text').style.display = 'block';
+
+        clearStaConnectWait();
+        setWifiConnectFormVisible(true);
+        const connectBox = document.getElementById('wifi-connect-box');
+        if (connectBox) connectBox.style.display = 'none';
+        const connectStatusEl = document.getElementById('wifi-connect-status');
+        if (connectStatusEl) connectStatusEl.style.display = 'none';
+
         sendFrame(buildWifiGetStatus());
         sendFrame(buildWifiScan());
     });
@@ -2723,6 +3379,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('btn-wifi-back')?.addEventListener('click', () => {
+        clearStaConnectWait();
         if (store.system.connected) {
             document.getElementById('scan-overlay').classList.add('hidden');
         } else {
@@ -2730,23 +3387,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('btn-wifi-config')?.addEventListener('click', () => {
-        document.getElementById('scan-overlay').classList.remove('hidden');
-        
-        // Pre-check state to avoid flicker
-        if (store.wifi.mode === 'STA' && store.wifi.ip && store.wifi.ip !== '0.0.0.0') {
-            switchLobbyScreen('scan-wifi-connected');
-        } else {
-            switchLobbyScreen('scan-wifi-content');
-        }
-
-        document.getElementById('wifi-network-list').innerHTML = '';
-        document.getElementById('wifi-scanning-text').style.display = 'block';
-        sendFrame(buildWifiGetStatus());
-        sendFrame(buildWifiScan());
-    });
-
     document.getElementById('btn-wifi-connect-cancel')?.addEventListener('click', () => {
+        clearStaConnectWait();
+        setWifiConnectFormVisible(true);
         document.getElementById('wifi-connect-box').style.display = 'none';
     });
 
@@ -2754,16 +3397,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const ssid = document.getElementById('wifi-selected-ssid').value;
         const pass = document.getElementById('wifi-pass').value;
         sendFrame(buildWifiSetSTA(ssid, pass));
-        isPendingStaReboot = true;
-        document.getElementById('wifi-connect-box').style.display = 'none';
-        showStatus('Sending WiFi credentials...', 'info');
+        startStaConnectWait(ssid);
     });
 
-    document.getElementById('btn-wifi-set-ap')?.addEventListener('click', () => {
-        if(confirm("Switch back to AP Mode?")) {
-            sendFrame(buildWifiSetAP());
-        }
-    });
+    // "Switch to AP mode" buttons removed — forgetting the saved network
+    // (Advanced WiFi Settings → "Forget this network") already does this,
+    // and is clearer about what it actually does.
+    document.getElementById('btn-wifi-set-ap')?.remove();
+    document.getElementById('btn-wifi-connected-ap')?.remove();
+
+    addPasswordEyeToggle('wifi-pass');
 
     document.getElementById('btn-wifi-ws-connect')?.addEventListener('click', () => {
         if (store.wifi.ip && store.wifi.ip !== '0.0.0.0') {
@@ -2779,18 +3422,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('btn-wifi-connected-ap')?.addEventListener('click', () => {
-        if(confirm("Switch back to AP Mode?")) {
-            sendFrame(buildWifiSetAP());
-        }
-    });
-
     // Build UI
     buildAccordionModules();
     updateStatusUI();
-
-    // EQ Graph
-    eqGraph = null;
 
     store.on('eq:band-selected', (index) => {
         document.querySelectorAll('.eq-band-row').forEach((row, i) => row.classList.toggle('selected', i === index));
@@ -2802,9 +3436,6 @@ document.addEventListener('DOMContentLoaded', () => {
             syncDynEqBand(false, index);
         } else if (store.activeEq === 'dynHigh') {
             syncDynEqBand(true, index);
-        } else if (store.activeEq === 'autoEq') {
-            syncAutoEqToHardware();
-            renderAutoEqMeters();
         } else {
             const mid = store.getActiveEqModuleId();
             syncEqBand(mid, index);
@@ -2813,10 +3444,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Scope DOM updates to the active accordion only
         const accId = store.activeEq === 'eq1' ? MODULE.EQ_DSP_1 :
             store.activeEq === 'eq2' ? MODULE.EQ_DSP_2 :
-                store.activeEq === 'dynLow' ? 'DYNEQ_LOW' :
-                    store.activeEq === 'dynHigh' ? 'DYNEQ_HIGH' :
-                        store.activeEq === 'autoEq' ? MODULE.AUTO_EQ :
-                            store.activeEq === 'eqLeft' ? 'EQ_LEFT' : 'EQ_RIGHT';
+                store.activeEq === 'preEq' ? MODULE.PRE_EQ :
+                    store.activeEq === 'dynLow' ? 'DYNEQ_LOW' :
+                        store.activeEq === 'dynHigh' ? 'DYNEQ_HIGH' :
+                                store.activeEq === 'eqLeft' ? 'EQ_LEFT' : 'EQ_RIGHT';
         const activeAcc = document.querySelector(`.accordion[data-module-id="${accId}"].open`);
         if (!activeAcc) return;
 
@@ -2839,10 +3470,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Handle structural state changes (e.g. presets loaded, bands added/removed)
     const rebuildStructural = () => {
-        unmountGraph();
+        unmountGraph(); // destroy all graph instances (full rebuild)
 
-        const rebuildIds = [MODULE.ISF_1, MODULE.ISF_2, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
-        let activeAcc = null;
+        const rebuildIds = [MODULE.ISF_1, MODULE.ISF_2, MODULE.EQ_DSP_1, MODULE.EQ_DSP_2, MODULE.PRE_EQ, 'DYNEQ_LOW', 'DYNEQ_HIGH', 'EQ_LEFT', 'EQ_RIGHT', MODULE.DRC];
+        const openEqAccs = []; // collect all open EQ accordions to remount
 
         rebuildIds.forEach(id => {
             const acc = document.querySelector(`.accordion[data-module-id="${id}"]`);
@@ -2851,35 +3482,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 body.innerHTML = '';
                 const mod = ACCORDION_MODULES.find(m => String(m.id) === String(id));
                 if (mod) buildModuleBody(body, mod);
-                activeAcc = acc;
+                if (String(id) !== String(MODULE.DRC)) {
+                    openEqAccs.push(acc);
+                }
             }
         });
 
-        if (activeAcc && activeAcc.dataset.moduleId !== String(MODULE.DRC)) {
-            mountGraphToAccordion(activeAcc);
-        }
+        // Remount graphs for all open EQ accordions
+        openEqAccs.forEach(acc => mountGraphToAccordion(acc));
     };
 
     store.on('state:loaded', rebuildStructural);
     store.on('eq:structure-changed', rebuildStructural);
     store.on('isf:instance-changed', (which) => {
         store.graphMode = which;
-        if (eqGraph) eqGraph.redraw ? eqGraph.redraw() : null;
+        // markDirty on all open ISF graph instances
+        eqGraphs.forEach(g => g.markDirty ? g.markDirty() : null);
     });
+    
 
-    const btn1 = document.getElementById(`preset-0`);
-    const btn2 = document.getElementById(`preset-1`);
-    const btn3 = document.getElementById(`preset-2`);
-    const btn4 = document.getElementById(`preset-3`);
-    btn1.addEventListener('click', () => { buildPresetLoad(0); });
-    btn2.addEventListener('click', () => { buildPresetLoad(1); });
-    btn3.addEventListener('click', () => { buildPresetLoad(2); });
-    btn4.addEventListener('click', () => { buildPresetLoad(3); });
-
-    btn1.addEventListener('contextmenu', (e) => { buildPresetSave(e, 0); });
-    btn2.addEventListener('contextmenu', (e) => { buildPresetSave(e, 1); });
-    btn3.addEventListener('contextmenu', (e) => { buildPresetSave(e, 2); });
-    btn4.addEventListener('contextmenu', (e) => { buildPresetSave(e, 3); });
+    for (let btnIdx = 0; btnIdx < 5; btnIdx++) {
+        const btn = document.getElementById(`preset-${btnIdx}`);
+        btn.addEventListener('click', () => { buildPresetLoad(btnIdx); });
+        btn.addEventListener('contextmenu', (e) => { buildPresetSave(e, btnIdx); });
+    }
 
     document.getElementById('btn-save-preset').addEventListener('click', () => {
         const idx = store.system.activePreset;
@@ -2888,16 +3514,25 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     store.on('preset:active-changed', (idx) => {
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < 5; i++) {
             const btn = document.getElementById(`preset-${i}`);
             if (btn) btn.classList.toggle('active', i === idx);
         }
     });
 
+    initBatteryUI();
+    initWifiStatusBadge();
+    initWifiScanColumns();
+
     setInterval(() => {
         if (!store.system.connected) return;
         sendFrame(buildFrame(CMD.GET_REPORT_CPU_USAGE, MODULE.SYSTEM));
     }, 2000);
+
+    setInterval(() => {
+        if (!store.system.connected) return;
+        sendFrame(buildGetBatteryStatus());
+    }, 3000);
 
     setInterval(() => {
         if (!store.system.connected) return;
@@ -2920,7 +3555,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isOpen = document.querySelector(`.accordion[data-module-id="${domId}"].open`);
             if (isOpen) sendFrame(buildGetModuleMeter(moduleId));
         });
-    }, 300);
+    }, 100);
 
     if (isBrowser) {
         // Running in mobile browser, connect directly via WebSocket

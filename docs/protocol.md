@@ -29,35 +29,72 @@ Each packet (Frame) follows this structure:
 
 ### 2. Command Opcodes
 
+Below are the primary command opcodes used by the UART/WebSocket control protocol (values from include/config.h).
+
 | Opcode | Name | Description |
 |--------|------|-------------|
-| **0x01** | SET_PARAM | Set a specific parameter index to a value |
-| **0x03** | ENABLE_MODULE | Enable processing for a module |
-| **0x04** | DISABLE_MODULE | Bypass processing for a module |
-| **0x05** | SET_EQ_BAND | Set EQ band parameters (Freq, Gain, Q) |
-| **0x06** | SAVE_PRESET | Save current state to NVS slot (0-7) |
-| **0x07** | LOAD_PRESET | Load state from NVS slot |
-| **0x09** | GET_ALL_STATE | Request full state dump (triggers batch) |
-| **0x20** | WIFI_SCAN | Scan for nearby WiFi networks |
-| **0x21** | WIFI_SET_STA | Configure Station credentials |
-| **0x24** | WIFI_GET_STATUS | Get current IP/RSSI/SSID |
-| **0x32** | GET_SYSTEM_ALIVE | Heartbeat / Ping |
+| **0x01** | CMD_SET_PARAM | Set a specific parameter index to a value |
+| **0x02** | CMD_ENABLE_MODULE | Enable processing for a module |
+| **0x03** | CMD_DISABLE_MODULE | Disable (bypass) processing for a module |
+| **0x04** | CMD_SET_EQ_BAND | Set EQ band parameters (Freq, Gain, Q) |
+| **0x05** | CMD_SET_DYNEQ_LOW_BAND | Dynamic EQ: set low band params |
+| **0x06** | CMD_SET_DYNEQ_HIGH_BAND | Dynamic EQ: set high band params |
+| **0x07** | CMD_SET_DYNEQ_THRESH | Dynamic EQ threshold configuration |
+| **0x08** | CMD_SAVE_PRESET | Save current state to NVS slot |
+| **0x09** | CMD_LOAD_PRESET | Load state from NVS slot |
+| **0x0A** | CMD_GET_ALL_STATE | Request full state dump (batch response) |
+| **0x0B** | CMD_SET_ISF_PRESET | Set ISF preset payload |
+| **0x0C** | CMD_SET_ISF_BAND_PARAMS | Set ISF per-band params for a preset |
+| **0x0D** | CMD_GET_ISF_STATE | Request runtime ISF state |
+| **0x0E** | CMD_SET_ISF_CONFIG | Configure ISF global params (RMS, slew, lookahead) |
+| **0x10** | CMD_WIFI_SCAN | Start WiFi scan (returns SSID list) |
+| **0x11** | CMD_WIFI_SET_STA | Configure Station credentials (ssid/pass/ip) |
+| **0x12** | CMD_WIFI_SET_AP | Switch to AP mode |
+| **0x13** | CMD_WIFI_GET_STATUS | Query WiFi status (mode/IP/SSID/RSSI) |
+| **0x14** | CMD_WIFI_GET_CONFIG | Get stored WiFi config |
+| **0x15** | CMD_WIFI_SET_AP_CONFIG | Configure AP parameters |
+| **0x16** | CMD_WIFI_CLEAR_STA | Clear stored STA credentials |
+| **0x39** | CMD_GET_REPORT_CPU_USAGE | Request CPU usage report |
+| **0x40** | CMD_SEND_REPORT_CPU_USAGE | Trigger CPU usage send |
+| **0x4B** | CMD_REPORT_ENABLE_MASK | Enable/disable reporting mask |
+| **0x4C** | CMD_GET_BATTERY_STATUS | Request battery status |
+| **0x4A** | CMD_GET_CURRENT_PRESET_INDEX | Query active preset index |
+| **0x41** | CMD_REPORT_ISF | (Report) ISF runtime data |
+| **0x42** | CMD_REPORT_ISF_CONFIG | (Report) ISF config |
+| **0x43** | CMD_REPORT_ISF_PRESET | (Report) ISF preset metadata |
+| **0x44** | CMD_REPORT_ISF_BAND_PER_PRESET | (Report) ISF bands per preset |
+| **0x45** | CMD_REPORT_DYNBASS | (Report) Dynamic Bass state |
+| **0x46** | CMD_REPORT_DYNEQ | (Report) Dynamic EQ state |
+| **0x47** | CMD_REPORT_COMPANDER | (Report) Compander state |
+| **0x48** | CMD_REPORT_DRC | (Report) DRC state |
+| **0x49** | CMD_GET_MODULE_METER | Query per-module meter / levels |
+| **0x4D** | CMD_REPORT_BATTERY | (Report) Battery level |
+| **0xFE** | CMD_ACK_RESPONSE | ACK response code |
+| **0xFF** | CMD_ERROR | Error response |
 
 ---
 
 ### 3. Module IDs
 
+Module ID assignments (from include/config.h). Use these values as the `MOD_ID` byte in frames.
+
 | ID | Module Name | Primary Parameters |
 |----|-------------|--------------------|
-| **0x01** | Compander | Threshold, Ratios, Attack/Release |
-| **0x02** | Exciter | Cutoff Frequency, Mix |
-| **0x03** | Dynamic Bass | Gain, Harmonic Intensity |
-| **0x06** | Dynamic EQ | Thresholds, HPF/LPF |
-| **0x07** | EQ1 (Main) | 10-band Parametric EQ |
-| **0x08** | EQ2 (Tone) | 10-band Post-EQ |
-| **0x09** | DRC | Compression Curves |
-| **0x0A** | Volume | Master Gain (dB) |
-| **0xFF** | System | WiFi, Presets, Telemetry |
+| **0x01** | PRE_GAIN | Input pre-gain stage |
+| **0x02** | COMPANDER | Threshold, Ratios, Attack/Release |
+| **0x03** | EXCITER | Cutoff Frequency, Mix |
+| **0x04** | DYNAMIC_BASS | Cutoff, Boost, Zone thresholds |
+| **0x05** | DYNAMIC_EQ | Level thresholds, band maps |
+| **0x06** | EQ_DSP_1 | 10-band Parametric EQ (main) |
+| **0x07** | EQ_DSP_2 | 10-band Post/ Tone EQ |
+| **0x08** | DRC | Multi-band compressor parameters |
+| **0x09** | POST_GAIN | Master output gain |
+| **0x0A** | LEFTRIGHT_EQ | Independent L/R 10-band EQs |
+| **0x0B** | ISF_1 | Index Selectable Filter (instance 1) |
+| **0x0C** | ISF_2 | Index Selectable Filter (instance 2) |
+| **0x0D** | PRE_EQ | 3-band tone control (Bass/Mid/Treble) |
+| **0x0E** | MMPARAM_GAIN | Misc param gain module |
+| **0xF0** | SYSTEM | WiFi, Presets, Telemetry, System commands |
 
 ---
 

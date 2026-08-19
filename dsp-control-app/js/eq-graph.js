@@ -10,6 +10,15 @@
  * - Individual + combined response curves
  * - Smooth Bézier rendering
  * - 60fps when dirty, idle otherwise
+ *
+ * Performance model:
+ * - Band curves are cached per-band (Float32Array). Recomputed only when that
+ *   band's params change. Cache key = JSON.stringify of {type,freq,gain,q}.
+ * - Combined curve is recomputed only when the band-set changes structurally
+ *   or any param changes.
+ * - During drag, only the dragged band + combined curve are recomputed.
+ * - A single rAF loop drives rendering; event handlers only set _dirty=true.
+ *   No secondary rAF paths.
  */
 
 import { store } from './store.js';
@@ -22,6 +31,59 @@ const FREQ_MAX = 20000;
 const DB_MIN = -24;
 const DB_MAX = 24;
 const NUM_POINTS = 512;
+
+// ─── Curve Cache ─────────────────────────────────────────────────────────────
+// Keyed per-band. Survives across frames; entries evicted when band disabled.
+
+function _bandCacheKey(band) {
+    // Fast string key — avoids JSON.stringify overhead
+    return `${band.type}|${band.freq}|${band.gain}|${band.q}`;
+}
+
+class CurveCache {
+    constructor() {
+        this._bandCurves    = new Map(); // bandIndex → { key, curve: Float32Array }
+        this._combined      = null;      // Float32Array | null
+        this._combinedKey   = '';        // hash of all active band params
+    }
+
+    /** Return cached band curve or null if stale/missing. */
+    getBand(idx, band) {
+        const entry = this._bandCurves.get(idx);
+        if (!entry) return null;
+        return entry.key === _bandCacheKey(band) ? entry.curve : null;
+    }
+
+    setBand(idx, band, curve) {
+        this._bandCurves.set(idx, { key: _bandCacheKey(band), curve });
+    }
+
+    evictBand(idx) {
+        this._bandCurves.delete(idx);
+    }
+
+    /** Combined curve valid only when combinedKey matches. */
+    getCombined(key) {
+        return this._combinedKey === key ? this._combined : null;
+    }
+
+    setCombined(key, curve) {
+        this._combinedKey = key;
+        this._combined    = curve;
+    }
+
+    invalidateCombined() {
+        this._combined    = null;
+        this._combinedKey = '';
+    }
+
+    /** Call when the entire EQ target switches (active EQ changes). */
+    clear() {
+        this._bandCurves.clear();
+        this._combined    = null;
+        this._combinedKey = '';
+    }
+}
 
 // Grid frequencies
 const FREQ_MARKERS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
@@ -51,7 +113,13 @@ const BAND_COLORS = [
 ];
 
 export class EQGraph {
-    constructor(canvasOrId) {
+    /**
+     * @param {HTMLCanvasElement|string} canvasOrId
+     * @param {string} moduleId  — e.g. String(MODULE.EQ_DSP_1), 'DYNEQ_LOW', 'isf1', etc.
+     *                             Used to determine what this instance renders,
+     *                             independent of store.graphMode/activeEq globals.
+     */
+    constructor(canvasOrId, moduleId = '') {
         if (typeof canvasOrId === 'string') {
             this.canvas = document.getElementById(canvasOrId);
         } else {
@@ -59,6 +127,9 @@ export class EQGraph {
         }
         this.ctx = this.canvas.getContext('2d');
         this.dpr = window.devicePixelRatio || 1;
+
+        // Which accordion this graph belongs to — drives what gets rendered
+        this._moduleId = moduleId;
 
         // Graph area (padded)
         this.pad = { left: 55, right: 20, top: 20, bottom: 35 };
@@ -71,11 +142,19 @@ export class EQGraph {
         this.mouseX = 0;
         this.mouseY = 0;
 
-        // Dirty flag
+        // Dirty flag — single rAF loop, no secondary paths
         this._dirty = true;
         this._raf = null;
         this._resizeObserver = null;
         this._boundHandlers = {};
+
+        // Curve caches — one for normal EQ, one for ISF (per instance+preset)
+        this._eqCache  = new CurveCache();
+        this._isfCache = new Map(); // `${which}:${pIdx}` → CurveCache
+
+        // Pre-computed x-positions for NUM_POINTS frequencies (rebuilt on resize)
+        this._xLut = null;
+        this._xLutW = 0; // gw when LUT was built
 
         this._setupResize();
         this._setupMouse();
@@ -111,6 +190,73 @@ export class EQGraph {
         return DB_MAX - (y - this.gy) / this.gh * (DB_MAX - DB_MIN);
     }
 
+    // ─── X LUT (pre-computed pixel positions) ───────────────────
+
+    /** Rebuild x-position lookup table when graph width changes. */
+    _rebuildXLut() {
+        const gw = this.gw;
+        if (this._xLut && this._xLutW === gw) return; // still valid
+        this._xLut = new Float32Array(NUM_POINTS);
+        for (let i = 0; i < NUM_POINTS; i++) {
+            this._xLut[i] = this.freqToX(freqAtIndex(i, NUM_POINTS));
+        }
+        this._xLutW = gw;
+    }
+
+    // ─── Per-instance mode resolution ───────────────────────────
+    // Each EQGraph knows what to render based on its own _moduleId,
+    // NOT on the global store.graphMode / store.activeEq.
+
+    /** Returns the render mode string for this instance. */
+    _getMyGraphMode() {
+        switch (this._moduleId) {
+            case 'DYNEQ_LOW':
+            case 'DYNEQ_HIGH':  return 'dynamicEq';
+            case 'isf1':        return 'isf1';
+            case 'isf2':        return 'isf2';
+            case 'PRE_EQ':       return 'preEq';
+            default:            return 'eq';
+        }
+    }
+
+    /** Returns the EQ state object this instance should read/write. */
+    _getMyEqState() {
+        switch (this._moduleId) {
+            case 'DYNEQ_LOW':   return store.dynamicEq.eqLow;
+            case 'DYNEQ_HIGH':  return store.dynamicEq.eqHigh;
+            case 'EQ_LEFT':     return store.leftRightEq.eqLeft;
+            case 'EQ_RIGHT':    return store.leftRightEq.eqRight;
+            case 'EQ_DSP_1':    return store.eq1;
+            case 'EQ_DSP_2':    return store.eq2;
+            case 'PRE_EQ':      return store.preEq;
+            case 'isf1':
+            case 'isf2':        return null;
+            default:            return null;
+        }
+    }
+
+    /** ISF instance key for this graph ('isf1' | 'isf2' | null). */
+    _getMyIsfWhich() {
+        if (this._moduleId === 'isf1') return 'isf1';
+        if (this._moduleId === 'isf2') return 'isf2';
+        return null;
+    }
+
+    // ─── ISF Cache Accessor ──────────────────────────────────────
+
+    _getIsfCache(which, pIdx) {
+        const key = `${which}:${pIdx}`;
+        if (!this._isfCache.has(key)) this._isfCache.set(key, new CurveCache());
+        return this._isfCache.get(key);
+    }
+
+    _clearIsfCache(which) {
+        // Evict all presets for this instance
+        for (const k of this._isfCache.keys()) {
+            if (k.startsWith(`${which}:`)) this._isfCache.delete(k);
+        }
+    }
+
     // ─── Rendering ───────────────────────────────────────────────
 
     markDirty() { this._dirty = true; }
@@ -133,6 +279,9 @@ export class EQGraph {
         // Skip rendering if canvas has no dimensions
         if (w < 10 || h < 10) return;
 
+        // Rebuild x-LUT if graph width changed (resize)
+        this._rebuildXLut();
+
         const ctx = this.ctx;
         ctx.save();
         ctx.clearRect(0, 0, w, h);
@@ -143,16 +292,16 @@ export class EQGraph {
 
         this._drawGrid(ctx);
 
-        const isIsf = store._activeIsfInstance && 
-            (store.activeEq === '' || !store.activeEq) &&
-            (store.graphMode === 'isf1' || store.graphMode === 'isf2');
+        // Each instance renders its own content, not the global graphMode
+        const myMode = this._getMyGraphMode();
 
-        if (store.graphMode === 'dynamicEq') {
+        if (myMode === 'dynamicEq') {
             this._drawDynEqOverlay(ctx);
             this._drawBandCurves(ctx);
             this._drawNodes(ctx);
-        } else if (store.graphMode === 'isf1' || store.graphMode === 'isf2') {
-            this._drawIsfOverlay(ctx, store.graphMode);
+        } else if (myMode === 'isf1' || myMode === 'isf2') {
+            this._drawIsfOverlay(ctx, myMode);
+            this._drawBandCurves(ctx);
             this._drawNodes(ctx);
         } else {
             this._drawBandCurves(ctx);
@@ -190,7 +339,7 @@ export class EQGraph {
             const preset = isf.presets[p];
             const col = colors[p % colors.length];
             this._drawOverlayCurve(ctx, preset.bands.slice(0, preset.numBands), col,
-                `P${p+1}`, false, preset.pregainDb || 0);
+                `P${p+1}`, false, preset.pregainDb || 0, `${which}:overlay:${p}`);
         }
 
         // Draw B (next) curve
@@ -198,31 +347,43 @@ export class EQGraph {
             const presetB = isf.presets[activeB];
             const colB = colors[activeB % colors.length];
             this._drawOverlayCurve(ctx, presetB.bands.slice(0, presetB.numBands), colB,
-                `P${activeB+1}`, false, presetB.pregainDb || 0);
+                `P${activeB+1}`, false, presetB.pregainDb || 0, `${which}:overlay:${activeB}`);
         }
 
         // Draw A (current) curve — always on top, thick
         const presetA = isf.presets[activeA];
         const colA = colors[activeA % colors.length];
         this._drawOverlayCurve(ctx, presetA.bands.slice(0, presetA.numBands), colA,
-            `P${activeA+1}`, true, presetA.pregainDb || 0);
+            `P${activeA+1}`, true, presetA.pregainDb || 0, `${which}:overlay:${activeA}`);
 
         // Draw selected preset (if different from active A) with dashed highlight
         const selP = store.getActiveIsfPreset ? store.getActiveIsfPreset() : 0;
         if (selP !== activeA) {
             const presetSel = isf.presets[selP];
             const colSel = colors[selP % colors.length];
-            // Draw with medium weight and no fill
-            const combined = computeCombinedCurve(
-                presetSel.bands.slice(0, presetSel.numBands),
-                DSP_SAMPLE_RATE, NUM_POINTS, presetSel.pregainDb || 0);
+            // Reuse the overlay cache for this preset
+            const cacheId = `overlay:${which}:overlay:${selP}`;
+            let selKey = String(presetSel.pregainDb || 0);
+            for (let b = 0; b < presetSel.numBands; b++) {
+                const bd = presetSel.bands[b];
+                if (bd.enabled) selKey += `|${b}:${_bandCacheKey(bd)}`;
+            }
+            if (!this._isfCache.has(cacheId)) this._isfCache.set(cacheId, new CurveCache());
+            const selCache = this._isfCache.get(cacheId);
+            let combined = selCache.getCombined(selKey);
+            if (!combined) {
+                combined = computeCombinedCurve(
+                    presetSel.bands.slice(0, presetSel.numBands),
+                    DSP_SAMPLE_RATE, NUM_POINTS, presetSel.pregainDb || 0);
+                selCache.setCombined(selKey, combined);
+            }
+            const xLut = this._xLut;
             ctx.strokeStyle = colSel;
-            ctx.lineWidth = 2;
+            ctx.lineWidth   = 2;
             ctx.setLineDash([4, 3]);
             ctx.beginPath();
             for (let i = 0; i < NUM_POINTS; i++) {
-                const freq = freqAtIndex(i, NUM_POINTS);
-                const x = this.freqToX(freq);
+                const x = xLut[i];
                 const y = this.dbToY(combined[i]);
                 if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             }
@@ -235,11 +396,11 @@ export class EQGraph {
         ctx.textAlign = 'left';
         const lx = this.gx + 8;
         let ly = this.gy + 14;
-        for (let p = 0; p < Math.min(isf.numPresets, 5); p++) {
+        for (let p = 0; p < Math.min(isf.numPresets, 10); p++) {
             const col = colors[p % colors.length];
             ctx.fillStyle = col;
-            ctx.fillRect(lx + p * 52, ly - 8, 10, 3);
-            ctx.fillText(`P${p+1}: ${isf.presets[p].thresholdDb.toFixed(0)}dB`, lx + p * 52 + 14, ly);
+            ctx.fillRect(lx + p * 65, ly - 8, 10, 3);
+            ctx.fillText(`P${p+1}: ${isf.presets[p].thresholdDb.toFixed(0)}dB`, lx + p * 65 + 14, ly);
         }
     }
 
@@ -247,10 +408,10 @@ export class EQGraph {
         const dLow = store.dynamicEq.eqLow;
         const dHigh = store.dynamicEq.eqHigh;
 
-        // Combined curve for EQ Low (cyan)
-        this._drawOverlayCurve(ctx, dLow.bands, '#64ffda', 'EQ Low', store.activeEq === 'dynLow', dLow.pregain || 0);
-        // Combined curve for EQ High (orange)
-        this._drawOverlayCurve(ctx, dHigh.bands, '#ffa06b', 'EQ High', store.activeEq === 'dynHigh', dHigh.pregain || 0);
+        // Combined curve for EQ Low (cyan) — highlight if this instance IS dynLow
+        this._drawOverlayCurve(ctx, dLow.bands, '#64ffda', 'EQ Low', this._moduleId === 'DYNEQ_LOW', dLow.pregain || 0, 'dynLow');
+        // Combined curve for EQ High (orange) — highlight if this instance IS dynHigh
+        this._drawOverlayCurve(ctx, dHigh.bands, '#ffa06b', 'EQ High', this._moduleId === 'DYNEQ_HIGH', dHigh.pregain || 0, 'dynHigh');
 
         // Legend
         ctx.font = '11px Inter, sans-serif';
@@ -259,27 +420,49 @@ export class EQGraph {
 
         ctx.fillStyle = '#64ffda';
         ctx.fillRect(legendX, legendY - 8, 12, 3);
-        ctx.fillStyle = store.activeEq === 'dynLow' ? '#64ffda' : 'rgba(100,255,218,0.5)';
+        ctx.fillStyle = this._moduleId === 'DYNEQ_LOW' ? '#64ffda' : 'rgba(100,255,218,0.5)';
         ctx.textAlign = 'left';
         ctx.fillText('EQ Low', legendX + 16, legendY);
 
         ctx.fillStyle = '#ffa06b';
         ctx.fillRect(legendX + 80, legendY - 8, 12, 3);
-        ctx.fillStyle = store.activeEq === 'dynHigh' ? '#ffa06b' : 'rgba(255,160,107,0.5)';
+        ctx.fillStyle = this._moduleId === 'DYNEQ_HIGH' ? '#ffa06b' : 'rgba(255,160,107,0.5)';
         ctx.fillText('EQ High', legendX + 96, legendY);
     }
 
     // Legend
-    _drawOverlayCurve(ctx, bands, color, label, isActive, pregainDb = 0) {
-        const combined = computeCombinedCurve(bands, DSP_SAMPLE_RATE, NUM_POINTS, pregainDb);
+    /**
+     * _drawOverlayCurve: draws a combined response for an arbitrary band array.
+     * cacheKey uniquely identifies the owner (e.g. 'isf1:2' or 'dynLow').
+     * Curve is cached; recomputed only when band params change.
+     */
+    _drawOverlayCurve(ctx, bands, color, label, isActive, pregainDb = 0, cacheKey = label) {
+        // Build combined-key from bands + pregain
+        let key = String(pregainDb);
+        for (let b = 0; b < bands.length; b++) {
+            const bd = bands[b];
+            if (bd.enabled) key += `|${b}:${_bandCacheKey(bd)}`;
+        }
+
+        // Use a dedicated CurveCache per overlay (stored in _isfCache keyed by cacheKey)
+        const cacheId = `overlay:${cacheKey}`;
+        if (!this._isfCache.has(cacheId)) this._isfCache.set(cacheId, new CurveCache());
+        const cache = this._isfCache.get(cacheId);
+
+        let combined = cache.getCombined(key);
+        if (!combined) {
+            combined = computeCombinedCurve(bands, DSP_SAMPLE_RATE, NUM_POINTS, pregainDb);
+            cache.setCombined(key, combined);
+        }
+
+        const xLut  = this._xLut;
+        const zeroY = this.dbToY(0);
 
         // Fill
         ctx.beginPath();
-        const zeroY = this.dbToY(0);
         ctx.moveTo(this.gx, zeroY);
         for (let i = 0; i < NUM_POINTS; i++) {
-            const freq = freqAtIndex(i, NUM_POINTS);
-            ctx.lineTo(this.freqToX(freq), this.dbToY(combined[i]));
+            ctx.lineTo(xLut[i], this.dbToY(combined[i]));
         }
         ctx.lineTo(this.gx + this.gw, zeroY);
         ctx.closePath();
@@ -288,15 +471,13 @@ export class EQGraph {
 
         // Stroke
         ctx.strokeStyle = isActive ? color : `${color}66`;
-        ctx.lineWidth = isActive ? 2.5 : 1.5;
+        ctx.lineWidth   = isActive ? 2.5 : 1.5;
         ctx.setLineDash(isActive ? [] : [6, 4]);
         ctx.beginPath();
         for (let i = 0; i < NUM_POINTS; i++) {
-            const freq = freqAtIndex(i, NUM_POINTS);
-            const x = this.freqToX(freq);
+            const x = xLut[i];
             const y = this.dbToY(combined[i]);
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
         ctx.stroke();
         ctx.setLineDash([]);
@@ -341,30 +522,38 @@ export class EQGraph {
         ctx.strokeRect(this.gx, this.gy, this.gw, this.gh);
     }
 
+    /**
+     * Draw individual band curves.
+     * Each band curve is cached in a Float32Array keyed by {type,freq,gain,q}.
+     * Only the dragged band (or newly changed band) is recomputed.
+     */
     _drawBandCurves(ctx) {
-        // ISF mode: show bands of selected preset
-        if (store.graphMode === 'isf1' || store.graphMode === 'isf2') {
-            const isf = store.getIsfInstance(store.graphMode);
-            const pIdx = store.getActiveIsfPreset ? store.getActiveIsfPreset() : 0;
+        const xLut   = this._xLut;
+        const myMode = this._getMyGraphMode();
+
+        if (myMode === 'isf1' || myMode === 'isf2') {
+            const which  = myMode;
+            const isf    = store.getIsfInstance(which);
+            const pIdx   = store.getActiveIsfPreset ? store.getActiveIsfPreset() : 0;
             const preset = isf?.presets[pIdx];
             if (!preset) return;
-            const bands = preset.bands.filter(b => b.enabled);
-            if (bands.length === 0) return;
-            // draw individual band curves using normal logic via fakeEq
-            const fakeEq = { bands };
-            if (!fakeEq.bands.some(b => b.enabled)) return;
-            const eq2 = fakeEq;
-            eq2.bands.forEach((band, i) => {
-                if (!band.enabled) return;
-                const curve = computeBandCurve(band, DSP_SAMPLE_RATE, NUM_POINTS);
+
+            const cache = this._getIsfCache(which, pIdx);
+
+            preset.bands.forEach((band, i) => {
+                if (!band.enabled) { cache.evictBand(i); return; }
+                let curve = cache.getBand(i, band);
+                if (!curve) {
+                    curve = computeBandCurve(band, DSP_SAMPLE_RATE, NUM_POINTS);
+                    cache.setBand(i, band, curve);
+                }
                 const color = BAND_COLORS[i % BAND_COLORS.length];
-                ctx.strokeStyle = color + '88';
-                ctx.lineWidth = 1;
+                ctx.strokeStyle = i === this.selectedBand ? color : `${color}44`;
+                ctx.lineWidth   = i === this.selectedBand ? 1.5 : 1;
                 ctx.setLineDash([]);
                 ctx.beginPath();
                 for (let j = 0; j < NUM_POINTS; j++) {
-                    const freq = freqAtIndex(j, NUM_POINTS);
-                    const x = this.freqToX(freq);
+                    const x = xLut[j];
                     const y = this.dbToY(curve[j]);
                     if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
                 }
@@ -372,82 +561,92 @@ export class EQGraph {
             });
             return;
         }
-        const eq = store.getActiveEqState();
-        if (!eq.bands.some(b => b.enabled)) return;
 
+        const eq = this._getMyEqState();
+        if (!eq || !eq.bands.some(b => b.enabled)) return;
+
+        const cache = this._eqCache;
         for (let b = 0; b < eq.bands.length; b++) {
             const band = eq.bands[b];
-            if (!band.enabled) continue;
-
-            const curve = computeBandCurve(band, DSP_SAMPLE_RATE, NUM_POINTS);
+            if (!band.enabled) { cache.evictBand(b); continue; }
+            let curve = cache.getBand(b, band);
+            if (!curve) {
+                curve = computeBandCurve(band, DSP_SAMPLE_RATE, NUM_POINTS);
+                cache.setBand(b, band, curve);
+                cache.invalidateCombined();
+            }
             const color = BAND_COLORS[b % BAND_COLORS.length];
-
-            ctx.strokeStyle = b === this.selectedBand
-                ? color
-                : `${color}44`;
-            ctx.lineWidth = b === this.selectedBand ? 1.5 : 1;
+            ctx.strokeStyle = b === this.selectedBand ? color : `${color}44`;
+            ctx.lineWidth   = b === this.selectedBand ? 1.5 : 1;
+            ctx.setLineDash([]);
             ctx.beginPath();
-
             for (let i = 0; i < NUM_POINTS; i++) {
-                const freq = freqAtIndex(i, NUM_POINTS);
-                const x = this.freqToX(freq);
+                const x = xLut[i];
                 const y = this.dbToY(curve[i]);
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             }
             ctx.stroke();
         }
     }
 
     _drawCombinedCurve(ctx) {
-        const eq = store.getActiveEqState();
-        const combined = computeCombinedCurve(eq.bands, DSP_SAMPLE_RATE, NUM_POINTS, eq.pregain || 0);
+        const eq    = this._getMyEqState();
+        if (!eq) return;
+        const cache  = this._eqCache;
+        const xLut   = this._xLut;
+
+        // Build a cheap key from all active band params + pregain
+        // so the combined curve is recomputed only when something truly changed.
+        let combinedKey = String(eq.pregain || 0);
+        for (let b = 0; b < eq.bands.length; b++) {
+            const bd = eq.bands[b];
+            if (bd.enabled) combinedKey += `|${b}:${_bandCacheKey(bd)}`;
+        }
+
+        let combined = cache.getCombined(combinedKey);
+        if (!combined) {
+            combined = computeCombinedCurve(eq.bands, DSP_SAMPLE_RATE, NUM_POINTS, eq.pregain || 0);
+            cache.setCombined(combinedKey, combined);
+        }
 
         // Fill under curve
         ctx.beginPath();
         const zeroY = this.dbToY(0);
         ctx.moveTo(this.gx, zeroY);
-
         for (let i = 0; i < NUM_POINTS; i++) {
-            const freq = freqAtIndex(i, NUM_POINTS);
-            const x = this.freqToX(freq);
-            const y = this.dbToY(combined[i]);
-            ctx.lineTo(x, y);
+            ctx.lineTo(xLut[i], this.dbToY(combined[i]));
         }
-
         ctx.lineTo(this.gx + this.gw, zeroY);
         ctx.closePath();
 
         const grad = ctx.createLinearGradient(0, this.gy, 0, this.gy + this.gh);
-        grad.addColorStop(0, 'rgba(100, 255, 218, 0.12)');
+        grad.addColorStop(0,   'rgba(100, 255, 218, 0.12)');
         grad.addColorStop(0.5, 'rgba(100, 255, 218, 0.03)');
-        grad.addColorStop(1, 'rgba(100, 255, 218, 0.12)');
+        grad.addColorStop(1,   'rgba(100, 255, 218, 0.12)');
         ctx.fillStyle = grad;
         ctx.fill();
 
         // Stroke combined curve
         ctx.strokeStyle = COLORS.combined;
-        ctx.lineWidth = 2.5;
+        ctx.lineWidth   = 2.5;
         ctx.beginPath();
         for (let i = 0; i < NUM_POINTS; i++) {
-            const freq = freqAtIndex(i, NUM_POINTS);
-            const x = this.freqToX(freq);
+            const x = xLut[i];
             const y = this.dbToY(combined[i]);
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
         ctx.stroke();
     }
 
     _drawNodes(ctx) {
-        // ISF mode: nodes for selected preset
-        if (store.graphMode === 'isf1' || store.graphMode === 'isf2') {
-            const isf = store.getIsfInstance(store.graphMode);
+        const myMode = this._getMyGraphMode();
+
+        if (myMode === 'isf1' || myMode === 'isf2') {
+            const isf  = store.getIsfInstance(myMode);
             const pIdx = store.getActiveIsfPreset ? store.getActiveIsfPreset() : 0;
             const preset = isf?.presets[pIdx];
             if (!preset) return;
-            const fakeBands = preset.bands;
-            fakeBands.forEach((band, i) => {
+            preset.bands.forEach((band, i) => {
                 if (!band.enabled) return;
                 const x = this.freqToX(band.freq);
                 const y = this.dbToY(band.gain);
@@ -467,7 +666,9 @@ export class EQGraph {
             });
             return;
         }
-        const eq = store.getActiveEqState();
+
+        const eq = this._getMyEqState();
+        if (!eq) return;
 
         for (let b = 0; b < eq.bands.length; b++) {
             const band = eq.bands[b];
@@ -562,12 +763,14 @@ export class EQGraph {
 
     _hitTestBand(x, y) {
         let bands;
-        if (store.graphMode === 'isf1' || store.graphMode === 'isf2') {
-            const isf = store.getIsfInstance(store.graphMode);
+        const myMode = this._getMyGraphMode();
+        if (myMode === 'isf1' || myMode === 'isf2') {
+            const isf  = store.getIsfInstance(myMode);
             const pIdx = store.getActiveIsfPreset ? store.getActiveIsfPreset() : 0;
             bands = isf?.presets[pIdx]?.bands.slice(0, isf.presets[pIdx].numBands) ?? [];
         } else {
-            bands = store.getActiveEqState().bands;
+            const eq = this._getMyEqState();
+            bands = eq ? eq.bands : [];
         }
         let closest = -1, minDist = 15;
         for (let b = 0; b < bands.length; b++) {
@@ -601,15 +804,18 @@ export class EQGraph {
         this.mouseY = y;
 
         if (this.isDragging && this.dragBand >= 0) {
-            const freq = Math.max(FREQ_MIN, Math.min(FREQ_MAX, this.xToFreq(x)));
-            const gain = Math.max(DB_MIN, Math.min(DB_MAX, this.yToDb(y)));
+            const myMode = this._getMyGraphMode();
+            const freq  = Math.max(FREQ_MIN, Math.min(FREQ_MAX, this.xToFreq(x)));
+            const gain  = Math.max(DB_MIN,   Math.min(DB_MAX,   this.yToDb(y)));
             const freqR = Math.round(freq);
-            const gainR = Math.round(gain * 10) / 10;
-            if (store.graphMode === 'isf1' || store.graphMode === 'isf2') {
-                // ISF: update band directly, emit for graph redraw (firmware synced on mouseup)
-                store.updateIsfEqBand(store.graphMode, this.dragBand, freqR, gainR);
+            let gainR = 0;
+            if (myMode !== 'preEq') gainR = Math.round(gain * 10) / 10;
+            else gainR = 0;
+
+            if (myMode === 'isf1' || myMode === 'isf2') {
+                store.updateIsfEqBand(myMode, this.dragBand, freqR, gainR);
             } else {
-                store.updateEqBand(this.dragBand, { freq: freqR, gain: gainR });
+                this._myUpdateEqBand(this.dragBand, { freq: freqR, gain: gainR });
             }
         } else {
             // Hover detection
@@ -624,28 +830,16 @@ export class EQGraph {
 
     _onMouseUp() {
         if (this.isDragging) {
-            // Nếu đang drag ISF band → emit drag-end để sync firmware + refresh input
-            if (this.dragBand >= 0 &&
-                (store.graphMode === 'isf1' || store.graphMode === 'isf2')) {
-                const pIdx = store.getActiveIsfPreset ? store.getActiveIsfPreset() : 0;
-                store.emit('isf:drag-end', store.graphMode, pIdx);
-            }
             this.isDragging = false;
-            this.dragBand = -1;
+            this.dragBand   = -1;
             this.canvas.style.cursor = this.hoverBand >= 0 ? 'grab' : 'crosshair';
         }
     }
 
     _onMouseLeave() {
-        // Touch/mouse leave — cũng cần commit nếu đang drag ISF
-        if (this.isDragging && this.dragBand >= 0 &&
-            (store.graphMode === 'isf1' || store.graphMode === 'isf2')) {
-            const pIdx = store.getActiveIsfPreset ? store.getActiveIsfPreset() : 0;
-            store.emit('isf:drag-end', store.graphMode, pIdx);
-        }
-        this.hoverBand = -1;
+        this.hoverBand  = -1;
         this.isDragging = false;
-        this.dragBand = -1;
+        this.dragBand   = -1;
         this.canvas.style.cursor = 'default';
         this.markDirty();
     }
@@ -653,73 +847,125 @@ export class EQGraph {
     _onWheel(e) {
         e.preventDefault();
         const { x, y } = this._getPos(e);
-        const band = this.selectedBand >= 0 ? this.selectedBand : this._hitTestBand(x, y);
+        const band  = this.selectedBand >= 0 ? this.selectedBand : this._hitTestBand(x, y);
         if (band < 0) return;
-        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        const delta   = e.deltaY > 0 ? -0.1 : 0.1;
+        const myMode  = this._getMyGraphMode();
 
-        if (store.graphMode === 'isf1' || store.graphMode === 'isf2') {
-            const isf = store.getIsfInstance(store.graphMode);
+        if (myMode === 'isf1' || myMode === 'isf2') {
+            const isf  = store.getIsfInstance(myMode);
             const pIdx = store.getActiveIsfPreset ? store.getActiveIsfPreset() : 0;
             const preset = isf?.presets[pIdx];
             if (!preset?.bands[band]) return;
             preset.bands[band].q = Math.max(0.1, Math.min(20,
                 Math.round((preset.bands[band].q + delta) * 100) / 100));
-            store.emit('isf:eq-changed', store.graphMode, pIdx);
-            store.emit('isf:drag-end', store.graphMode, pIdx); // sync fw immediately
+            store.emit('isf:band-changed', myMode, pIdx, band);
+            store.emit('isf:eq-changed');
             return;
         }
 
-        const eq = store.getActiveEqState();
+        const eq = this._getMyEqState();
+        if (!eq) return;
         const q = Math.max(0.1, Math.min(20,
             Math.round((eq.bands[band].q + delta) * 100) / 100));
-        store.updateEqBand(band, { q });
+        this._myUpdateEqBand(band, { q });
     }
 
     _onDblClick(e) {
         const { x, y } = this._getPos(e);
-        const band = this._hitTestBand(x, y);
-        const freq = Math.round(this.xToFreq(x));
-        const gain = Math.round(this.yToDb(y) * 10) / 10;
+        const band   = this._hitTestBand(x, y);
+        const freq   = Math.round(this.xToFreq(x));
+        const gain   = Math.round(this.yToDb(y) * 10) / 10;
         const inGraph = x >= this.gx && x <= this.gx + this.gw &&
                         y >= this.gy && y <= this.gy + this.gh;
+        const myMode  = this._getMyGraphMode();
 
-        if (store.graphMode === 'isf1' || store.graphMode === 'isf2') {
-            const isf = store.getIsfInstance(store.graphMode);
+        if (myMode === 'isf1' || myMode === 'isf2') {
+            const isf  = store.getIsfInstance(myMode);
             const pIdx = store.getActiveIsfPreset ? store.getActiveIsfPreset() : 0;
             const preset = isf?.presets[pIdx];
             if (!preset) return;
             if (band >= 0) {
                 preset.bands[band].gain = 0;
-                store.emit('isf:eq-changed', store.graphMode, pIdx);
-                store.emit('isf:drag-end', store.graphMode, pIdx);
+                store.emit('isf:eq-changed', myMode, pIdx);
             } else if (inGraph) {
                 const slot = preset.bands.findIndex(b => !b.enabled);
                 if (slot === -1) return;
                 Object.assign(preset.bands[slot], { enabled: true, freq, gain, q: 0.707, type: 0 });
                 preset.numBands = preset.bands.filter(b => b.enabled).length;
                 this.selectedBand = slot;
-                store.emit('isf:band-added', store.graphMode, pIdx);
+                store.emit('isf:band-added', myMode, pIdx, slot);
             }
             return;
         }
 
         if (band >= 0) {
-            store.updateEqBand(band, { gain: 0 });
+            this._myUpdateEqBand(band, { gain: 0 });
         } else if (inGraph) {
-            const idx = store.addEqBand(freq, gain, 0.707, 0);
-            this.selectedBand = idx;
-            store.emit('eq:band-selected', idx);
+            const idx = this._myAddEqBand(freq, gain, 0.707, 0);
+            if (idx !== null) {
+                this.selectedBand = idx;
+                store.emit('eq:band-selected', idx);
+            }
         }
+    }
+
+    // ─── Instance-local EQ mutation helpers ─────────────────────
+    // These operate on _getMyEqState() directly, bypassing
+    // store.addEqBand/updateEqBand which always use store.getActiveEqState().
+
+    _myAddEqBand(freq, gain, q, type) {
+        const eq = this._getMyEqState();
+        if (!eq) return null;
+        const slot = eq.bands.findIndex(b => !b.enabled);
+        if (slot === -1) return null;
+        Object.assign(eq.bands[slot], { enabled: true, freq, gain, q, type });
+        this._eqCache.invalidateCombined();
+        store.emit('eq:changed');
+        store.emit('eq:structure-changed');
+        return slot;
+    }
+
+    _myUpdateEqBand(index, changes) {
+        const eq = this._getMyEqState();
+        if (!eq || index < 0 || index >= eq.bands.length) return;
+        Object.assign(eq.bands[index], changes);
+        this._eqCache.evictBand(index);
+        this._eqCache.invalidateCombined();
+        store.emit('eq:changed');
+        store.emit('eq:band-updated', index);
+    }
+
+    _myRemoveEqBand(index) {
+        const eq = this._getMyEqState();
+        if (!eq || index < 0 || index >= eq.bands.length) return;
+        eq.bands[index].enabled = false;
+        Object.assign(eq.bands[index], { type: 0, freq: 1000, gain: 0, q: 0.707 });
+        this._eqCache.evictBand(index);
+        this._eqCache.invalidateCombined();
+        store.emit('eq:changed');
+        store.emit('eq:structure-changed');
     }
 
     // ─── Resize ──────────────────────────────────────────────────
 
     _setupResize() {
-        this._resizeObserver = null;
         this._boundHandlers.resize = () => this.forceResize();
 
-        window.addEventListener('resize', this._boundHandlers.resize);
-        setTimeout(() => this.forceResize(), 50);
+        window.addEventListener(
+            'resize',
+            this._boundHandlers.resize
+        );
+
+        this._resizeObserver = new ResizeObserver(() => {
+            this.forceResize();
+        });
+
+        this._resizeObserver.observe(
+            this.canvas.parentElement
+        );
+
+        this.forceResize();
     }
 
     forceResize() {
@@ -741,16 +987,9 @@ export class EQGraph {
         this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.ctx.scale(this.dpr, this.dpr);
 
-        // Re-observe new parent (debounced to avoid loops)
-        if (window.ResizeObserver) {
-            if (this._resizeObserver) this._resizeObserver.disconnect();
-            let resizeTimeout = null;
-            this._resizeObserver = new ResizeObserver(() => {
-                clearTimeout(resizeTimeout);
-                resizeTimeout = setTimeout(() => this.forceResize(), 100);
-            });
-            this._resizeObserver.observe(parent);
-        }
+        // Invalidate x-LUT — pixel positions change with new graph width
+        this._xLut   = null;
+        this._xLutW  = 0;
 
         this.markDirty();
     }
@@ -758,20 +997,80 @@ export class EQGraph {
     // ─── Store Listeners ─────────────────────────────────────────
 
     _setupStoreListeners() {
-        this._boundHandlers.storeChanged = () => this.markDirty();
+        // ── EQ ──
+        // eq:changed → invalidate combined only (individual band caches survive;
+        // _drawBandCurves will miss on the changed band and recompute it).
+        this._boundHandlers.eqChanged = () => {
+            this._eqCache.invalidateCombined();
+            this.markDirty();
+        };
+        this._boundHandlers.eqBandUpdated = (idx) => {
+            this._eqCache.invalidateCombined();
+            this.markDirty();
+        };
         this._boundHandlers.storeActiveChanged = () => {
+            // Switching active EQ target — blow the whole eq cache
+            this._eqCache.clear();
             this.selectedBand = -1;
             this.markDirty();
         };
 
-        store.on('eq:changed', () => { if (this._animFrame) return; this._animFrame = requestAnimationFrame(() => { this._animFrame = 0; try { this._render(); } catch (e) { console.warn('EQGraph render error:', e); } }); });
-        store.on('isf:eq-changed',     () => { this.markDirty(); });
-        store.on('isf:band-dragging',  () => { this.markDirty(); });
-        store.on('isf:band-added',     () => { this.markDirty(); });
-        store.on('isf:state-updated',  () => { this.markDirty(); });
-        store.on('isf:preset-selected', () => { this.markDirty(); });
-        store.on('isf:state-updated', () => { if (this._animFrame) return; this._animFrame = requestAnimationFrame(() => { this._animFrame = 0; try { this._render(); } catch (e) { console.warn('EQGraph render error:', e); } }); });
-        store.on('isf:preset-selected', (w, p) => { if (this._animFrame) return; this._animFrame = requestAnimationFrame(() => { this._animFrame = 0; try { this._render(); } catch (e) { } }); });
+        // ── ISF ──
+        // isf:band-dragging — emitted by store.updateIsfEqBand during drag.
+        // Evict only the dragged band's entry so _drawBandCurves recomputes it.
+        this._boundHandlers.isfBandDragging = (which, pIdx, bandIdx) => {
+            const cache = this._getIsfCache(which, pIdx);
+            cache.evictBand(bandIdx);
+            cache.invalidateCombined();
+            // Also evict the overlay combined cache for this preset
+            const overlayKey = `overlay:${which}:overlay:${pIdx}`;
+            if (this._isfCache.has(overlayKey)) {
+                this._isfCache.get(overlayKey).invalidateCombined();
+            }
+            this.markDirty();
+        };
+        // isf:eq-changed — a band was added/removed/changed via panel (not drag)
+        this._boundHandlers.isfEqChanged = (which, pIdx) => {
+            if (which !== undefined && pIdx !== undefined) {
+                this._getIsfCache(which, pIdx).clear();
+                const overlayKey = `overlay:${which}:overlay:${pIdx}`;
+                if (this._isfCache.has(overlayKey)) this._isfCache.get(overlayKey).clear();
+            } else {
+                // Blanket clear for this instance's ISF cache
+                const myIsf = this._getMyIsfWhich();
+                if (myIsf) this._clearIsfCache(myIsf);
+            }
+            this.markDirty();
+        };
+        this._boundHandlers.isfStateUpdated = () => { this.markDirty(); };
+        this._boundHandlers.isfPresetChanged = () => { this.markDirty(); };
+        this._boundHandlers.isfPresetDataUpdated = (which, pIdx) => {
+            this._getIsfCache(which, pIdx).clear();
+            const overlayKey = `overlay:${which}:overlay:${pIdx}`;
+            if (this._isfCache.has(overlayKey)) this._isfCache.get(overlayKey).clear();
+            this.markDirty();
+        };
+        this._boundHandlers.isfInstanceChanged = () => {
+            // Switching ISF1↔ISF2 — reset selected band, rest already cached
+            this.selectedBand = -1;
+            this.markDirty();
+        };
+
+        // Register all listeners
+        store.on('eq:changed',               this._boundHandlers.eqChanged);
+        store.on('eq:band-updated',          this._boundHandlers.eqBandUpdated);
+        store.on('eq:active-changed',        this._boundHandlers.storeActiveChanged);
+        store.on('eq:structure-changed',     this._boundHandlers.eqChanged);
+
+        store.on('isf:band-dragging',        this._boundHandlers.isfBandDragging);
+        store.on('isf:eq-changed',           this._boundHandlers.isfEqChanged);
+        store.on('isf:band-changed',         this._boundHandlers.isfEqChanged);
+        store.on('isf:band-added',           this._boundHandlers.isfEqChanged);
+        store.on('isf:state-updated',        this._boundHandlers.isfStateUpdated);
+        store.on('isf:preset-changed',       this._boundHandlers.isfPresetChanged);
+        store.on('isf:preset-selected',      this._boundHandlers.isfPresetChanged);
+        store.on('isf:preset-data-updated',  this._boundHandlers.isfPresetDataUpdated);
+        store.on('isf:instance-changed',     this._boundHandlers.isfInstanceChanged);
     }
 
     // ─── Public ──────────────────────────────────────────────────
@@ -805,7 +1104,19 @@ export class EQGraph {
             c.removeEventListener('touchcancel', this._boundHandlers.touchcancel);
         }
 
-        store.off('eq:changed', this._boundHandlers.storeChanged);
-        store.off('eq:active-changed', this._boundHandlers.storeActiveChanged);
+        store.off('eq:changed',              this._boundHandlers.eqChanged);
+        store.off('eq:band-updated',         this._boundHandlers.eqBandUpdated);
+        store.off('eq:active-changed',       this._boundHandlers.storeActiveChanged);
+        store.off('eq:structure-changed',    this._boundHandlers.eqChanged);
+
+        store.off('isf:band-dragging',       this._boundHandlers.isfBandDragging);
+        store.off('isf:eq-changed',          this._boundHandlers.isfEqChanged);
+        store.off('isf:band-changed',        this._boundHandlers.isfEqChanged);
+        store.off('isf:band-added',          this._boundHandlers.isfEqChanged);
+        store.off('isf:state-updated',       this._boundHandlers.isfStateUpdated);
+        store.off('isf:preset-changed',      this._boundHandlers.isfPresetChanged);
+        store.off('isf:preset-selected',     this._boundHandlers.isfPresetChanged);
+        store.off('isf:preset-data-updated', this._boundHandlers.isfPresetDataUpdated);
+        store.off('isf:instance-changed',    this._boundHandlers.isfInstanceChanged);
     }
 }

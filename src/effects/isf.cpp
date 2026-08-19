@@ -14,6 +14,7 @@
  */
 
 #include "isf.h"
+#include "../utils/psram.h"
 #include "dsp_pipeline.h"
 #include <math.h>
 
@@ -26,10 +27,20 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 void IndexSelectableFilter::init(int32_t sampleRate, int32_t numChannels) {
+    const float savedMs = _lookaheadMs;
     DspModule::init(sampleRate, numChannels);
+    _lookaheadMs = savedMs;
 
     setRmsWindowMs(_rmsMs);
     setSlewMs(_slewMs);
+    if (_laFeedBuf == nullptr)
+        _laFeedBuf = (float*)PSRAM_MALLOC((ISF_LOOKAHEAD_MAX + 1) * sizeof(float));
+    if (_lookaheadMs <= 0.0f) {
+        _lookaheadSamples = 0;
+    } else {
+        int s = (int)(_lookaheadMs * 0.001f * (float)sampleRate + 0.5f);
+        _lookaheadSamples = (s > ISF_LOOKAHEAD_MAX) ? ISF_LOOKAHEAD_MAX : s;
+    }
 
     // Default: 1 flat passthrough preset so the module is silent but safe
     if (_numPresets == 0) {
@@ -50,6 +61,8 @@ void IndexSelectableFilter::init(int32_t sampleRate, int32_t numChannels) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void IndexSelectableFilter::reset() {
+    if (_laFeedBuf) memset(_laFeedBuf, 0, (ISF_LOOKAHEAD_MAX + 1) * sizeof(float));
+    _laWriteIdx = 0;
     memset(_stateA, 0, sizeof(_stateA));
     memset(_stateB, 0, sizeof(_stateB));
     _rmsSq          = 0.0f;
@@ -79,6 +92,20 @@ void IndexSelectableFilter::setSlewMs(int32_t ms) {
     // slewStep = 1 index / (sampleRate * ms / 1000)
     // = 1000 / (sampleRate * ms)
     _slewStep = 1000.0f / ((float)_sampleRate * (float)_slewMs);
+}
+
+void IndexSelectableFilter::setLookahead(float ms) {
+    _lookaheadMs = (ms < 0.0f) ? 0.0f : ms;
+    if (_lookaheadMs <= 0.0f) {
+        _lookaheadSamples = 0;
+    } else {
+        int s = (int)(_lookaheadMs * 0.001f * (float)_sampleRate + 0.5f);
+        _lookaheadSamples = (s > ISF_LOOKAHEAD_MAX) ? ISF_LOOKAHEAD_MAX : s;
+        if (_laFeedBuf == nullptr)
+            _laFeedBuf = (float*)PSRAM_MALLOC((ISF_LOOKAHEAD_MAX + 1) * sizeof(float));
+    }
+    if (_laFeedBuf) memset(_laFeedBuf, 0, (ISF_LOOKAHEAD_MAX + 1) * sizeof(float));
+    _laWriteIdx = 0;
 }
 
 void IndexSelectableFilter::setNumPresets(uint8_t n) {
@@ -179,20 +206,38 @@ void IRAM_ATTR IndexSelectableFilter::process(
         _currentLevelDb = levelDb;
     } else {
         // Frame-level energy: accumulate squared mono sum
+        // Với lookahead: push từng sample vào feed buffer,
+        // đọc sample cũ hơn N ms để feed vào _rmsSq.
         float frameSumSq = 0.0f;
-        if (_numChannels > 1) {
+        if (_lookaheadSamples > 0 && _laFeedBuf != nullptr) {
+            const int bufSz = ISF_LOOKAHEAD_MAX + 1;
+            int wIdx = _laWriteIdx;
             for (size_t i = 0; i < numSamples; i++) {
-                float mono = 0.5f * (samples[i * 2] + samples[i * 2 + 1]);
-                frameSumSq += mono * mono;
+                float mono = (_numChannels > 1)
+                    ? 0.5f * (samples[i * 2] + samples[i * 2 + 1])
+                    : samples[i];
+                _laFeedBuf[wIdx] = mono * mono;
+                int rIdx = wIdx - _lookaheadSamples;
+                if (rIdx < 0) rIdx += bufSz;
+                frameSumSq += _laFeedBuf[rIdx];
+                if (++wIdx >= bufSz) wIdx = 0;
             }
+            _laWriteIdx = wIdx;
         } else {
-            for (size_t i = 0; i < numSamples; i++) {
-                frameSumSq += samples[i] * samples[i];
+            if (_numChannels > 1) {
+                for (size_t i = 0; i < numSamples; i++) {
+                    float mono = 0.5f * (samples[i * 2] + samples[i * 2 + 1]);
+                    frameSumSq += mono * mono;
+                }
+            } else {
+                for (size_t i = 0; i < numSamples; i++) {
+                    frameSumSq += samples[i] * samples[i];
+                }
             }
         }
         float frameMeanSq = frameSumSq / (float)numSamples;
 
-        // Frame-level IIR update (equivalent to per-sample but batched)
+        // Frame-level IIR update
         float frameCoeff = calc_envelope_coeff_frame(
             _sampleRate, (int32_t)numSamples, _rmsMs);
         _rmsSq = _rmsSq + frameCoeff * (frameMeanSq - _rmsSq);
@@ -399,14 +444,14 @@ void IRAM_ATTR IndexSelectableFilter::process(
                 reset();
                 l = r = 0.0f;
             }
-            samples[i * 2]     = l >  1.0f ?  1.0f : (l < -1.0f ? -1.0f : l);
-            samples[i * 2 + 1] = r >  1.0f ?  1.0f : (r < -1.0f ? -1.0f : r);
+            samples[i * 2]     = sat_float(l);
+            samples[i * 2 + 1] = sat_float(r);
         }
     } else {
         for (size_t i = 0; i < numSamples; i++) {
             float v = bufL[i];
             if (!isfinite(v)) { reset(); v = 0.0f; }
-            samples[i] = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+            samples[i] = sat_float(v);
         }
     }
 }

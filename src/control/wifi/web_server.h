@@ -20,8 +20,8 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include "wifi_manager.h"
-#include "uart_protocol.h"
-#include "param_controller.h"
+#include "../uart_protocol.h"
+#include "../param/param_controller.h"
 
 #include "utils/psram.h"  // psram_alloc(), PSRAM_FREE()
 

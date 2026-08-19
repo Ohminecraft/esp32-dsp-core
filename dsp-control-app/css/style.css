@@ -86,6 +86,36 @@ body {
     box-shadow: var(--shadow-sm);
 }
 
+/* Trên điện thoại, thanh status (CPU/HEAP/RATE/Connected/WiFi/Disconnect...)
+   dài hơn bề ngang màn hình. #titlebar trước đây overflow:hidden nên phần
+   bị tràn (nút WiFi, Disconnect...) bị CẮT MẤT, không cách nào xem/bấm được.
+   Đổi sang overflow-x:auto để có thể vuốt ngang xem hết toàn bộ thanh này.
+   140px padding-phải vốn để né nút minimize/maximize/close của cửa sổ
+   desktop — trên điện thoại không có nên bỏ đi, và tắt app-region:drag
+   (kéo di chuyển cửa sổ) vì trên mobile không cần và nó cản trở thao tác
+   vuốt/chạm để cuộn ngang.
+   Dùng "max-width HOẶC max-height" (không chỉ max-width) vì khi xoay
+   ngang, chiều RỘNG màn hình lại lớn hơn 640px (dù chiều cao rất thấp) —
+   nếu chỉ xét max-width thì rule này sẽ không áp dụng lúc xoay ngang và
+   thanh status lại bị cắt/không vuốt được như cũ. */
+@media (max-width: 640px), (max-height: 500px) {
+    #titlebar {
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        padding: 0 12px;
+        -webkit-app-region: no-drag;
+        justify-content: flex-start;
+        gap: 8px;
+    }
+    #titlebar > * {
+        flex-shrink: 0;
+    }
+    #titlebar::-webkit-scrollbar {
+        height: 4px;
+    }
+}
+
 .title {
     display: flex;
     align-items: center;
@@ -319,12 +349,14 @@ body {
 
 /* Embedded EQ graph container inside accordion */
 .eq-graph-container {
-    position: relative;
+    position: relative;  /* canvas is absolute inside here */
+    display: block;      /* always block-flow, never overlapping siblings */
+    width: 100%;
     height: 280px;
     min-height: 280px;
     background: var(--bg-graph);
     border-radius: var(--radius-md);
-    overflow: hidden;
+    overflow: hidden;    /* clip canvas to rounded corners only — OK here */
     margin-bottom: 10px;
 }
 
@@ -332,6 +364,8 @@ body {
     position: absolute;
     top: 0;
     left: 0;
+    width: 100%;         /* fill container width */
+    height: 100%;        /* fill container height */
     display: block !important;
     cursor: crosshair;
 }
@@ -348,7 +382,8 @@ body {
     border: 1px solid var(--border-light);
     border-radius: var(--radius-md);
     margin-bottom: 6px;
-    overflow: hidden;
+    /* Do NOT use overflow:hidden — it would clip graph content and pull sibling
+       accordions up. Border-radius on children handles visual rounding. */
     box-shadow: var(--shadow-sm);
     transition: box-shadow var(--transition);
 }
@@ -430,10 +465,20 @@ body {
     padding: 12px 14px;
     border-top: 1px solid var(--border-light);
     background: var(--bg-card);
+    overflow: visible;
 }
 
 .accordion.open .accordion-body {
-    display: block;
+    /* display:flow-root establishes a block formatting context:
+       - contains floats/positioned children in height calculation
+       - does NOT clip overflow (unlike overflow:hidden)
+       - next sibling accordion is correctly pushed down */
+    display: flow-root;
+}
+
+/* When EQ graph is present, ensure no max-height clips the body */
+.accordion-body:has(.eq-graph-container) {
+    max-height: none !important;
 }
 
 /* ─── Parameter Row ─────────────────────────────────────────── */
@@ -820,6 +865,258 @@ body {
     color: var(--text-dim);
 }
 
+/* ─── Battery widget (topbar, mirrors .cpu-container) ──────────── */
+.battery-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 15px;
+    background: var(--bg-body);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: opacity var(--transition);
+}
+
+.battery-container.disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.battery-icon {
+    font-size: 13px;
+    line-height: 1;
+}
+
+.battery-value {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-primary);
+    min-width: 26px;
+}
+
+.battery-value.state-normal   { color: var(--accent-green-d); }
+.battery-value.state-warning  { color: var(--accent-orange); }
+.battery-value.state-critical { color: var(--accent-red); }
+.battery-value.state-charging { color: var(--accent-dark); }
+.battery-value.state-na       { color: var(--text-dim); }
+
+/* Battery detail popover */
+.battery-detail-panel {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    box-shadow: var(--shadow-lg);
+    font-size: 12px;
+    min-width: 190px;
+    z-index: 999;
+}
+
+.battery-detail-panel.hidden {
+    display: none;
+}
+
+.bd-title {
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 6px;
+    color: var(--text-primary);
+}
+
+.bd-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 2px 0;
+}
+
+/* ─── WiFi status badge (topbar, mirrors #connection-status) ──── */
+.wifi-status-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: var(--radius-xl);
+    font-size: 11px;
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.wifi-status-badge.on {
+    background: var(--accent-green-l);
+    color: var(--accent-green-d);
+}
+
+.wifi-status-badge.off {
+    background: var(--bg-input);
+    color: var(--text-dim);
+}
+
+.wifi-status-badge .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.wifi-status-badge.on .status-dot {
+    background: var(--accent-green);
+    animation: pulse 2s infinite;
+}
+
+.wifi-status-badge.off .status-dot {
+    background: #cbd5e1;
+}
+
+/* ─── WiFi scan screen: two-column layout ───────────────────────
+   Scan+connect on the left, root AP config + saved STA network on
+   the right — replaces the old separate "Advanced Settings" popup.
+   Lives inside the dark #scan-overlay, so colors are tuned for that,
+   not the light card theme used elsewhere. */
+.wifi-scan-columns {
+    display: flex;
+    gap: 28px;
+    align-items: stretch;
+    text-align: left;
+    width: 100%;
+}
+
+.wifi-scan-col {
+    flex: 1;
+    min-width: 0;      /* flex item co lại đúng theo container, không tràn/đè lên cột bên cạnh */
+    overflow-wrap: break-word;
+}
+
+.wifi-scan-col-right {
+    display: flex;
+    flex-direction: column;
+    background: rgba(15, 23, 42, 0.35);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+}
+
+.wifi-scan-col-spacer {
+    flex: 1;
+    min-height: 12px;
+}
+
+@media (max-width: 640px) {
+    .wifi-scan-columns {
+        flex-direction: column;
+    }
+}
+
+.wifi-scan-section-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #94a3b8;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.wifi-scan-input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: var(--radius-sm);
+    padding: 7px 10px;
+    font-size: 12px;
+    font-family: var(--font-ui);
+    outline: none;
+    margin-bottom: 8px;
+    transition: border-color var(--transition);
+}
+
+.wifi-scan-input:focus {
+    border-color: var(--accent);
+}
+
+/* ── Overlay WiFi dùng nền kính tối/mờ, nhưng .btn-outline mặc định lại
+   dùng var(--text-secondary) (#6b7280 xám) — màu này được thiết kế cho
+   nền SÁNG của app chính (Preset, Add Band, Sync All...), nên khi đặt
+   trong overlay tối/kính mờ thì chữ xám gần như biến mất vào nền.
+   Override riêng cho các nút bên trong overlay WiFi để luôn sáng, dễ đọc,
+   không ảnh hưởng .btn-outline ở những chỗ khác trong app. */
+#scan-overlay .btn-outline {
+    color: rgba(255, 255, 255, 0.85);
+    border-color: rgba(255, 255, 255, 0.28);
+}
+
+#scan-overlay .btn-outline:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+#scan-overlay .btn:disabled,
+#scan-overlay .btn-outline:disabled {
+    color: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.16);
+    opacity: 1; /* tránh trình duyệt tự làm mờ thêm khiến chữ biến mất hẳn */
+    cursor: not-allowed;
+}
+
+.wifi-scan-input-wrap {
+    position: relative;
+}
+
+/* Chừa chỗ bên phải cho nút mắt (👁) để chữ mật khẩu gõ dài không bị
+   che khuất/đè lên icon. */
+.wifi-scan-input-wrap .wifi-scan-input {
+    padding-right: 34px;
+}
+
+.wifi-scan-eye {
+    position: absolute;
+    right: 6px;
+    top: 4px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    color: #94a3b8;
+}
+
+.wifi-scan-eye:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.wifi-scan-info-text {
+    font-size: 12px;
+    color: #94a3b8;
+    font-family: var(--font-mono);
+    padding: 6px 0;
+}
+
+.wifi-scan-status {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 10px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    display: none;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.wifi-scan-status.loading { color: #fbbf24; display: block; }
+.wifi-scan-status.unavailable { color: #f87171; display: block; }
+
 /* ─── Scrollbar ─────────────────────────────────────────────── */
 ::-webkit-scrollbar {
     width: 6px;
@@ -839,16 +1136,31 @@ body {
 }
 
 /* ─── Scan Overlay ──────────────────────────────────────────── */
+/* Nền overlay trước đây là gradient ĐẶC (#1e293b → #0f172a) nên dù có
+   backdrop-filter: blur() thì cũng không thấy được gì phía sau vì nó che
+   kín 100%. Đổi sang nền bán trong suốt (rgba) để backdrop-filter thực sự
+   làm mờ (blur) nội dung trang phía sau (danh sách module DSP...) và vẫn
+   lộ ra được, đúng kiểu "kính mờ" (frosted glass) thay vì che đen hoàn toàn.
+   align-items: flex-start + overflow-y: auto để khi nội dung (list wifi,
+   form pass, 2 cột AP/STA) cao hơn viewport — nhất là điện thoại ở chế độ
+   ngang — toàn bộ overlay có thể cuộn được, thay vì bị cắt cứng khiến nút
+   Connect/Back nằm ngoài màn hình không bấm được. padding trên/dưới tạo
+   cảm giác "canh giữa" khi nội dung vừa màn hình, và là vùng đệm để cuộn
+   khi không vừa. */
 #scan-overlay {
     position: fixed;
     inset: 0;
     z-index: 1000;
-    background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+    background: rgba(10, 16, 30, 0.45);
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 5vh 12px;
     color: white;
-    backdrop-filter: blur(8px);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
 }
 
 #scan-overlay.hidden {
@@ -856,15 +1168,54 @@ body {
 }
 
 .scan-card {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(15, 23, 42, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.14);
     padding: 40px;
     border-radius: 20px;
     text-align: center;
-    max-width: 400px;
+    max-width: 620px;
     width: 90%;
+    margin: auto; /* cùng với overlay flex, tự canh giữa khi còn chỗ trống */
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(16px);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+/* Điện thoại ở chế độ ngang (viewport thấp): thu gọn khoảng cách/padding
+   để tối đa vùng hiển thị, và luôn cho form 2 cột (AP / STA) xếp dọc lại
+   để đảm bảo cuộn dọc mượt, nút Connect / Save AP / Back luôn nằm trong
+   luồng cuộn được thay vì bị kẹt bên dưới. */
+@media (max-height: 560px) {
+    #scan-overlay {
+        padding: 10px 10px;
+    }
+    .scan-card {
+        padding: 18px 20px;
+        border-radius: 16px;
+    }
+    .scan-spinner {
+        width: 34px;
+        height: 34px;
+        margin: 0 auto 10px;
+    }
+    .scan-title {
+        font-size: 18px;
+        margin-bottom: 4px;
+    }
+    .scan-subtitle {
+        font-size: 12px;
+        margin-bottom: 12px;
+    }
+    .lobby-controls {
+        margin-top: 10px;
+    }
+    .wifi-scan-columns {
+        flex-direction: column;
+        gap: 14px;
+    }
+    .wifi-scan-col-right {
+        padding: 12px;
+    }
 }
 
 .scan-spinner {
@@ -882,6 +1233,16 @@ body {
     font-weight: 800;
     margin-bottom: 8px;
     letter-spacing: -0.5px;
+    overflow-wrap: break-word;
+    word-break: break-word;
+}
+
+/* Trong màn hình 2 cột (WiFi Configuration), tiêu đề nằm trong cột trái —
+   canh trái + wrap an toàn để không bao giờ tràn chữ đè lên panel AP/STA
+   bên cột phải, kể cả khi tên mạng/tiêu đề dài. */
+.wifi-scan-col > .scan-title,
+.wifi-scan-col > .scan-subtitle {
+    text-align: left;
 }
 
 .scan-subtitle {
@@ -889,6 +1250,8 @@ body {
     color: #94a3b8;
     margin-bottom: 24px;
     line-height: 1.5;
+    overflow-wrap: break-word;
+    word-break: break-word;
 }
 
 .scan-status {
@@ -1011,7 +1374,7 @@ body {
 .drc-num:focus { border-color: var(--accent); }
 
 .drc-q {
-    width: 52px;
+    width: 72px;
 }
 
 .drc-qlabel {

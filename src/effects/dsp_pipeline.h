@@ -51,6 +51,7 @@ public:
     // ── Module Accessors ──────────────────────────────────────────────────────
 
     Compander&               getCompander()   { return _compander; }
+    ParametricEQ&            getPreEq()       { return _preeq; }
     Exciter&                 getExciter()     { return _exciter; }
     DynamicBass&             getDynamicBass() { return _dynamicBass; }
     DynamicEQ&               getDynamicEq()   { return _dynamicEq; }
@@ -62,27 +63,30 @@ public:
     DRC&                     getDrc()         { return _drc; }
     VolumeControl&           getPostGain()    { return _postGain; }
     VolumeControl&           getPreGain()     { return _preGain; }
+    VolumeControl&           getMMParamGain() { return _mmparamGain; }
 
     DspModule* getModuleById(uint8_t moduleId);
     DspModule** getChain()         { return _chain; }
     size_t getChainLength()  const { return CHAIN_LENGTH; }
 
 private:
-    // NOTE: DSP_MODULE_COUNT must be 12 in config.h
+    // NOTE: DSP_MODULE_COUNT must be 14 in config.h
     static const size_t CHAIN_LENGTH = DSP_MODULE_COUNT;
 
-    VolumeControl           _preGain;       // [00]
-    Compander               _compander;     // [01]
-    Exciter                 _exciter;       // [02]
-    DynamicBass             _dynamicBass;   // [03]
-    DynamicEQ               _dynamicEq;     // [04]
-    IndexSelectableFilter   _isf1;          // [05] ISF instance 1
-    IndexSelectableFilter   _isf2;          // [06] ISF instance 2
-    ParametricEQ            _eqDsp_1;       // [07]
-    ParametricEQ            _eqDsp_2;       // [08]
-    LeftRightEQ             _leftRightEq;   // [09]
-    DRC                     _drc;           // [10]
-    VolumeControl           _postGain;      // [11]
+    VolumeControl           _mmparamGain;   // [00]
+    VolumeControl           _preGain;       // [01]
+    ParametricEQ            _preeq;         // [02]
+    Compander               _compander;     // [03]
+    Exciter                 _exciter;       // [04]
+    DynamicBass             _dynamicBass;   // [05]
+    DynamicEQ               _dynamicEq;     // [06]
+    IndexSelectableFilter   _isf1;          // [07] ISF instance 1
+    IndexSelectableFilter   _isf2;          // [08] ISF instance 2
+    ParametricEQ            _eqDsp_1;       // [09]
+    ParametricEQ            _eqDsp_2;       // [10]
+    LeftRightEQ             _leftRightEq;   // [11]
+    DRC                     _drc;           // [12]
+    VolumeControl           _postGain;      // [13]
 
     DspModule* _chain[CHAIN_LENGTH];
 };

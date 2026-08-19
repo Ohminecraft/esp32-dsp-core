@@ -44,10 +44,21 @@ class Store extends EventEmitter {
             eqRight: makeEqState()
         };
 
+        // Pre EQ (3-band tone control: Bass/Mid/Treble)
+        this.preEq = {
+            enabled: true,
+            pregainDb: 0,
+            bands: [
+                { enabled: true, type: 1, freq: 100, gain: 0, q: 0.707 },  // Bass - Low Shelf
+                { enabled: true, type: 0, freq: 1000, gain: 0, q: 0.707 }, // Mid - Peaking
+                { enabled: true, type: 2, freq: 10000, gain: 0, q: 0.707 } // Treble - High Shelf
+            ]
+        };
+
         // Dynamic EQ
         this.dynamicEq = {
             lowThresh: -4000, normalThresh: -2000, highThresh: -600,
-            attackMs: 50, releaseMs: 200,
+            attackMs: 50, releaseMs: 200, lookaheadMs: 0,
             eqLow: makeEqState(),
             eqHigh: makeEqState()
         };
@@ -63,7 +74,7 @@ class Store extends EventEmitter {
         this.exciter = { cutoffFreq: 3000, dry: 100, wet: 30 };
 
         // Dynamic Bass
-        this.dynamicBass = { cutoffFreq: 80, gainBoost: 600, enhanced: 0, boostthreshold: -2400, neutralthreshold: -1600, clipthreshold: -800, clipattack: 600, cliprelease: 200 };
+        this.dynamicBass = { cutoffFreq: 80, gainBoost: 600, enhanced: 0, boostthreshold: -2400, neutralthreshold: -1600, clipthreshold: -800, clipattack: 600, cliprelease: 200, lookaheadMs: 0 };
 
         // ── ISF state ──────────────────────────────────────────────────
         // Helper: create one ISF instance state
@@ -80,8 +91,9 @@ class Store extends EventEmitter {
             numPresets: 1,
             rmsMs: 300,
             slewMs: 500,
+            lookaheadMs: 0,
             overrideDb: null,           // null = auto RMS
-            presets: Array.from({ length: 5 }, (_, i) => makeIsfPreset(-96 + i * 5)),
+            presets: Array.from({ length: 10 }, (_, i) => makeIsfPreset(-96 + i * 5)),
             // Runtime state from firmware (read-only)
             currentLevelDb: -96,
             slewIndex: 0,               // fractional
@@ -97,19 +109,20 @@ class Store extends EventEmitter {
         this._activeIsfPreset = 0;
 
         // DRC — multi-band with crossover
+        // Band mapping: band[0]=Fullband, band[1]=Low, band[2]=Mid, band[3]=High
         this.drc = {
-            mode: 0,           // 0=Fullband, 1=2Band, 2=2Band+Full, 3=3Band, 4=3Band+Full
-            cfType: 1,         // 0=None, 1=Butterworth1, 2=LR2, 3=LR4, 4=Q4
+            mode: 0,           // 0=Fullband, 1=2Band, 2=3Band
+            cfType: 0,         // 0=Butterworth1, 1=LR2, 2=LR4, 3=Q-Ctrl (matches dsp_types.h enum)
             fc1: 300,          // crossover freq 1 (Hz)
             fc2: 2000,         // crossover freq 2 (Hz)
-            qLp: 717,          // Q LP (Q6.10: 717 ≈ 0.70)
-            qHp: 717,          // Q HP (Q6.10)
-            activeBand: 3,     // which band is shown in UI (3 = fullband)
+            qLp: 717,          // Q LP (Q6.10: 717 ≈ 0.70) - only used when cfType === 3 (Q-Ctrl)
+            qHp: 717,          // Q HP (Q6.10) - only used when cfType === 3 (Q-Ctrl)
+            activeBand: 0,     // which band is shown in UI (0 = fullband default)
             bands: [
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 },
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 },
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 },
-                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 160, pregain: 4096, lookaheadMs: 0 }  // fullband
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 }, // band[0] = Fullband
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 }, // band[1] = Low
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 50,  pregain: 4096, lookaheadMs: 0 }, // band[2] = Mid
+                { threshold: -1500, ratio: 400, attackMs: 5,  releaseMs: 160, pregain: 4096, lookaheadMs: 0 }  // band[3] = High
             ]
         };
 
@@ -134,7 +147,26 @@ class Store extends EventEmitter {
             ssid: '',
             ip: '',
             rssi: 0,
-            scanResults: []
+            scanResults: [],
+            // Saved credentials (populated by WIFI_GET_CONFIG) — for "view SSID/password" UI
+            apSsid: '',
+            apPass: '',
+            hasSavedSta: false,
+            staSsid: '',
+            staPass: '',
+            configLoaded: false // true once a WIFI_GET_CONFIG reply has actually arrived
+        };
+
+        // Battery (populated by REPORT_BATTERY)
+        this.battery = {
+            present: false,
+            checked: false,  // true once any REPORT_BATTERY has arrived (present or not)
+            state: 'unknown', // 'normal' | 'warning' | 'critical' | 'charging'
+            soc: 0,           // 0..1
+            busVoltage: 0,
+            currentMa: 0,
+            consumedMah: 0,
+            totalMah: 0
         };
 
         // Selected module (for right panel)
@@ -168,6 +200,7 @@ class Store extends EventEmitter {
             case 'dynHigh': return this.dynamicEq.eqHigh;
             case 'eqLeft': return this.leftRightEq.eqLeft;
             case 'eqRight': return this.leftRightEq.eqRight;
+            case 'preEq': return this.preEq;
             default: return this.eq1;
         }
     }
@@ -180,6 +213,7 @@ class Store extends EventEmitter {
             case 'dynHigh': return MODULE.DYNAMIC_EQ;
             case 'eqLeft': return MODULE.LEFTRIGHT_EQ;
             case 'eqRight': return MODULE.LEFTRIGHT_EQ;
+            case 'preEq': return MODULE.PRE_EQ;
             default: return MODULE.EQ_DSP_1;
         }
     }
@@ -210,6 +244,13 @@ class Store extends EventEmitter {
 
     getActiveIsfPreset() {
         return this._activeIsfPreset;
+    }
+
+    updateIsfConfig(which, rmsMs, slewMs, lookaheadMs) {
+        const isf = this.getIsfInstance(which);
+        isf.rmsMs = rmsMs;
+        isf.slewMs = slewMs;
+        isf.lookaheadMs = lookaheadMs;
     }
 
     /** Update ISF runtime state from firmware REPORT_ISF frame. */
@@ -328,7 +369,39 @@ class Store extends EventEmitter {
     setConnected(connected, portPath = '') {
         this.system.connected = connected;
         this.system.portPath = portPath;
+        if (!connected) {
+            this.wifi.configLoaded = false;
+            this.battery.present = false;
+            this.battery.checked = false;
+        }
         this.emit('connection:changed', connected);
+    }
+
+    // ─── WiFi Config (AP/STA credentials) ─────────────────────────
+
+    updateWifiConfig({ apSsid, apPass, hasSavedSta, staSsid, staPass }) {
+        this.wifi.apSsid = apSsid ?? this.wifi.apSsid;
+        this.wifi.apPass = apPass ?? this.wifi.apPass;
+        this.wifi.hasSavedSta = !!hasSavedSta;
+        this.wifi.staSsid = staSsid ?? '';
+        this.wifi.staPass = staPass ?? '';
+        this.wifi.configLoaded = true;
+        this.emit('wifi:config-updated');
+    }
+
+    clearStaConfig() {
+        this.wifi.hasSavedSta = false;
+        this.wifi.staSsid = '';
+        this.wifi.staPass = '';
+        this.emit('wifi:config-updated');
+    }
+
+    // ─── Battery ────────────────────────────────────────────────────
+
+    updateBattery(data) {
+        Object.assign(this.battery, data);
+        this.battery.checked = true;
+        this.emit('battery:updated');
     }
 }
 

@@ -39,16 +39,6 @@
 #include "utils/debug_log.h"
 
 // ---------------------------------------------------------------------------
-// Inline helpers (keep in header for IRAM inlining)
-// ---------------------------------------------------------------------------
-
-static inline int32_t audioIO_floatToI32Sat(float x) {
-    if (x >= 1.0f)  return INT32_MAX;
-    if (x <= -1.0f) return INT32_MIN;
-    return (int32_t)(x * 2147483648.0f);
-}
-
-// ---------------------------------------------------------------------------
 // AudioIO
 // ---------------------------------------------------------------------------
 
@@ -104,6 +94,7 @@ private:
 
     i2s_chan_handle_t _rxHandle = nullptr;
     i2s_chan_handle_t _txHandle = nullptr;
+    i2s_chan_handle_t _txSubHandle = nullptr;
 
     int32_t  _sampleRate  = DSP_SAMPLE_RATE_DEFAULT;
     int32_t  _numChannels = 2;
@@ -116,6 +107,9 @@ private:
     // Only accessed from audioTask (single-threaded hot path)
     static int32_t s_rxBuf[DSP_FRAME_SAMPLES];
     static int32_t s_txBuf[DSP_FRAME_SAMPLES];
+    #ifdef USING_SUB_OUT
+    static int32_t s_txSubBuf[DSP_FRAME_SAMPLES]; // for sub out
+    #endif
     static int32_t s_zeroBuf[DSP_FRAME_SAMPLES]; // all-zero buffer 
 };
 

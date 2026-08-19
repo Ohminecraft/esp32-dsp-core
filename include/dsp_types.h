@@ -8,7 +8,6 @@
 
 #include <stdint.h>
 #include <esp_attr.h>
-//#include <esp_dsp.h>
 
 // ============================================================================
 // Communication Format Macros
@@ -21,14 +20,6 @@
 // Q factor in Q6.10 format (e.g., 717 ≈ 0.70, 1024 = 1.0)
 #define Q_Q610_TO_FLOAT(x)     ((float)(x) / 1024.0f)
 #define FLOAT_TO_Q_Q610(x)     ((int16_t)((x) * 1024.0f))
-
-// Pregain in Q4.12 format (4096 = unity/0dB)
-#define PREGAIN_Q412_TO_FLOAT(x) ((float)(x) / 4096.0f)
-#define FLOAT_TO_PREGAIN_Q412(x) ((int32_t)((x) * 4096.0f))
-
-// DRC threshold: 0.01dB steps (e.g., -2550 = -25.50dB)
-#define DRC_TH_TO_FLOAT_DB(x)   ((float)(x) / 100.0f)
-#define FLOAT_DB_TO_DRC_TH(x)   ((int32_t)((x) * 100.0f))
 
 static inline int32_t IRAM_ATTR floatToI32Sat(float x) {
     if (x >= 1.0f)  return INT32_MAX;
@@ -66,20 +57,19 @@ typedef struct {
 // DRC & Crossover Types
 // ============================================================================
 
+// DRC Modes (simplified to 3 modes)
 typedef enum {
-    DRC_MODE_FULLBAND = 0,
-    DRC_MODE_2BAND,
-    DRC_MODE_2BAND_FULLBAND,
-    DRC_MODE_3BAND,
-    DRC_MODE_3BAND_FULLBAND
+    DRC_MODE_FULLBAND = 0,   // Single fullband compressor
+    DRC_MODE_2BAND,          // 2-band with 1 crossover
+    DRC_MODE_3BAND           // 3-band with 2 crossovers
 } DRCMode;
 
+// Crossover Filter Types
 typedef enum {
-    DRC_CF_NONE = 0,
-    DRC_CF_B1,
-    DRC_CF_LR2,
-    DRC_CF_LR4,
-    DRC_CF_Q4
+    DRC_CF_BUTTERWORTH_1 = 0,  // Butterworth order 1
+    DRC_CF_LR2,                // Linkwitz-Riley order 2
+    DRC_CF_LR4,                // Linkwitz-Riley order 4
+    DRC_CF_QCTRL_2             // Q-controller order 2
 } DRCCrossoverType;
 
 #endif // DSP_TYPES_H

@@ -13,6 +13,9 @@ static const char* TAG = "AudioIO";
 
 int32_t AudioIO::s_rxBuf[DSP_FRAME_SAMPLES];
 int32_t AudioIO::s_txBuf[DSP_FRAME_SAMPLES];
+#ifdef USING_SUB_OUT
+int32_t AudioIO::s_txSubBuf[DSP_FRAME_SAMPLES]; // for sub out
+#endif
 int32_t AudioIO::s_zeroBuf[DSP_FRAME_SAMPLES] = {0}; // all-zero buffer for underrun muting
 
 // ---------------------------------------------------------------------------
@@ -36,18 +39,31 @@ void AudioIO::reinit(int32_t sampleRate) {
     clk.clk_src        = I2S_CLK_SRC_DEFAULT;  // unused in slave, but required by API
     clk.mclk_multiple  = I2S_MCLK_MULTIPLE_256;
 
-    size_t bytesTxLoaded = 0;
-
+    size_t bytesTxLoaded    = 0;
+    size_t bytesSubTxLoaded = 0;
+    
     i2s_channel_disable(_rxHandle);
     i2s_channel_disable(_txHandle);
+    #ifdef USING_SUB_OUT
+    i2s_channel_disable(_txSubHandle);
+    #endif
 
     i2s_channel_preload_data(_txHandle, s_zeroBuf, sizeof(s_zeroBuf), &bytesTxLoaded); // prime TX with zeros to avoid garbage on underrun
+    #ifdef USING_SUB_OUT
+    i2s_channel_preload_data(_txSubHandle, s_zeroBuf, sizeof(s_zeroBuf), &bytesSubTxLoaded);
+    #endif
 
     i2s_channel_reconfig_std_clock(_rxHandle, &clk);
     i2s_channel_reconfig_std_clock(_txHandle, &clk);
+    #ifdef USING_SUB_OUT
+    i2s_channel_reconfig_std_clock(_txSubHandle, &clk);
+    #endif
 
     i2s_channel_enable(_rxHandle);
     i2s_channel_enable(_txHandle);
+    #ifdef USING_SUB_OUT
+    i2s_channel_enable(_txSubHandle);
+    #endif
 
     /*
     i2s_stop(I2S_INPUT_OUTPUT_FULL_PORT);
@@ -77,8 +93,16 @@ void AudioIO::deinit() {
         i2s_del_channel(_txHandle);
         _txHandle = nullptr;
     }
+    #ifdef USING_SUB_OUT
+    if (_txSubHandle) {
+        i2s_channel_disable(_txSubHandle);
+        i2s_del_channel(_txSubHandle);
+        _txSubHandle = nullptr;
+    }
+    #endif
 
     //i2s_driver_uninstall(I2S_INPUT_OUTPUT_FULL_PORT);
+    //i2s_driver_uninstall(I2S_OUTPUT_SUB_PORT);
 }
 
 void AudioIO::initI2S() {
@@ -87,13 +111,25 @@ void AudioIO::initI2S() {
     // i2s_new_channel with both tx + rx handles = full-duplex pair.
     i2s_chan_config_t chan_cfg = {};
     chan_cfg.id            = I2S_INPUT_OUTPUT_FULL_PORT;
-    chan_cfg.role          = I2S_ROLE_SLAVE;     // QCC5125 is master
-    chan_cfg.dma_desc_num  = 8;                  // DMA ring buffer has 8 descriptors (buffers)
+    #if defined(USE_MASTER_MODE)
+    chan_cfg.role          = I2S_ROLE_MASTER;
+    #else
+    chan_cfg.role          = I2S_ROLE_SLAVE; // Input audio (input must drive clock)
+    #endif
+    chan_cfg.dma_desc_num  = DSP_DMA_BUFFER_COUNT;   // DMA ring buffer has 8 descriptors (buffers)
     chan_cfg.dma_frame_num = DSP_FRAME_SIZE;
     chan_cfg.auto_clear    = true;               // zero-fill TX on underrun → no noise
 
+    #ifdef USING_SUB_OUT
+    i2s_chan_config_t sub_chan_cfg = chan_cfg;
+    sub_chan_cfg.id        = I2S_OUTPUT_SUB_PORT;
+    #endif
+    
     // Pass both handles → IDF allocates a full-duplex pair on the same port
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &_txHandle, &_rxHandle));
+    #if defined(USING_SUB_OUT)
+    ESP_ERROR_CHECK(i2s_new_channel(&sub_chan_cfg, &_txSubHandle, nullptr)); // RX-only sub-channel for simultaneous read/write on the same port (see readFrame/writeFrame)
+    #endif
 
     // ── Slot config ───────────────────────────────────────────────────────
     // Philips/I2S standard, 32-bit frame, stereo.
@@ -111,7 +147,11 @@ void AudioIO::initI2S() {
     // DIN comes from QCC5125 DOUT.
     // MCLK: PCM5102A does not need MCLK (uses BCK-derived internal clock).
     //       Set to UNUSED unless your PCM5102A board requires it.
+    #if defined(USE_MASTER_MODE)
+    std_cfg.gpio_cfg.mclk = (gpio_num_t)I2S_IN_OUT_MCLK_PIN;
+    #else
     std_cfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;
+    #endif
     std_cfg.gpio_cfg.bclk = (gpio_num_t)I2S_IN_OUT_BCK_PIN;      // shared BCLK from QCC5125
     std_cfg.gpio_cfg.ws   = (gpio_num_t)I2S_IN_OUT_WS_PIN;       // shared LRCK from QCC5125
     std_cfg.gpio_cfg.din  = (gpio_num_t)I2S_IN_OUT_DATA_IN_PIN;     // QCC5125 DOUT → ESP32 DIN
@@ -132,10 +172,20 @@ void AudioIO::initI2S() {
     // the direction-specific registers while keeping the shared clock pins.
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(_rxHandle, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(_txHandle, &std_cfg));
+    #ifdef USING_SUB_OUT
+    std_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO; // sub out only needs mono
+    std_cfg.gpio_cfg.dout      = (gpio_num_t)I2S_SUB_DATA_OUT_PIN; // separate DOUT pin for sub out
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(_txSubHandle, &std_cfg));
+    #endif
 
     // Enable RX first so DMA starts filling before TX drains
     ESP_ERROR_CHECK(i2s_channel_enable(_rxHandle));
     ESP_ERROR_CHECK(i2s_channel_enable(_txHandle));
+    #ifdef USING_SUB_OUT
+    ESP_ERROR_CHECK(i2s_channel_enable(_txSubHandle));
+    #endif
+
+
     
 /*
     i2s_config_t i2s_config = {};
@@ -167,9 +217,15 @@ void AudioIO::initI2S() {
     i2s_set_clk(I2S_INPUT_OUTPUT_FULL_PORT, (uint32_t)_sampleRate, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_STEREO);
 */
 
+#if defined(USE_MASTER_MODE)
+    LOG_INFO(TAG, "Init: full-duplex master on I2S_NUM_0, %ld Hz", (long)_sampleRate);
+    LOG_INFO(TAG, "  BCLK=GPIO%d  WS=GPIO%d  MCLK=GPIO%d  DIN=GPIO%d  DOUT=GPIO%d",
+             I2S_IN_OUT_BCK_PIN, I2S_IN_OUT_WS_PIN, I2S_IN_OUT_MCLK_PIN, I2S_IN_OUT_DATA_IN_PIN, I2S_IN_OUT_DATA_OUT_PIN);
+#else
     LOG_INFO(TAG, "Init: full-duplex slave on I2S_NUM_0, %ld Hz", (long)_sampleRate);
     LOG_INFO(TAG, "  BCLK=GPIO%d  WS=GPIO%d  DIN=GPIO%d  DOUT=GPIO%d",
              I2S_IN_OUT_BCK_PIN, I2S_IN_OUT_WS_PIN, I2S_IN_OUT_DATA_IN_PIN, I2S_IN_OUT_DATA_OUT_PIN);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +242,7 @@ size_t IRAM_ATTR AudioIO::readFrame(float* __restrict buffer, size_t numSamples)
         _rxHandle, s_rxBuf,
         totalSamples * sizeof(int32_t),
         &bytesRead,
-        pdMS_TO_TICKS(100)   // 1.25× frame budget @ 48kHz/768
+        pdMS_TO_TICKS(15)
     );
     
    //esp_err_t err = i2s_read(I2S_INPUT_OUTPUT_FULL_PORT, s_rxBuf, totalSamples * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(100));
@@ -199,7 +255,6 @@ size_t IRAM_ATTR AudioIO::readFrame(float* __restrict buffer, size_t numSamples)
 
     const size_t samplesRead = bytesRead / sizeof(int32_t);
     for (size_t i = 0; i < samplesRead; i++) {
-        // QCC5125: 24-bit MSB in 32-bit frame — direct cast, no shift needed.
         buffer[i] = (float)s_rxBuf[i] * (1.0f / 2147483648.0f);
     }
 
@@ -215,7 +270,7 @@ size_t IRAM_ATTR AudioIO::writeFrame(const float* __restrict buffer, size_t numS
     if (totalSamples > DSP_FRAME_SAMPLES) return 0;
 
     for (size_t i = 0; i < totalSamples; i++) {
-        s_txBuf[i] = audioIO_floatToI32Sat(buffer[i]);
+        s_txBuf[i] = (int32_t)(fmin(fmax(buffer[i], -0.9999999f), 0.9999999f) * 2147483648.0f);
     }
 
     size_t bytesWritten = 0;
@@ -223,7 +278,7 @@ size_t IRAM_ATTR AudioIO::writeFrame(const float* __restrict buffer, size_t numS
         _txHandle, s_txBuf,
         totalSamples * sizeof(int32_t),
         &bytesWritten,
-        pdMS_TO_TICKS(100)   // 1.25× frame budget @ 48kHz/768
+        pdMS_TO_TICKS(15)
     );
 
     //esp_err_t err = i2s_write(I2S_INPUT_OUTPUT_FULL_PORT, s_txBuf, totalSamples * sizeof(int32_t), &bytesWritten, pdMS_TO_TICKS(100));

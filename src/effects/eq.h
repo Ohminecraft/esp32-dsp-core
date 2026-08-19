@@ -16,6 +16,7 @@ class ParametricEQ : public DspModule {
     friend class LeftRightEQ;
     friend class IndexSelectableFilter;
     friend class DynamicEQ;
+    friend class Display;
 public:
     ParametricEQ() : _pregain(1.0f) {}
 
@@ -30,6 +31,7 @@ public:
 
     // ---- Parameter API ----
     void setBand(uint8_t bandIndex, const EQFilterParams& params);
+    void setNumBand(uint8_t totalband);
     void setPregain(int16_t pregain_db);
     int16_t getPregain() const { return _pregainDb; };
 
@@ -41,6 +43,7 @@ public:
 
 private:
     uint8_t        _moduleId = MODULE_ID_EQ_DSP_1; // Default ID, can be changed for EQ2
+    uint8_t        _totalavaliablebands = MAX_EQ_BANDS;
     float          _pregain;        // Linear gain
     int16_t        _pregainDb = 0;  // Original dB value in Q8.8
 

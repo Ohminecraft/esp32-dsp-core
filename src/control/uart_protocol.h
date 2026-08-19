@@ -17,43 +17,11 @@
 class AsyncWebSocket;
 class AsyncWebSocketClient;
 
-// UART Command IDs
-#define CMD_SET_PARAM 0x01
-#define CMD_ENABLE_MODULE 0x02
-#define CMD_DISABLE_MODULE 0x03
-#define CMD_SET_EQ_BAND 0x04
-#define CMD_SET_DYNEQ_LOW_BAND 0x05
-#define CMD_SET_DYNEQ_HIGH_BAND 0x06
-#define CMD_SET_DYNEQ_THRESH 0x07
-#define CMD_SAVE_PRESET 0x08
-#define CMD_LOAD_PRESET 0x09
-#define CMD_GET_ALL_STATE 0x0A
-#define CMD_SET_ISF_PRESET      0x0B
-#define CMD_SET_ISF_BAND_PARAMS 0x0C
-#define CMD_GET_ISF_STATE       0x0D
-#define CMD_SET_ISF_CONFIG      0x0E
-
-// WiFi configuration commands
-#define CMD_WIFI_SCAN       0x10  // ESP32 scans WiFi, returns SSID list via ACK frames
-#define CMD_WIFI_SET_STA    0x11  // Data: ssid_len(1B) + ssid(NB) + pass_len(1B) + pass(MB) + ip(4B opt)
-#define CMD_WIFI_SET_AP     0x12  // No data — switch back to AP mode
-#define CMD_WIFI_GET_STATUS 0x13  // No data — reply with mode/IP/SSID/RSSI
-
-#define CMD_GET_REPORT_CPU_USAGE       0x39
-#define CMD_SEND_REPORT_CPU_USAGE      0x40
-#define CMD_REPORT_ISF                 0x41 
-#define CMD_REPORT_ISF_PRESET          0x42
-#define CMD_REPORT_ISF_BAND_PER_PRESET 0x43
-#define CMD_REPORT_ENABLE_MASK         0x44
-#define CMD_GET_CURRENT_PRESET_INDEX   0x45
-#define CMD_REPORT_DYNBASS             0x46
-#define CMD_REPORT_DYNEQ               0x47
-#define CMD_REPORT_COMPANDER           0x48
-#define CMD_REPORT_DRC                 0x49
-#define CMD_GET_MODULE_METER           0x4A
-
-#define CMD_ACK_RESPONSE 0xFE
-#define CMD_ERROR 0xFF
+#ifdef USE_BUILTIN_SERIAL
+#define UART Serial
+#else
+#define UART Serial0
+#endif
 
 // Maximum data payload
 #define UART_MAX_DATA_LEN 64
@@ -71,6 +39,7 @@ class UartProtocol {
 public:
   /**
    * Initialize UART2 for control communication.
+   * @param baud Baud rate (default UART_CONTROL_BAUD = 115200)
    */
   void init(uint32_t baud = UART_CONTROL_BAUD);
 
@@ -83,6 +52,7 @@ public:
 
   /**
    * Get the last received command.
+   * @return Reference to the last received UartCommand
    */
   const UartCommand &getCommand() const { return _cmd; }
 
@@ -98,6 +68,7 @@ public:
 
   /**
    * Send an error response.
+   * @param errorCode Error code to send
    */
   void sendError(uint8_t errorCode);
 
@@ -105,6 +76,10 @@ public:
    * Send arbitrary frame upstream.
    * If a WebSocket has been registered via setWebSocket(), the frame is
    * broadcast to all WS clients in addition to Serial2.
+   * @param cmd Command ID
+   * @param moduleId Module ID
+   * @param data Pointer to data buffer (can be nullptr if dataLen=0)
+   * @param dataLen Length of data buffer (max UART_MAX_DATA_LEN)
    */
   void sendFrame(uint8_t cmd, uint8_t moduleId, const uint8_t *data,
                  uint16_t dataLen);
@@ -126,6 +101,12 @@ public:
    */
   void endBatch();
 
+  /**
+   * Check if the UART is connected to a host (i.e., if any commands have been received).
+   * @return true if UART is connected, false otherwise
+   */
+  bool isSerialConnected() const { return appConnected; }
+
 private:
   UartCommand _cmd;
 
@@ -143,6 +124,8 @@ private:
   ParseState _state = WAIT_SYNC1;
   uint16_t _dataIndex = 0;
   uint8_t _calcCrc = 0;
+
+  bool appConnected = false;  // true if UART connected to a host
 
   // Optional WebSocket for dual output (nullptr = Serial2 only)
   AsyncWebSocket* _ws = nullptr;

@@ -39,6 +39,9 @@
 
 // ── NVS namespace ─────────────────────────────────────────────────────────────
 #define WIFI_NVS_NS      "wifi_cfg"
+// Separate namespace for the root AP override, so that "forget STA"
+// (_clearNVS() → _prefs.clear() on WIFI_NVS_NS) can never wipe it out too.
+#define WIFI_AP_NVS_NS   "wifi_ap_cfg"
 
 // ── Scan result max ───────────────────────────────────────────────────────────
 #define WIFI_MAX_SCAN_RESULTS 20
@@ -106,8 +109,18 @@ public:
 
     /**
      * Clear saved STA config from NVS and switch to AP mode.
+     * (Also used as the "forget saved network" action — see CMD_WIFI_CLEAR_STA.)
      */
     void setAPMode();
+
+    /**
+     * Persist a new root/base AP SSID + password (overrides the compiled-in
+     * WIFI_AP_SSID/WIFI_AP_PASS defaults) and apply it immediately if
+     * currently broadcasting as AP.
+     * @param ssid Root AP SSID (max 32 chars, must not be empty)
+     * @param pass Root AP password (max 64 chars; empty = open network)
+     */
+    void setAPMode(const char* ssid, const char* pass);
 
     /** Call periodically in control loop to handle async connections */
     void loop();
@@ -125,11 +138,43 @@ public:
      */
     void buildStatusPayload(uint8_t* buf, uint16_t& len) const;
 
+    // ── Credential view (for CMD_WIFI_GET_CONFIG / display "view SSID+pass") ──
+
+    /**
+     * Root AP SSID/password actually in effect right now — the saved
+     * override if one was set via setAPMode(ssid, pass), otherwise the
+     * compiled-in WIFI_AP_SSID/WIFI_AP_PASS defaults. Always non-empty.
+     */
+    void getApCredentials(char* ssidOut, size_t ssidLen, char* passOut, size_t passLen) const;
+
+    /** True if a STA network is currently saved in NVS. */
+    bool hasStaCredentials() const { return strlen(_staSsid) > 0; }
+
+    /** Saved STA SSID/password — empty strings if hasStaCredentials() is false. */
+    void getStaCredentials(char* ssidOut, size_t ssidLen, char* passOut, size_t passLen) const;
+
+    // ── Async status-change notification ──────────────────────────────────────
+    // setSTAMode() only *starts* an async WiFi.begin() — the actual outcome
+    // (connected, or timed-out-and-fell-back-to-AP) is only known later,
+    // inside loop(). Callers (ParamController/main.cpp) should poll this
+    // once per loop() and push a fresh CMD_WIFI_GET_STATUS frame whenever it
+    // returns true, so the app finds out the *real* result instead of only
+    // ever seeing the stale status sent right after the SET_STA request.
+
+    /** True exactly once, right after an STA connect attempt resolves
+     *  (success or timeout->AP fallback). Clears itself on read. */
+    bool consumeStatusChanged() {
+        bool v = _statusChanged;
+        _statusChanged = false;
+        return v;
+    }
+
 private:
     bool        _ready   = false;
     bool        _apMode  = true;
     bool        _isConnectingSTA = false;
     bool        _isNewlyConfiguredSTA = false;
+    bool        _statusChanged = false;
     uint32_t    _staConnectStartTime = 0;
     Preferences _prefs;
 
@@ -140,12 +185,19 @@ private:
     IPAddress _staGateway  = INADDR_NONE;
     IPAddress _staSubnet   = INADDR_NONE;
 
+    // Saved root AP override (empty = use compiled-in WIFI_AP_SSID/WIFI_AP_PASS)
+    char _apSsidOverride[33] = {};
+    char _apPassOverride[65] = {};
+
     void _startAP();
     void _startSTA();
     bool _loadNVS();
     void _saveNVS(const char* ssid, const char* pass,
                   IPAddress staticIP, IPAddress gateway, IPAddress subnet);
     void _clearNVS();
+
+    void _loadApNVS();
+    void _saveApNVS(const char* ssid, const char* pass);
 };
 
 #endif // WIFI_MANAGER_H

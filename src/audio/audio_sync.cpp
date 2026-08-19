@@ -41,8 +41,9 @@ static const char* TAG = "AudioSync";
 static constexpr int16_t PCNT_HIGH_LIMIT = 20000;
 static constexpr int16_t PCNT_LOW_LIMIT  = -1;
 
-// Rate tolerance: ±6%
-static constexpr float RATE_TOLERANCE = 0.06f;
+static constexpr float RATE_TOLERANCE = 0.03f;
+
+static constexpr int   RATE_CONFIRM_WINDOWS = 3;
 
 // ---------------------------------------------------------------------------
 // Static members
@@ -60,11 +61,16 @@ static pcnt_channel_handle_t s_pcnt_ch   = nullptr;
 static volatile uint32_t   s_overflowCount = 0;
 static portMUX_TYPE        s_mux = portMUX_INITIALIZER_UNLOCKED;
 
+static ClockState lastState    = ClockState::ABSENT;
+static ClockState pendingState = ClockState::ABSENT;
+static uint32_t   pendingRate  = 0;
+static int        pendingCount = 0;
+
 // ---------------------------------------------------------------------------
 // PCNT overflow ISR
 // ---------------------------------------------------------------------------
 
-static bool pcntOverflowCb(pcnt_unit_handle_t,
+static bool IRAM_ATTR pcntOverflowCb(pcnt_unit_handle_t,
                                       const pcnt_watch_event_data_t*,
                                       void*) {
     // portENTER_CRITICAL_ISR is safe to call from IRAM ISR context
@@ -122,7 +128,7 @@ void AudioSync::init(RateChangeCallback cb) {
 // Monitor task
 // ---------------------------------------------------------------------------
 
-void AudioSync::monitorTask(void* arg) {
+void IRAM_ATTR AudioSync::monitorTask(void* arg) {
     LOG_INFO(TAG, "Monitor task running on Core %d", xPortGetCoreID());
     ESP_ERROR_CHECK(pcnt_unit_start(s_pcnt_unit));
 
@@ -169,20 +175,22 @@ void AudioSync::monitorTask(void* arg) {
             newState = classifyRate(newRate);
         }
 
-        if (newState != lastState) {
-            LOG_INFO(TAG, "Clock state: %d → %d  (%lu Hz raw)",
-                     (int)lastState, (int)newState, (unsigned long)newRate);
+        if (newState == lastState) {
+        pendingCount = 0;
+        } else if (newState == ClockState::ABSENT) {
 
-            _state    = newState;
-            _rateHz   = newRate;
-            lastState = newState;
+            pendingState = newState; pendingRate = newRate;
+            pendingCount = RATE_CONFIRM_WINDOWS;
+        } else if (newState == pendingState) {
+            pendingCount++;
+        } else {
+            pendingState = newState; pendingRate = newRate; pendingCount = 1;
+        }
 
-            if (_cb) {
-                // Pass nominal rate (44100/48000/96000) to reinit,
-                // not the raw measured value which may be slightly off
-                uint32_t nominalRate = nominalRateHz(newState);
-                _cb(newState, nominalRate);
-            }
+        if (pendingCount >= RATE_CONFIRM_WINDOWS && pendingState != lastState) {
+            _state = pendingState; _rateHz = pendingRate; lastState = pendingState;
+            pendingCount = 0;
+            if (_cb) _cb(pendingState, nominalRateHz(pendingState));
         }
     }
 }
@@ -198,13 +206,17 @@ ClockState AudioSync::classifyRate(uint32_t measuredHz) {
         { 96000, ClockState::RATE_96000 },
     };
 
+    ClockState best     = ClockState::RATE_UNKNOWN;
+    float      bestDiff = RATE_TOLERANCE;
     for (auto& entry : table) {
         float ratio = (float)measuredHz / (float)entry.nominal;
-        if (fabsf(ratio - 1.0f) <= RATE_TOLERANCE) {
-            return entry.state;
+        float diff  = fabsf(ratio - 1.0f);
+        if (diff <= bestDiff) {
+            bestDiff = diff;
+            best     = entry.state;
         }
     }
-    return ClockState::RATE_UNKNOWN;
+    return best;
 }
 
 // Returns the exact nominal rate to pass to reinit — never the raw measured value.
