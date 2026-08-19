@@ -79,7 +79,7 @@ npm start
    GPIO0 ← MCLK
    ```
 
-  Find pin to connect with your hardware? is here: [pin_config.h](./include/pin_config.h)
+  Find pin to connect with your hardware? is here: [pin_config.h](../include/pin_config.h)
 
 2. **Serial Connection**:
    ```
@@ -345,7 +345,7 @@ npm start
    PCM5102A (DAC) → Đầu ra dòng
    GPIO0 ← MCLK
    ```
-   Xem file: [pin_config.h](./include/pin_config.h) để xem pin kết nối với hardware
+   Xem file: [pin_config.h](../include/pin_config.h) để xem pin kết nối với hardware
 
 2. **Kết Nối Nối Tiếp**:
    ```
