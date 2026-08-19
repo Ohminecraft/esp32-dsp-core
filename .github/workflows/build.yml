@@ -138,7 +138,8 @@ jobs:
             | `boot_app0_esp32s3.bin` | OTA data initial — ESP32-S3 (flash @ `0xe000`) |
             | `flash_args_esp32s3.txt` | esptool arguments — ESP32-S3 |
 
-            > 💡 Xem hướng dẫn flash tại [Getting Started](./getting-started.md)
+            > 💡 Xem hướng dẫn flash tại [Getting Started](./docs/getting-started.md)
+            > 💡 See how to flash at [Getting Started](./docs/getting-started.md)
           files: |
             firmware_esp32.bin
             bootloader_esp32.bin
@@ -191,7 +192,8 @@ jobs:
             echo "| \`boot_app0_esp32s3.bin\` | OTA data initial — ESP32-S3 (flash @ \`0xe000\`) |"
             echo "| \`flash_args_esp32s3.txt\` | esptool arguments — ESP32-S3 |"
             echo ""
-            echo "> 💡 Xem hướng dẫn flash tại [Getting Started](./getting-started.md)"
+            echo "> 💡 Xem hướng dẫn flash tại [Getting Started](./docs/getting-started.md)"
+            echo "> 💡 See how to flash at [Getting Started](./docs/getting-started.md)"
             echo ""
             echo "---"
             echo "_Built from \`dev\` merged into \`release\` — commit \`${{ github.sha }}\`_"
